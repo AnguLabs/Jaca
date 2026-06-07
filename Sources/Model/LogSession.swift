@@ -216,6 +216,11 @@ final class LogSession: WorkspaceTab {
         }
     }
 
+    /// Installed apps/packages on this device, for the filter dropdown.
+    func installedApps() async -> [AppEntry] {
+        await InstalledApps.list(for: device, adbURL: adbURL)
+    }
+
     // MARK: - Export
 
     func exportText() -> String {

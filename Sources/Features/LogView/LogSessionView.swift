@@ -63,7 +63,13 @@ struct LogSessionView: View {
                     onChipClicked: { session.setRegex(!session.filter.isRegex) }
                 )
                 searchField
-                packageField
+                HStack(spacing: 2) {
+                    packageField
+                    PackagePicker(session: session, packageText: $packageText) { id in
+                        packageText = id
+                        session.setPackage(id)
+                    }
+                }
             }
         }
         .padding(.horizontal, LemonadeTheme.spaces.spacing300)
@@ -191,6 +197,120 @@ struct LogSessionView: View {
         if panel.runModal() == .OK, let url = panel.url {
             try? session.exportText().write(to: url, atomically: true, encoding: .utf8)
         }
+    }
+}
+
+// MARK: - Package / app picker
+
+/// Dropdown of installed apps/packages on the device. Selecting one applies it as
+/// the package filter; includes a live search and an "all processes" reset.
+private struct PackagePicker: View {
+    let session: LogSession
+    @Binding var packageText: String
+    let onSelect: (String) -> Void
+
+    @State private var show = false
+    @State private var apps: [AppEntry] = []
+    @State private var loading = false
+    @State private var loaded = false
+    @State private var query = ""
+
+    var body: some View {
+        Button(action: { show = true; if !loaded { load() } }) {
+            Image(systemName: "chevron.down")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(LemonadeTheme.colors.content.contentSecondary)
+                .frame(width: 30, height: 30)
+                .background(RoundedRectangle(cornerRadius: LemonadeTheme.radius.radius150)
+                    .fill(LemonadeTheme.colors.background.bgNeutralSubtle))
+        }
+        .buttonStyle(.plain)
+        .help("Choose app / package")
+        .accessibilityIdentifier("packagePicker")
+        .popover(isPresented: $show, arrowEdge: .bottom) { popover }
+    }
+
+    private var filtered: [AppEntry] {
+        guard !query.isEmpty else { return apps }
+        return apps.filter {
+            $0.id.localizedCaseInsensitiveContains(query)
+                || ($0.name ?? "").localizedCaseInsensitiveContains(query)
+        }
+    }
+
+    private var popover: some View {
+        VStack(spacing: 0) {
+            TextField("Search apps…", text: $query)
+                .textFieldStyle(.roundedBorder)
+                .padding(LemonadeTheme.spaces.spacing200)
+
+            Rectangle().fill(LemonadeTheme.colors.border.borderNeutralLow).frame(height: 1)
+
+            if loading {
+                ProgressView().padding(LemonadeTheme.spaces.spacing400)
+                    .frame(maxWidth: .infinity)
+            } else if apps.isEmpty {
+                LemonadeUi.Text("No apps found on this device.",
+                                textStyle: LemonadeTypography.shared.bodySmallRegular,
+                                color: LemonadeTheme.colors.content.contentTertiary)
+                    .padding(LemonadeTheme.spaces.spacing400)
+                    .frame(maxWidth: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        row(title: "All processes", subtitle: nil, isUser: false) { select("") }
+                        ForEach(filtered) { app in
+                            row(title: app.display,
+                                subtitle: app.name != nil ? app.id : nil,
+                                isUser: app.isUserApp) { select(app.id) }
+                        }
+                    }
+                }
+            }
+        }
+        .frame(width: 340, height: 380)
+    }
+
+    private func row(title: String, subtitle: String?, isUser: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: LemonadeTheme.spaces.spacing200) {
+                Circle()
+                    .fill(isUser ? LemonadeTheme.colors.content.contentBrand : Color.clear)
+                    .frame(width: 6, height: 6)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .foregroundStyle(LemonadeTheme.colors.content.contentPrimary)
+                        .font(.system(size: 12))
+                        .lineLimit(1)
+                    if let subtitle {
+                        Text(subtitle)
+                            .foregroundStyle(LemonadeTheme.colors.content.contentTertiary)
+                            .font(.system(size: 10, design: .monospaced))
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, LemonadeTheme.spaces.spacing300)
+            .padding(.vertical, LemonadeTheme.spaces.spacing100)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func load() {
+        loading = true
+        Task {
+            let result = await session.installedApps()
+            apps = result
+            loaded = true
+            loading = false
+        }
+    }
+
+    private func select(_ id: String) {
+        onSelect(id)
+        show = false
     }
 }
 
