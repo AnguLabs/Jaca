@@ -1,0 +1,13 @@
+# XcodeGen output (regenerate with scripts/gen.sh)
+Squeeze.xcodeproj/
+
+# Xcode / build
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+.DS_Store
+
+# SwiftPM
+.swiftpm/
+.build/

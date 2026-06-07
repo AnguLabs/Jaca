@@ -1,0 +1,68 @@
+name: Squeeze
+options:
+  bundleIdPrefix: dev.srsouza
+  createIntermediateGroups: true
+  deploymentTarget:
+    macOS: "14.0"
+  groupSortPosition: top
+
+packages:
+  Lemonade:
+    path: ../lemonade-design-system
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    DEAD_CODE_STRIPPING: YES
+    # Ad-hoc local signing so the app runs without a dev account and can spawn
+    # adb/xcrun via Process (no App Sandbox).
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "-"
+    ENABLE_HARDENED_RUNTIME: NO
+    ENABLE_APP_SANDBOX: NO
+
+targets:
+  Squeeze:
+    type: application
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: Sources
+    dependencies:
+      - package: Lemonade
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.srsouza.Squeeze
+        PRODUCT_NAME: Squeeze
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.developer-tools"
+        INFOPLIST_KEY_NSHumanReadableCopyright: ""
+        COMBINE_HIDPI_IMAGES: YES
+
+  SqueezeTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: Tests
+    dependencies:
+      - target: Squeeze
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.srsouza.SqueezeTests
+        GENERATE_INFOPLIST_FILE: YES
+
+schemes:
+  Squeeze:
+    build:
+      targets:
+        Squeeze: all
+        SqueezeTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - SqueezeTests
