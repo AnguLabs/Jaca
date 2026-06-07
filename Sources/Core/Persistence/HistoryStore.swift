@@ -194,6 +194,15 @@ actor HistoryStore {
         exec("PRAGMA wal_checkpoint(TRUNCATE);")
     }
 
+    /// Deletes a single session and its lines.
+    func deleteSession(id: UUID) {
+        let sid = id.uuidString
+        let del = prepare("DELETE FROM log_line WHERE session_id=?;")
+        bindText(del, 1, sid); sqlite3_step(del); sqlite3_finalize(del)
+        let delS = prepare("DELETE FROM session WHERE id=?;")
+        bindText(delS, 1, sid); sqlite3_step(delS); sqlite3_finalize(delS)
+    }
+
     // MARK: - Reads
 
     /// Sessions for a device, optionally filtered to one package, newest first.

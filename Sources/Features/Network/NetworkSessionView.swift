@@ -1,5 +1,6 @@
 import SwiftUI
 import Lemonade
+import AppKit
 
 /// Network-inspection tab: proxy toolbar, captured-transaction list, and a detail
 /// pane (overview / headers / bodies / timing) for the selected transaction.
@@ -12,6 +13,10 @@ struct NetworkSessionView: View {
         VStack(spacing: 0) {
             toolbar
             divider
+            if !session.transactions.isEmpty {
+                NetworkTimelineView(session: session)
+                divider
+            }
             HSplitView {
                 transactionList
                     .frame(minWidth: 420, idealWidth: 560)
@@ -61,12 +66,23 @@ struct NetworkSessionView: View {
                 LemonadeUi.Text(status, textStyle: LemonadeTypography.shared.bodyXSmallRegular,
                                 color: LemonadeTheme.colors.content.contentSecondary, maxLines: 1)
             }
+            LemonadeUi.IconButton(icon: .download, contentDescription: "Export HAR") { exportHAR() }
             LemonadeUi.Button(label: "Setup", onClick: { showSetup = true },
                               leadingIcon: .circleInfo, variant: .neutral, type: .subtle, size: .small)
         }
         .padding(.horizontal, LemonadeTheme.spaces.spacing300)
         .padding(.vertical, LemonadeTheme.spaces.spacing200)
         .background(LemonadeTheme.colors.background.bgElevated)
+    }
+
+    private func exportHAR() {
+        guard let data = HARExport.data(from: session.transactions) else { return }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "\(session.displayName).har"
+        panel.canCreateDirectories = true
+        if panel.runModal() == .OK, let url = panel.url {
+            try? data.write(to: url)
+        }
     }
 
     private var transactionList: some View {

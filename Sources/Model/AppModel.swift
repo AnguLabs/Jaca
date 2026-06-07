@@ -29,11 +29,17 @@ final class AppModel {
     private var discoveryTasks: [Task<Void, Never>] = []
     private var devicesByPlatform: [DevicePlatform: [Device]] = [:]
 
+    /// Tabs persisted from a previous launch, restored as their devices appear.
+    private var pendingRestores: [TabDescriptor] = []
+    private var isRestoring = false
+    private static let tabsKey = "openTabs"
+
     init() {
         history = HistoryStore()
         if let days = UserDefaults.standard.object(forKey: "retentionDays") as? Int, days > 0 {
             retention = TimeInterval(days) * 86_400
         }
+        pendingRestores = Self.loadPersistedTabs()
         buildProviders()
         let store = history
         let cutoff = Date().addingTimeInterval(-retention)
@@ -82,6 +88,71 @@ final class AppModel {
         devices = devicesByPlatform
             .sorted { $0.key.rawValue < $1.key.rawValue }
             .flatMap { $0.value }
+        restorePendingTabs()
+    }
+
+    // MARK: - Tab persistence & restore
+
+    private func restorePendingTabs() {
+        guard !pendingRestores.isEmpty else { return }
+        var stillPending: [TabDescriptor] = []
+        isRestoring = true
+        for descriptor in pendingRestores {
+            guard let device = devices.first(where: {
+                $0.id == descriptor.deviceID && $0.platform == descriptor.platform && $0.state.isReady
+            }) else {
+                stillPending.append(descriptor)
+                continue
+            }
+            switch descriptor.kind {
+            case .log:
+                var filter = LogFilter()
+                filter.minLevel = LogLevel(rawValue: descriptor.minLevel) ?? .verbose
+                filter.query = descriptor.query
+                filter.isRegex = descriptor.isRegex
+                let session = startSession(for: device, filter: filter, name: descriptor.displayName)
+                if !descriptor.packageLabel.isEmpty { session?.setPackage(descriptor.packageLabel) }
+            case .network:
+                startNetworkSession(for: device, name: descriptor.displayName)
+            }
+        }
+        isRestoring = false
+        pendingRestores = stillPending
+        persistTabs()
+    }
+
+    /// Serializes open tabs (plus not-yet-restored ones) for the next launch.
+    func persistTabs() {
+        guard !isRestoring else { return }
+        var descriptors = sessions.compactMap { Self.descriptor(for: $0) }
+        // Keep tabs whose device hasn't reappeared yet so they survive a relaunch.
+        for pending in pendingRestores where !descriptors.contains(where: { $0.matches(pending) }) {
+            descriptors.append(pending)
+        }
+        if let data = try? JSONEncoder().encode(descriptors) {
+            UserDefaults.standard.set(data, forKey: Self.tabsKey)
+        }
+    }
+
+    private static func descriptor(for tab: any WorkspaceTab) -> TabDescriptor? {
+        if let log = tab as? LogSession {
+            return TabDescriptor(kind: .log, platform: log.device.platform, deviceID: log.device.id,
+                                 displayName: log.displayName, minLevel: log.filter.minLevel.rawValue,
+                                 query: log.filter.query, isRegex: log.filter.isRegex,
+                                 packageLabel: log.filter.packageLabel)
+        }
+        if let net = tab as? NetworkSession {
+            return TabDescriptor(kind: .network, platform: net.device.platform, deviceID: net.device.id,
+                                 displayName: net.displayName, minLevel: 0, query: "",
+                                 isRegex: false, packageLabel: "")
+        }
+        return nil
+    }
+
+    private static func loadPersistedTabs() -> [TabDescriptor] {
+        guard let data = UserDefaults.standard.data(forKey: tabsKey),
+              let descriptors = try? JSONDecoder().decode([TabDescriptor].self, from: data) else { return [] }
+        return descriptors
     }
 
     // MARK: - Sessions
@@ -110,6 +181,7 @@ final class AppModel {
             await store?.beginSession(id: id, device: device, package: pkg, displayName: displayName)
         }
         session.start()
+        persistTabs()
         return session
     }
 
@@ -128,6 +200,7 @@ final class AppModel {
         sessions.append(session)
         selectedSessionID = session.id
         session.start()
+        persistTabs()
         return session
     }
 
@@ -154,9 +227,27 @@ final class AppModel {
         if selectedSessionID == id {
             selectedSessionID = sessions[safe: index]?.id ?? sessions.last?.id
         }
+        persistTabs()
     }
 
     func select(_ id: UUID) { selectedSessionID = id }
+}
+
+/// Lightweight, Codable snapshot of a tab for session restore.
+struct TabDescriptor: Codable {
+    enum Kind: String, Codable { case log, network }
+    var kind: Kind
+    var platform: DevicePlatform
+    var deviceID: String
+    var displayName: String
+    var minLevel: Int
+    var query: String
+    var isRegex: Bool
+    var packageLabel: String
+
+    func matches(_ other: TabDescriptor) -> Bool {
+        kind == other.kind && deviceID == other.deviceID && displayName == other.displayName
+    }
 }
 
 private extension Array {

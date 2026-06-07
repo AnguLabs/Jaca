@@ -39,9 +39,7 @@ struct LogSessionView: View {
         VStack(spacing: LemonadeTheme.spaces.spacing200) {
             HStack(spacing: LemonadeTheme.spaces.spacing200) {
                 transportButton
-                LemonadeUi.IconButton(icon: .trash, contentDescription: "Clear") {
-                    session.clear()
-                }
+                clearMenu
                 followButton
                 Spacer()
                 if let status = session.statusMessage {
@@ -70,6 +68,26 @@ struct LogSessionView: View {
         .padding(.horizontal, LemonadeTheme.spaces.spacing300)
         .padding(.vertical, LemonadeTheme.spaces.spacing200)
         .background(LemonadeTheme.colors.background.bgElevated)
+    }
+
+    private var clearMenu: some View {
+        Menu {
+            Button("Clear view", action: { session.clear() })
+            if session.device.platform == .android {
+                Button("Clear device buffer", action: { session.clearDeviceBuffer() })
+            }
+        } label: {
+            Image(systemName: "trash")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(LemonadeTheme.colors.content.contentSecondary)
+                .frame(width: 30, height: 30)
+                .background(RoundedRectangle(cornerRadius: LemonadeTheme.radius.radius150)
+                    .fill(LemonadeTheme.colors.background.bgNeutralSubtle))
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Clear")
     }
 
     private var transportButton: some View {
@@ -174,33 +192,53 @@ struct LogSessionView: View {
 
 // MARK: - Log list
 
-/// Virtualized, monospaced log list with follow-tail auto-scroll.
+private struct BottomAnchorKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+/// Virtualized, monospaced log list. Auto-scrolls while following the tail, and
+/// auto-pauses follow when the user scrolls up (resumes when scrolled back down).
 private struct LogListView: View {
     let session: LogSession
     private let bottomID = "log-bottom-anchor"
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(session.visible) { line in
-                        LogRowView(line: line)
-                            .padding(.horizontal, LemonadeTheme.spaces.spacing300)
-                            .id(line.seq)
+        GeometryReader { outer in
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(session.visible) { line in
+                            LogRowView(line: line)
+                                .padding(.horizontal, LemonadeTheme.spaces.spacing300)
+                                .id(line.seq)
+                        }
+                        Color.clear.frame(height: 1).id(bottomID)
+                            .background(GeometryReader { g in
+                                Color.clear.preference(
+                                    key: BottomAnchorKey.self,
+                                    value: g.frame(in: .named("logScroll")).minY
+                                )
+                            })
                     }
-                    Color.clear.frame(height: 1).id(bottomID)
+                    .padding(.vertical, LemonadeTheme.spaces.spacing100)
                 }
-                .padding(.vertical, LemonadeTheme.spaces.spacing100)
-            }
-            .background(LemonadeTheme.colors.background.bgDefault)
-            .onChange(of: session.visible.count) {
-                if session.followTail {
-                    proxy.scrollTo(bottomID, anchor: .bottom)
+                .coordinateSpace(name: "logScroll")
+                .background(LemonadeTheme.colors.background.bgDefault)
+                .onChange(of: session.visible.count) {
+                    if session.followTail { proxy.scrollTo(bottomID, anchor: .bottom) }
                 }
-            }
-            .onChange(of: session.followTail) {
-                if session.followTail {
-                    proxy.scrollTo(bottomID, anchor: .bottom)
+                .onChange(of: session.followTail) {
+                    if session.followTail { proxy.scrollTo(bottomID, anchor: .bottom) }
+                }
+                .onPreferenceChange(BottomAnchorKey.self) { minY in
+                    // minY is the bottom anchor's position within the visible area.
+                    let viewport = outer.size.height
+                    if minY > viewport + 80, session.followTail {
+                        session.followTail = false          // user scrolled up
+                    } else if minY <= viewport + 8, !session.followTail {
+                        session.followTail = true           // back at bottom
+                    }
                 }
             }
         }

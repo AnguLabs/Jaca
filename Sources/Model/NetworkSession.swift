@@ -15,6 +15,8 @@ final class NetworkSession: WorkspaceTab {
     private(set) var transactions: [NetworkTransaction] = []
     var selectedID: UUID?
     var filterText = ""
+    /// Time window selected on the timeline; nil = all time.
+    var selectedTimeRange: ClosedRange<Date>?
     var statusMessage: String?
     private(set) var boundPort: Int = 0
     private(set) var proxyConfigured = false
@@ -34,12 +36,17 @@ final class NetworkSession: WorkspaceTab {
     var hostAddress: String { ProxyConfigurator.hostAddress(for: device) }
 
     var filtered: [NetworkTransaction] {
-        guard !filterText.isEmpty else { return transactions }
         let q = filterText
-        return transactions.filter {
-            $0.url.range(of: q, options: .caseInsensitive) != nil
-            || $0.host.range(of: q, options: .caseInsensitive) != nil
-            || $0.method.range(of: q, options: .caseInsensitive) != nil
+        return transactions.filter { txn in
+            if let range = selectedTimeRange {
+                let end = txn.finishedAt ?? txn.startedAt
+                // keep if the transaction's [start, end] overlaps the selection
+                if txn.startedAt > range.upperBound || end < range.lowerBound { return false }
+            }
+            if q.isEmpty { return true }
+            return txn.url.range(of: q, options: .caseInsensitive) != nil
+                || txn.host.range(of: q, options: .caseInsensitive) != nil
+                || txn.method.range(of: q, options: .caseInsensitive) != nil
         }
     }
 

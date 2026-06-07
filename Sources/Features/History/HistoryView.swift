@@ -1,5 +1,6 @@
 import SwiftUI
 import Lemonade
+import AppKit
 
 /// Read-only browser over saved history: pick a device+package group, then a
 /// past session, and view (and full-text search) its persisted lines. Answers
@@ -97,11 +98,19 @@ struct HistoryView: View {
 
     private var linesPane: some View {
         VStack(spacing: 0) {
-            LemonadeUi.SearchField(
-                input: $searchText,
-                placeholder: "Search this session…",
-                onInputClear: { searchText = "" }
-            )
+            HStack(spacing: LemonadeTheme.spaces.spacing200) {
+                LemonadeUi.SearchField(
+                    input: $searchText,
+                    placeholder: "Search this session…",
+                    onInputClear: { searchText = "" }
+                )
+                if selectedSession != nil {
+                    LemonadeUi.IconButton(icon: .download, contentDescription: "Export",
+                                          onClick: { exportSession() })
+                    LemonadeUi.IconButton(icon: .trash, contentDescription: "Delete",
+                                          onClick: { deleteSession() }, variant: .critical)
+                }
+            }
             .padding(LemonadeTheme.spaces.spacing200)
             Rectangle().fill(LemonadeTheme.colors.border.borderNeutralLow).frame(height: 1)
             if selectedSession == nil {
@@ -144,6 +153,31 @@ struct HistoryView: View {
         sessions = await model.history?.sessions(deviceID: group.deviceID, package: group.package) ?? []
         selectedSession = nil
         lines = []
+    }
+
+    private func exportSession() {
+        let toExport = lines
+        let session = sessions.first { $0.id == selectedSession }
+        let text = toExport.map { line in
+            "\(line.timestamp.formatted(date: .numeric, time: .standard)) \(line.level.short) \(line.tag): \(line.message)"
+        }.joined(separator: "\n")
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "\((session?.displayName ?? "session")).log"
+        panel.canCreateDirectories = true
+        if panel.runModal() == .OK, let url = panel.url {
+            try? text.write(to: url, atomically: true, encoding: .utf8)
+        }
+    }
+
+    private func deleteSession() {
+        guard let selectedSession, let uuid = UUID(uuidString: selectedSession) else { return }
+        Task {
+            await model.history?.deleteSession(id: uuid)
+            sessions.removeAll { $0.id == selectedSession }
+            self.selectedSession = nil
+            lines = []
+            groups = await model.history?.packageGroups() ?? []
+        }
     }
 
     private func loadLines() async {

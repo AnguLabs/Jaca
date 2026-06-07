@@ -5,6 +5,7 @@ import Lemonade
 /// right with a tab strip above it.
 struct RootView: View {
     @State private var model = AppModel()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         NavigationSplitView {
@@ -14,6 +15,9 @@ struct RootView: View {
             detail
         }
         .task { model.startDiscovery() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase != .active { model.persistTabs() }
+        }
     }
 
     @ViewBuilder
