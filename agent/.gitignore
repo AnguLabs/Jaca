@@ -1,4 +1,6 @@
 build/
 out/
 classes/
+classes-boot/
+classes-capture/
 *.dex
