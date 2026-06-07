@@ -121,7 +121,14 @@ bool RegisterExitHook(jvmtiEnv* jvmti, JNIEnv* /*jni*/, jclass clazz,
 
   {
     std::lock_guard<std::mutex> lock(g_mutex);
-    g_transforms[desc].push_back({method, signature});
+    auto& specs = g_transforms[desc];
+    for (const auto& s : specs) {
+      if (s.method == method && s.signature == signature) {
+        LOGI("Exit hook already registered for %s.%s%s — skipping", desc.c_str(), method, signature);
+        return true;  // idempotent: avoid double-instrumentation on re-attach
+      }
+    }
+    specs.push_back({method, signature});
   }
 
   jvmti->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_CLASS_FILE_LOAD_HOOK, nullptr);

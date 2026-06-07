@@ -50,10 +50,8 @@ jint AttachAgent(JavaVM* vm, char* options) {
     // is loaded later on an isolated loader (see SqueezeAgent.attach).
     jvmtiError err = jvmti->AddToBootstrapClassLoaderSearch(bootDex.c_str());
     LOGI("AddToBootstrapClassLoaderSearch(%s) -> %d", bootDex.c_str(), err);
-    if (err != JVMTI_ERROR_NONE) {
-      LOGE("Failed to add boot dex to bootstrap classpath: %d", err);
-      return JNI_OK;
-    }
+    // On re-attach the boot dex is already present (err != NONE) — that's fine,
+    // continue so we can re-point the reporter to the new socket.
   }
 
   JNIEnv* jni = nullptr;

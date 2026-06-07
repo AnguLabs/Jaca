@@ -18,13 +18,19 @@ enum AgentArtifacts {
         return devPath("agent/out/\(abi)/libsqueezeagent.so")
     }
 
-    static var dexURL: URL? {
-        if let u = Bundle.main.url(forResource: "squeezeagent", withExtension: "dex",
+    static var bootDexURL: URL? {
+        if let u = Bundle.main.url(forResource: "squeezeagent-boot", withExtension: "dex",
                                    subdirectory: "agent") { return u }
-        return devPath("agent/out/squeezeagent.dex")
+        return devPath("agent/out/squeezeagent-boot.dex")
     }
 
-    static var isAvailable: Bool { soURL() != nil && dexURL != nil }
+    static var captureDexURL: URL? {
+        if let u = Bundle.main.url(forResource: "squeezeagent-capture", withExtension: "dex",
+                                   subdirectory: "agent") { return u }
+        return devPath("agent/out/squeezeagent-capture.dex")
+    }
+
+    static var isAvailable: Bool { soURL() != nil && bootDexURL != nil && captureDexURL != nil }
 
     private static func devPath(_ rel: String) -> URL? {
         let p = FileManager.default.homeDirectoryForCurrentUser

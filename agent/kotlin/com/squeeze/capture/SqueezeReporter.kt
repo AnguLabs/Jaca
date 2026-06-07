@@ -12,19 +12,22 @@ object SqueezeReporter {
     private val seq = AtomicLong(0)
     private val lock = Any()
     @Volatile private var out: OutputStream? = null
+    @Volatile private var server: LocalServerSocket? = null
 
     fun nextId(): Long = seq.incrementAndGet()
 
     fun listen(socketName: String) {
+        try { server?.close() } catch (_: Exception) {}  // unblock any prior serve loop
         Thread({ serve(socketName) }, "squeeze-reporter").apply { isDaemon = true; start() }
     }
 
     private fun serve(socketName: String) {
         try {
-            val server = LocalServerSocket(socketName)
+            val srv = LocalServerSocket(socketName)
+            server = srv
             Log.i(TAG, "reporter listening on localabstract:$socketName")
             while (true) {
-                val client = server.accept()
+                val client = srv.accept()
                 synchronized(lock) { out = client.outputStream }
                 emit("{\"type\":\"hello\",\"pid\":${Process.myPid()},\"stage\":4}")
                 Log.i(TAG, "host connected")

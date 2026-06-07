@@ -54,7 +54,8 @@ final class AgentController: @unchecked Sendable {
     private let serial: String
     private let package: String
     private let soPath: URL
-    private let dexPath: URL
+    private let bootDexPath: URL
+    private let captureDexPath: URL
     private let socketName: String
     private let onTransaction: @Sendable (NetworkTransaction) -> Void
     private let onStatus: @Sendable (String) -> Void
@@ -64,14 +65,16 @@ final class AgentController: @unchecked Sendable {
     private var readerThread: Thread?
     private var stopped = false
 
-    init(adbURL: URL, serial: String, package: String, soPath: URL, dexPath: URL,
+    init(adbURL: URL, serial: String, package: String, soPath: URL,
+         bootDexPath: URL, captureDexPath: URL,
          onTransaction: @escaping @Sendable (NetworkTransaction) -> Void,
          onStatus: @escaping @Sendable (String) -> Void) {
         self.adbURL = adbURL
         self.serial = serial
         self.package = package
         self.soPath = soPath
-        self.dexPath = dexPath
+        self.bootDexPath = bootDexPath
+        self.captureDexPath = captureDexPath
         self.socketName = "squeeze_\(UInt32.random(in: 1...0xFFFFFF))"
         self.onTransaction = onTransaction
         self.onStatus = onStatus
@@ -95,22 +98,31 @@ final class AgentController: @unchecked Sendable {
         let cc = "/data/data/\(package)/code_cache"
         let tmp = "/data/local/tmp/squeeze"
 
-        guard let pidOut = await adb(["shell", "pidof", package]),
-              let pid = pidOut.stdout.split(separator: " ").first.map(String.init),
-              !pid.isEmpty else {
+        guard let pidOut = await adb(["shell", "pidof", package]) else {
             onStatus("agent: app not running"); return
         }
+        // pidof returns "1234 5678\n" — take the first, fully trimmed (a stray
+        // newline here would corrupt the attach-agent command).
+        let pid = pidOut.stdout
+            .split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\r" })
+            .first.map(String.init) ?? ""
+        guard !pid.isEmpty else { onStatus("agent: app not running"); return }
 
         _ = await adb(["shell", "mkdir", "-p", tmp])
         _ = await adb(["push", soPath.path, "\(tmp)/libsqueezeagent.so"])
-        _ = await adb(["push", dexPath.path, "\(tmp)/squeezeagent.dex"])
+        _ = await adb(["push", bootDexPath.path, "\(tmp)/squeezeagent-boot.dex"])
+        _ = await adb(["push", captureDexPath.path, "\(tmp)/squeezeagent-capture.dex"])
         // Copy into the app's code_cache (SELinux: app can exec from there) via run-as.
-        _ = await adb(["shell", "run-as", package, "rm", "-f", "code_cache/libsqueezeagent.so", "code_cache/squeezeagent.dex"])
-        _ = await adb(["shell", "run-as \(package) sh -c 'cat > \(cc)/libsqueezeagent.so' < \(tmp)/libsqueezeagent.so"])
-        _ = await adb(["shell", "run-as \(package) sh -c 'cat > \(cc)/squeezeagent.dex' < \(tmp)/squeezeagent.dex"])
-        _ = await adb(["shell", "run-as", package, "chmod", "444", "code_cache/squeezeagent.dex"])  // ART rejects writable dex
+        _ = await adb(["shell", "run-as", package, "rm", "-rf",
+                       "code_cache/libsqueezeagent.so", "code_cache/squeezeagent-boot.dex",
+                       "code_cache/squeezeagent-capture.dex", "code_cache/squeeze_opt"])
+        for file in ["libsqueezeagent.so", "squeezeagent-boot.dex", "squeezeagent-capture.dex"] {
+            _ = await adb(["shell", "run-as \(package) sh -c 'cat > \(cc)/\(file)' < \(tmp)/\(file)"])
+        }
+        _ = await adb(["shell", "run-as", package, "chmod", "444",
+                       "code_cache/squeezeagent-boot.dex", "code_cache/squeezeagent-capture.dex"])  // ART rejects writable dex
 
-        let spec = "\(cc)/libsqueezeagent.so=\(cc)/squeezeagent.dex,\(socketName)"
+        let spec = "\(cc)/libsqueezeagent.so=\(cc)/squeezeagent-boot.dex,\(cc)/squeezeagent-capture.dex,\(socketName)"
         _ = await adb(["shell", "cmd activity attach-agent \(pid) '\(spec)'"])
 
         guard let fwd = await adb(["forward", "tcp:0", "localabstract:\(socketName)"]),
@@ -130,20 +142,34 @@ final class AgentController: @unchecked Sendable {
     }
 
     private func readLoop(port: Int32) {
-        // Retry connect briefly — the agent socket may appear a beat after forward.
-        for _ in 0..<20 {
-            if stopped { return }
+        // `connect()` to adb's forward always succeeds, but adb closes the stream if
+        // the device-side localabstract server isn't accepting yet (a race right
+        // after attach). So retry the whole connect+read until we actually receive
+        // bytes (the agent's hello), then stream for real.
+        var attempts = 0
+        while !stopped && attempts < 40 {
+            attempts += 1
             let s = connect(port: port)
-            if s >= 0 { fd = s; break }
-            Thread.sleep(forTimeInterval: 0.25)
+            if s < 0 { Thread.sleep(forTimeInterval: 0.25); continue }
+            fd = s
+            onStatus("agent: connected :\(port)")
+            let receivedAny = streamFrom(fd: s)
+            if fd >= 0 { close(fd); fd = -1 }
+            if receivedAny || stopped { return }
+            Thread.sleep(forTimeInterval: 0.25)  // closed before any data — retry
         }
-        guard fd >= 0 else { onStatus("agent: could not connect to socket"); return }
+        onStatus("agent: could not connect to socket :\(port)")
+    }
 
+    /// Reads newline-delimited JSON from `s`. Returns true if any bytes arrived.
+    private func streamFrom(fd s: Int32) -> Bool {
+        var firstData = true
         var buffer = Data()
         var chunk = [UInt8](repeating: 0, count: 16384)
         while !stopped {
-            let n = recv(fd, &chunk, chunk.count, 0)
+            let n = recv(s, &chunk, chunk.count, 0)
             if n <= 0 { break }
+            if firstData { firstData = false; onStatus("agent: in-process (receiving)") }
             buffer.append(contentsOf: chunk[0..<n])
             while let nl = buffer.firstIndex(of: 0x0A) {
                 let lineData = buffer[buffer.startIndex..<nl]
@@ -154,7 +180,7 @@ final class AgentController: @unchecked Sendable {
                 }
             }
         }
-        if fd >= 0 { close(fd); fd = -1 }
+        return !firstData
     }
 
     private func connect(port: Int32) -> Int32 {
