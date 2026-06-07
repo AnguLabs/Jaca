@@ -8,7 +8,7 @@ import Observation
 @Observable
 final class AppModel {
     private(set) var devices: [Device] = []
-    private(set) var sessions: [LogSession] = []
+    private(set) var sessions: [any WorkspaceTab] = []
     var selectedSessionID: UUID?
 
     /// Resolved adb path; nil means the toolchain wasn't found (surface in UI).
@@ -20,7 +20,7 @@ final class AppModel {
     /// History retention; sessions older than this are pruned on launch.
     var retention: TimeInterval = 7 * 24 * 60 * 60
 
-    var selectedSession: LogSession? {
+    var selectedSession: (any WorkspaceTab)? {
         guard let selectedSessionID else { return nil }
         return sessions.first { $0.id == selectedSessionID }
     }
@@ -113,6 +113,24 @@ final class AppModel {
         return session
     }
 
+    private var ca: CertificateAuthority?
+
+    @discardableResult
+    func startNetworkSession(for device: Device, name: String? = nil) -> NetworkSession? {
+        let authority: CertificateAuthority
+        if let ca { authority = ca }
+        else {
+            guard let made = try? CertificateAuthority() else { return nil }
+            ca = made
+            authority = made
+        }
+        let session = NetworkSession(device: device, ca: authority, adbURL: adbURL, displayName: name)
+        sessions.append(session)
+        selectedSessionID = session.id
+        session.start()
+        return session
+    }
+
     private func makeLogSource(for device: Device) -> LogSource? {
         switch device.platform {
         case .android:
@@ -128,8 +146,10 @@ final class AppModel {
     func closeSession(_ id: UUID) {
         guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
         sessions[index].stop()
-        let store = history
-        Task { await store?.endSession(id: id) }
+        if sessions[index] is LogSession {
+            let store = history
+            Task { await store?.endSession(id: id) }
+        }
         sessions.remove(at: index)
         if selectedSessionID == id {
             selectedSessionID = sessions[safe: index]?.id ?? sessions.last?.id

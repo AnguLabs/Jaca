@@ -11,7 +11,7 @@ struct TabStripView: View {
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: LemonadeTheme.spaces.spacing100) {
-                ForEach(model.sessions) { session in
+                ForEach(model.sessions, id: \.id) { session in
                     tab(session)
                 }
             }
@@ -22,7 +22,7 @@ struct TabStripView: View {
     }
 
     @ViewBuilder
-    private func tab(_ session: LogSession) -> some View {
+    private func tab(_ session: any WorkspaceTab) -> some View {
         let isSelected = session.id == model.selectedSessionID
         Button(action: { model.select(session.id) }) {
             HStack(spacing: LemonadeTheme.spaces.spacing200) {
@@ -87,7 +87,7 @@ struct TabStripView: View {
         })
     }
 
-    private func commitRename(_ session: LogSession) {
+    private func commitRename(_ session: any WorkspaceTab) {
         let trimmed = editingText.trimmingCharacters(in: .whitespaces)
         if !trimmed.isEmpty { session.displayName = trimmed }
         editingID = nil

@@ -9,6 +9,21 @@ options:
 packages:
   Lemonade:
     path: ../lemonade-design-system
+  swift-nio:
+    url: https://github.com/apple/swift-nio.git
+    from: "2.65.0"
+  swift-nio-ssl:
+    url: https://github.com/apple/swift-nio-ssl.git
+    from: "2.27.0"
+  swift-certificates:
+    url: https://github.com/apple/swift-certificates.git
+    from: "1.5.0"
+  swift-crypto:
+    url: https://github.com/apple/swift-crypto.git
+    from: "3.5.0"
+  swift-asn1:
+    url: https://github.com/apple/swift-asn1.git
+    from: "1.2.0"
 
 settings:
   base:
@@ -32,6 +47,22 @@ targets:
       - path: Sources
     dependencies:
       - package: Lemonade
+      - package: swift-nio
+        product: NIOCore
+      - package: swift-nio
+        product: NIOPosix
+      - package: swift-nio
+        product: NIOHTTP1
+      - package: swift-nio
+        product: NIOFoundationCompat
+      - package: swift-nio-ssl
+        product: NIOSSL
+      - package: swift-certificates
+        product: X509
+      - package: swift-crypto
+        product: Crypto
+      - package: swift-asn1
+        product: SwiftASN1
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.srsouza.Squeeze

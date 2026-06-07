@@ -47,7 +47,11 @@ struct DeviceSidebarView: View {
                                     color: LemonadeTheme.colors.content.contentTertiary
                                 )
                                 ForEach(model.devices.filter { $0.platform == platform }) { device in
-                                    DeviceRow(device: device) { model.startSession(for: device) }
+                                    DeviceRow(
+                                        device: device,
+                                        onStart: { model.startSession(for: device) },
+                                        onInspectNetwork: { model.startNetworkSession(for: device) }
+                                    )
                                 }
                             }
                         }
@@ -107,6 +111,7 @@ struct DeviceSidebarView: View {
 private struct DeviceRow: View {
     let device: Device
     let onStart: () -> Void
+    let onInspectNetwork: () -> Void
     @State private var hovering = false
 
     var body: some View {
@@ -153,6 +158,10 @@ private struct DeviceRow: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .help(device.state.isReady ? "Start logcat" : device.state.label)
+        .contextMenu {
+            Button("Start Logcat", action: onStart)
+            Button("Inspect Network", action: onInspectNetwork)
+        }
     }
 
     private var stateBadge: some View {

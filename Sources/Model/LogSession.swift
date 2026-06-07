@@ -25,7 +25,7 @@ final class LineBuffer: @unchecked Sendable {
 /// under thousands of lines/sec.
 @MainActor
 @Observable
-final class LogSession: Identifiable {
+final class LogSession: WorkspaceTab {
     let id = UUID()
     var displayName: String
     let device: Device

@@ -26,9 +26,12 @@ struct RootView: View {
                 Rectangle()
                     .fill(LemonadeTheme.colors.border.borderNeutralLow)
                     .frame(height: 1)
-                if let session = model.selectedSession {
-                    LogSessionView(session: session)
-                        .id(session.id)
+                if let log = model.selectedSession as? LogSession {
+                    LogSessionView(session: log)
+                        .id(log.id)
+                } else if let net = model.selectedSession as? NetworkSession {
+                    NetworkSessionView(session: net)
+                        .id(net.id)
                 } else {
                     EmptySessionView()
                 }
