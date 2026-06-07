@@ -67,5 +67,6 @@ struct EmptySessionView: View {
         .padding(LemonadeTheme.spaces.spacing800)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(LemonadeTheme.colors.background.bgDefault)
+        .accessibilityIdentifier("emptyState")
     }
 }

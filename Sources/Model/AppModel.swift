@@ -33,13 +33,15 @@ final class AppModel {
     private var pendingRestores: [TabDescriptor] = []
     private var isRestoring = false
     private static let tabsKey = "openTabs"
+    /// Clean, isolated state for UI tests (no restore, no persistence pollution).
+    private let uiTestMode = ProcessInfo.processInfo.environment["SQUEEZE_UITEST"] == "1"
 
     init() {
         history = HistoryStore()
         if let days = UserDefaults.standard.object(forKey: "retentionDays") as? Int, days > 0 {
             retention = TimeInterval(days) * 86_400
         }
-        pendingRestores = Self.loadPersistedTabs()
+        if !uiTestMode { pendingRestores = Self.loadPersistedTabs() }
         buildProviders()
         let store = history
         let cutoff = Date().addingTimeInterval(-retention)
@@ -104,16 +106,18 @@ final class AppModel {
                 stillPending.append(descriptor)
                 continue
             }
+            // Restore tabs STOPPED — the user presses play to stream — so a relaunch
+            // never starts many sessions at once (which can overwhelm the app).
             switch descriptor.kind {
             case .log:
                 var filter = LogFilter()
                 filter.minLevel = LogLevel(rawValue: descriptor.minLevel) ?? .verbose
                 filter.query = descriptor.query
                 filter.isRegex = descriptor.isRegex
-                let session = startSession(for: device, filter: filter, name: descriptor.displayName)
+                let session = startSession(for: device, filter: filter, name: descriptor.displayName, autoStart: false)
                 if !descriptor.packageLabel.isEmpty { session?.setPackage(descriptor.packageLabel) }
             case .network:
-                startNetworkSession(for: device, name: descriptor.displayName)
+                startNetworkSession(for: device, name: descriptor.displayName, autoStart: false)
             }
         }
         isRestoring = false
@@ -123,7 +127,7 @@ final class AppModel {
 
     /// Serializes open tabs (plus not-yet-restored ones) for the next launch.
     func persistTabs() {
-        guard !isRestoring else { return }
+        guard !isRestoring, !uiTestMode else { return }
         var descriptors = sessions.compactMap { Self.descriptor(for: $0) }
         // Keep tabs whose device hasn't reappeared yet so they survive a relaunch.
         for pending in pendingRestores where !descriptors.contains(where: { $0.matches(pending) }) {
@@ -158,7 +162,8 @@ final class AppModel {
     // MARK: - Sessions
 
     @discardableResult
-    func startSession(for device: Device, filter: LogFilter = LogFilter(), name: String? = nil) -> LogSession? {
+    func startSession(for device: Device, filter: LogFilter = LogFilter(),
+                      name: String? = nil, autoStart: Bool = true) -> LogSession? {
         guard let source = makeLogSource(for: device) else { return nil }
         let store = history
         // adbURL is only used by the Android pid/clear helpers; a placeholder is
@@ -171,16 +176,20 @@ final class AppModel {
                 Task { await store?.appendLines(sessionID: sid, lines) }
             }
         )
+        let id = session.id
+        // Record history on each (re)start, whether auto-started or started later.
+        session.onStarted = { [weak session] in
+            guard let session else { return }
+            let pkg = session.filter.packageLabel
+            let displayName = session.displayName
+            Task {
+                await store?.upsertDevice(device)
+                await store?.beginSession(id: id, device: device, package: pkg, displayName: displayName)
+            }
+        }
         sessions.append(session)
         selectedSessionID = session.id
-        let pkg = filter.packageLabel
-        let displayName = session.displayName
-        let id = session.id
-        Task {
-            await store?.upsertDevice(device)
-            await store?.beginSession(id: id, device: device, package: pkg, displayName: displayName)
-        }
-        session.start()
+        if autoStart { session.start() }
         persistTabs()
         return session
     }
@@ -188,7 +197,7 @@ final class AppModel {
     private var ca: CertificateAuthority?
 
     @discardableResult
-    func startNetworkSession(for device: Device, name: String? = nil) -> NetworkSession? {
+    func startNetworkSession(for device: Device, name: String? = nil, autoStart: Bool = true) -> NetworkSession? {
         let authority: CertificateAuthority
         if let ca { authority = ca }
         else {
@@ -199,7 +208,7 @@ final class AppModel {
         let session = NetworkSession(device: device, ca: authority, adbURL: adbURL, displayName: name)
         sessions.append(session)
         selectedSessionID = session.id
-        session.start()
+        if autoStart { session.start() }
         persistTabs()
         return session
     }

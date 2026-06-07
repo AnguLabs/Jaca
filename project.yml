@@ -86,15 +86,31 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: dev.srsouza.SqueezeTests
         GENERATE_INFOPLIST_FILE: YES
 
+  SqueezeUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: UITests
+    dependencies:
+      - target: Squeeze
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.srsouza.SqueezeUITests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: Squeeze
+
 schemes:
   Squeeze:
     build:
       targets:
         Squeeze: all
         SqueezeTests: [test]
+        SqueezeUITests: [test]
     run:
       config: Debug
     test:
       config: Debug
       targets:
         - SqueezeTests
+        - SqueezeUITests

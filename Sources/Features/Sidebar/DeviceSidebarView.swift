@@ -21,12 +21,14 @@ struct DeviceSidebarView: View {
                     icon: .clockArrowUp, contentDescription: "History",
                     onClick: { showHistory = true }, size: .small
                 )
+                .accessibilityIdentifier("historyButton")
                 Button(action: { showSettings = true }) {
                     Image(systemName: "gearshape")
                         .foregroundStyle(LemonadeTheme.colors.content.contentSecondary)
                 }
                 .buttonStyle(.plain)
                 .help("Settings")
+                .accessibilityIdentifier("settingsButton")
             }
             .padding(.top, LemonadeTheme.spaces.spacing200)
 
@@ -156,6 +158,8 @@ private struct DeviceRow: View {
             )
         }
         .buttonStyle(.plain)
+        .disabled(!device.state.isReady)
+        .accessibilityIdentifier("deviceRow")
         .onHover { hovering = $0 }
         .help(device.state.isReady ? "Start logcat" : device.state.label)
         .contextMenu {

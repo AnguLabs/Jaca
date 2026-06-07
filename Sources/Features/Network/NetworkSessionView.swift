@@ -27,6 +27,7 @@ struct NetworkSessionView: View {
             statusBar
         }
         .background(LemonadeTheme.colors.background.bgDefault)
+        .accessibilityIdentifier("networkSessionView")
         .onAppear { searchText = session.filterText }
         .sheet(isPresented: $showSetup) { NetworkSetupSheet(session: session) }
     }
@@ -49,6 +50,7 @@ struct NetworkSessionView: View {
             }
             .buttonStyle(.plain)
             .help(session.isRunning ? "Stop proxy" : "Start proxy")
+            .accessibilityIdentifier("netTransportButton")
 
             LemonadeUi.IconButton(icon: .trash, contentDescription: "Clear") { session.clear() }
 

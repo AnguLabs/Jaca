@@ -21,6 +21,7 @@ struct LogSessionView: View {
             StatusBarView(session: session)
         }
         .background(LemonadeTheme.colors.background.bgDefault)
+        .accessibilityIdentifier("logSessionView")
         .onAppear {
             searchText = session.filter.query
             packageText = session.filter.packageLabel
@@ -107,6 +108,7 @@ struct LogSessionView: View {
         }
         .buttonStyle(.plain)
         .help(session.isRunning ? "Stop" : "Start")
+        .accessibilityIdentifier("logTransportButton")
     }
 
     private var followButton: some View {
@@ -234,10 +236,12 @@ private struct LogListView: View {
                 .onPreferenceChange(BottomAnchorKey.self) { minY in
                     // minY is the bottom anchor's position within the visible area.
                     let viewport = outer.size.height
-                    if minY > viewport + 80, session.followTail {
-                        session.followTail = false          // user scrolled up
-                    } else if minY <= viewport + 8, !session.followTail {
-                        session.followTail = true           // back at bottom
+                    DispatchQueue.main.async {
+                        if minY > viewport + 80, session.followTail {
+                            session.followTail = false      // user scrolled up
+                        } else if minY <= viewport + 8, !session.followTail {
+                            session.followTail = true       // back at bottom
+                        }
                     }
                 }
             }

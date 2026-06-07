@@ -38,6 +38,10 @@ final class LogSession: WorkspaceTab {
     var followTail = true
     var statusMessage: String?
 
+    /// Invoked each time the stream starts (so history recording works whether the
+    /// tab is auto-started or started later by the user).
+    var onStarted: (() -> Void)?
+
     /// Subtitle for the tab/strip: device model + active filter summary.
     var subtitle: String {
         var parts = [device.displayModel]
@@ -85,6 +89,7 @@ final class LogSession: WorkspaceTab {
             let stream = try source.start()
             isRunning = true
             statusMessage = nil
+            onStarted?()
             let buffer = pending
             consumeTask = Task.detached(priority: .utility) {
                 for await line in stream {

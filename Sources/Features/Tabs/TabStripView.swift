@@ -64,6 +64,7 @@ struct TabStripView: View {
                 }
                 .buttonStyle(.plain)
                 .help("Close tab")
+                .accessibilityIdentifier("tabClose")
             }
             .padding(.horizontal, LemonadeTheme.spaces.spacing300)
             .padding(.vertical, LemonadeTheme.spaces.spacing200)

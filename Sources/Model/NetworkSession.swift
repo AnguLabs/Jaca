@@ -107,6 +107,8 @@ final class NetworkSession: WorkspaceTab {
     // MARK: - Device proxy
 
     private func configureDeviceProxy() {
+        // Don't mutate a real device's proxy during UI tests.
+        if ProcessInfo.processInfo.environment["SQUEEZE_UITEST"] == "1" { return }
         guard device.platform == .android, let adbURL else { return }
         let serial = device.id, host = hostAddress, port = boundPort
         Task {
