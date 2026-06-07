@@ -31,6 +31,9 @@ struct NetworkTransaction: Identifiable, Sendable, Hashable {
     var responseBytes: Int
     var error: String?
 
+    /// Initiating call stack — only the in-process agent can provide this; nil for proxy capture.
+    var callStack: [String]? = nil
+
     init(id: UUID = UUID(), method: String, url: String, host: String, scheme: String,
          requestHeaders: [HeaderPair] = [], requestBody: Data? = nil, startedAt: Date = Date()) {
         self.id = id

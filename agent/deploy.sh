@@ -10,7 +10,8 @@ ADB="$HOME/Library/Android/sdk/platform-tools/adb"
 A() { "$ADB" -s "$SERIAL" "$@"; }
 CC="/data/data/$PKG/code_cache"
 SO=out/arm64-v8a/libsqueezeagent.so
-DEX=out/squeezeagent.dex
+BOOT_DEX=out/squeezeagent-boot.dex
+CAP_DEX=out/squeezeagent-capture.dex
 
 ABIS="arm64-v8a" ./build.sh >/dev/null
 ./build-dex.sh >/dev/null
@@ -30,13 +31,15 @@ echo "pid=$PID"
 
 A shell mkdir -p /data/local/tmp/squeeze
 A push "$SO" /data/local/tmp/squeeze/ >/dev/null
-A push "$DEX" /data/local/tmp/squeeze/ >/dev/null
-A shell run-as "$PKG" rm -f code_cache/libsqueezeagent.so code_cache/squeezeagent.dex || true
-A shell "run-as $PKG sh -c 'cat > $CC/libsqueezeagent.so' < /data/local/tmp/squeeze/libsqueezeagent.so"
-A shell "run-as $PKG sh -c 'cat > $CC/squeezeagent.dex' < /data/local/tmp/squeeze/squeezeagent.dex"
-A shell run-as "$PKG" chmod 444 code_cache/squeezeagent.dex   # ART rejects writable dex
+A push "$BOOT_DEX" /data/local/tmp/squeeze/ >/dev/null
+A push "$CAP_DEX" /data/local/tmp/squeeze/ >/dev/null
+A shell run-as "$PKG" rm -rf code_cache/libsqueezeagent.so code_cache/squeezeagent-boot.dex code_cache/squeezeagent-capture.dex code_cache/squeeze_opt || true
+for f in libsqueezeagent.so squeezeagent-boot.dex squeezeagent-capture.dex; do
+  A shell "run-as $PKG sh -c 'cat > $CC/$f' < /data/local/tmp/squeeze/$f"
+done
+A shell run-as "$PKG" chmod 444 code_cache/squeezeagent-boot.dex code_cache/squeezeagent-capture.dex  # ART rejects writable dex
 A logcat -c
-A shell "cmd activity attach-agent $PID '$CC/libsqueezeagent.so=$CC/squeezeagent.dex,$SOCK'" >/dev/null 2>&1 || true
+A shell "cmd activity attach-agent $PID '$CC/libsqueezeagent.so=$CC/squeezeagent-boot.dex,$CC/squeezeagent-capture.dex,$SOCK'" >/dev/null 2>&1 || true
 sleep 2
 echo "=== agent log ==="
 A logcat -d 2>/dev/null | grep -i SqueezeAgent | tail -10

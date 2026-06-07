@@ -31,25 +31,27 @@ jint AttachAgent(JavaVM* vm, char* options) {
     return JNI_OK;
   }
 
-  // Parse "<dexPath>,<socketName>".
+  // Parse "<bootDex>,<captureDex>,<socketName>".
   std::string opts = options ? options : "";
-  std::string dexPath, socketName = "squeeze_agent";
-  auto comma = opts.find(',');
-  if (comma != std::string::npos) {
-    dexPath = opts.substr(0, comma);
-    socketName = opts.substr(comma + 1);
+  std::string bootDex, captureDex, socketName = "squeeze_agent";
+  auto c1 = opts.find(',');
+  auto c2 = (c1 == std::string::npos) ? std::string::npos : opts.find(',', c1 + 1);
+  if (c1 != std::string::npos && c2 != std::string::npos) {
+    bootDex = opts.substr(0, c1);
+    captureDex = opts.substr(c1 + 1, c2 - c1 - 1);
+    socketName = opts.substr(c2 + 1);
   } else {
-    dexPath = opts;
+    bootDex = opts;
   }
 
-  if (!dexPath.empty()) {
-    // Bootstrap (not system) so hooks injected into *boot* classes (java.net.URL,
-    // etc.) can resolve com.squeeze.agent.SqueezeHooks — otherwise every caller of
-    // an instrumented boot method throws NoClassDefFoundError.
-    jvmtiError err = jvmti->AddToBootstrapClassLoaderSearch(dexPath.c_str());
-    LOGI("AddToBootstrapClassLoaderSearch(%s) -> %d", dexPath.c_str(), err);
+  if (!bootDex.empty()) {
+    // Only the tiny Java trampoline goes on the bootstrap loader (so hooks in boot
+    // classes like java.net.URL can resolve SqueezeHooks). The Kotlin capture dex
+    // is loaded later on an isolated loader (see SqueezeAgent.attach).
+    jvmtiError err = jvmti->AddToBootstrapClassLoaderSearch(bootDex.c_str());
+    LOGI("AddToBootstrapClassLoaderSearch(%s) -> %d", bootDex.c_str(), err);
     if (err != JVMTI_ERROR_NONE) {
-      LOGE("Failed to add dex to bootstrap classpath: %d", err);
+      LOGE("Failed to add boot dex to bootstrap classpath: %d", err);
       return JNI_OK;
     }
   }
@@ -79,22 +81,24 @@ jint AttachAgent(JavaVM* vm, char* options) {
     LOGE("Could not load com.squeeze.agent.SqueezeAgent from bootstrap");
     return JNI_OK;
   }
-  jmethodID attach = jni->GetStaticMethodID(cls, "attach", "(Ljava/lang/String;)V");
+  jmethodID attach = jni->GetStaticMethodID(cls, "attach", "(Ljava/lang/String;Ljava/lang/String;)V");
   if (attach == nullptr) {
     if (jni->ExceptionCheck()) jni->ExceptionClear();
-    LOGE("Could not find SqueezeAgent.attach(String)");
+    LOGE("Could not find SqueezeAgent.attach(String,String)");
     return JNI_OK;
   }
-  jstring arg = jni->NewStringUTF(socketName.c_str());
-  jni->CallStaticVoidMethod(cls, attach, arg);
+  jstring jCapture = jni->NewStringUTF(captureDex.c_str());
+  jstring jSock = jni->NewStringUTF(socketName.c_str());
+  jni->CallStaticVoidMethod(cls, attach, jCapture, jSock);
   if (jni->ExceptionCheck()) {
     jni->ExceptionDescribe();
     jni->ExceptionClear();
     LOGE("SqueezeAgent.attach threw");
   } else {
-    LOGI("SqueezeAgent.attach invoked (socket=%s)", socketName.c_str());
+    LOGI("SqueezeAgent.attach invoked (capture=%s socket=%s)", captureDex.c_str(), socketName.c_str());
   }
-  jni->DeleteLocalRef(arg);
+  jni->DeleteLocalRef(jCapture);
+  jni->DeleteLocalRef(jSock);
   return JNI_OK;
 }
 
