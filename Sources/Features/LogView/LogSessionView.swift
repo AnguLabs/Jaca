@@ -95,6 +95,8 @@ struct LogSessionView: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .help("Clear")
+        .accessibilityLabel("Clear")
+        .accessibilityIdentifier("clearMenu")
     }
 
     private var transportButton: some View {
@@ -114,6 +116,7 @@ struct LogSessionView: View {
         }
         .buttonStyle(.plain)
         .help(session.isRunning ? "Stop" : "Start")
+        .accessibilityLabel(session.isRunning ? "Stop" : "Start")
         .accessibilityIdentifier("logTransportButton")
     }
 
@@ -136,6 +139,7 @@ struct LogSessionView: View {
         }
         .buttonStyle(.plain)
         .help("Follow tail")
+        .accessibilityLabel("Follow tail")
         .accessibilityIdentifier("followButton")
     }
 
@@ -226,6 +230,7 @@ private struct PackagePicker: View {
         }
         .buttonStyle(.plain)
         .help("Choose app / package")
+        .accessibilityLabel("Choose app or package")
         .accessibilityIdentifier("packagePicker")
         .popover(isPresented: $show, arrowEdge: .bottom) { popover }
     }
@@ -243,6 +248,7 @@ private struct PackagePicker: View {
             TextField("Search apps…", text: $query)
                 .textFieldStyle(.roundedBorder)
                 .padding(LemonadeTheme.spaces.spacing200)
+                .accessibilityIdentifier("appSearch")
 
             Rectangle().fill(LemonadeTheme.colors.border.borderNeutralLow).frame(height: 1)
 
@@ -296,11 +302,13 @@ private struct PackagePicker: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("appRow")
     }
 
     private func load() {
         loading = true
-        Task {
+        // @MainActor so the @State mutations below never happen off the main thread.
+        Task { @MainActor in
             let result = await session.installedApps()
             apps = result
             loaded = true
@@ -309,8 +317,10 @@ private struct PackagePicker: View {
     }
 
     private func select(_ id: String) {
-        onSelect(id)
+        // Dismiss the popover first, then apply the filter on the next runloop —
+        // mutating ancestor state while the popover tears down can crash on macOS.
         show = false
+        DispatchQueue.main.async { onSelect(id) }
     }
 }
 

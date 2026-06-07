@@ -128,6 +128,41 @@ final class AppModelIntegrationTests: XCTestCase {
         model.closeSession(session.id)
     }
 
+    /// Reproduces the exact "select an iOS app in the dropdown" path: list apps,
+    /// then apply one as the package filter (what the picker row click does).
+    func testSelectIOSAppFilterFromDropdownLive() async throws {
+        continueAfterFailure = false
+        try XCTSkipUnless(AppleToolchain.hasFullXcode, "no full Xcode")
+        setenv("SQUEEZE_UITEST", "1", 1)
+        defer { unsetenv("SQUEEZE_UITEST") }
+
+        let model = AppModel()
+        model.startDiscovery()
+        let gotSim = await waitUntil(timeout: 12) {
+            model.devices.contains { $0.platform == .iosSimulator && $0.state.isReady }
+        }
+        try XCTSkipUnless(gotSim, "no booted simulator")
+        let sim = model.devices.first { $0.platform == .iosSimulator && $0.state.isReady }!
+
+        let session = try XCTUnwrap(model.startSession(for: sim))
+        _ = await waitUntil(timeout: 12) { session.totalCount > 0 }
+
+        let apps = await session.installedApps()
+        XCTAssertFalse(apps.isEmpty)
+        let app = apps.first { $0.id == "com.apple.mobilesafari" } ?? apps[0]
+
+        // The dropdown row click does exactly this:
+        session.setPackage(app.id)
+        XCTAssertEqual(session.filter.packageLabel, app.id)
+        XCTAssertEqual(session.filter.processNameQuery, app.id)
+
+        // Selecting "All processes" clears it.
+        session.setPackage("")
+        XCTAssertEqual(session.filter.processNameQuery, "")
+
+        model.closeSession(session.id)
+    }
+
     /// Full network flow: start a network tab (proxy) and capture a real HTTPS
     /// request routed through it with the generated CA trusted.
     func testNetworkCaptureLive() async throws {

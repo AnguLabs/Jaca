@@ -46,6 +46,29 @@ final class SmokeUITests: XCTestCase {
         return expect.waitForExistence(timeout: timeout)
     }
 
+    /// Forces the app window to become key/active. macOS doesn't reliably make a
+    /// test-launched window frontmost, but presenting a sheet does — so we open and
+    /// close Settings, after which content clicks fire normally.
+    private func ensureWindowActive() {
+        app.activate()
+        let settings = app.buttons["settingsButton"]
+        guard settings.waitForExistence(timeout: 6) else { return }
+        settings.click()
+        let done = app.buttons["Done"]
+        if done.waitForExistence(timeout: 4) { done.click() }
+    }
+
+    /// First enabled device row whose label contains `text` (e.g. "iPhone").
+    private func deviceRow(matching text: String, timeout: TimeInterval = 10) -> XCUIElement? {
+        let rows = app.buttons.matching(identifier: "deviceRow")
+        guard rows.firstMatch.waitForExistence(timeout: timeout) else { return nil }
+        for i in 0..<rows.count {
+            let row = rows.element(boundBy: i)
+            if row.isEnabled && row.label.contains(text) { return row }
+        }
+        return nil
+    }
+
     // MARK: - Tests
 
     func testLaunchesAndShowsShell() throws {
@@ -94,6 +117,35 @@ final class SmokeUITests: XCTestCase {
         // Two tabs should now exist (each tab has a close button).
         XCTAssertGreaterThanOrEqual(app.buttons.matching(identifier: "tabClose").count, 2)
         assertAlive("second tab")
+    }
+
+    /// Launch with a session auto-opened for `platform` (bypasses the device-row
+    /// click, which macOS won't deliver to an inactive test window).
+    private func launchWithAutoSession(_ platform: String) {
+        app = XCUIApplication()
+        app.launchEnvironment["SQUEEZE_UITEST"] = "1"
+        app.launchEnvironment["SQUEEZE_AUTO_SESSION"] = platform
+        app.launch()
+        _ = app.windows.firstMatch.waitForExistence(timeout: 15)
+        ensureWindowActive()
+    }
+
+    /// Reproduces the reported crash: open the app/package picker on an iOS-sim
+    /// session and click an app row.
+    func testIOSAppFilterPickerDoesNotCrash() throws {
+        launchWithAutoSession("iosSimulator")
+        try XCTSkipUnless(app.buttons["logTransportButton"].waitForExistence(timeout: 15),
+                          "no iOS sim session (no booted sim?)")
+
+        let picker = app.buttons["packagePicker"]
+        XCTAssertTrue(picker.waitForExistence(timeout: 5), "package picker not found")
+        picker.click()
+        let appRows = app.buttons.matching(identifier: "appRow")
+        XCTAssertTrue(appRows.firstMatch.waitForExistence(timeout: 12), "app list didn't load")
+        let target = appRows.count > 1 ? appRows.element(boundBy: 1) : appRows.firstMatch
+        target.click()                               // <-- the reported crash point
+        Thread.sleep(forTimeInterval: 2)
+        assertAlive("select iOS app in picker")
     }
 
     func testStartNetworkInspection() throws {

@@ -35,6 +35,11 @@ final class AppModel {
     private static let tabsKey = "openTabs"
     /// Clean, isolated state for UI tests (no restore, no persistence pollution).
     private let uiTestMode = ProcessInfo.processInfo.environment["SQUEEZE_UITEST"] == "1"
+    /// UI-test hook: auto-open a session for the first ready device of this
+    /// platform (works around macOS not delivering content clicks to an inactive
+    /// test window). Value is a DevicePlatform rawValue.
+    private let autoSessionPlatform = ProcessInfo.processInfo.environment["SQUEEZE_AUTO_SESSION"]
+        .flatMap { DevicePlatform(rawValue: $0) }
 
     init() {
         history = HistoryStore()
@@ -91,6 +96,11 @@ final class AppModel {
             .sorted { $0.key.rawValue < $1.key.rawValue }
             .flatMap { $0.value }
         restorePendingTabs()
+
+        if let platform = autoSessionPlatform, sessions.isEmpty,
+           let device = devices.first(where: { $0.platform == platform && $0.state.isReady }) {
+            startSession(for: device)
+        }
     }
 
     // MARK: - Tab persistence & restore

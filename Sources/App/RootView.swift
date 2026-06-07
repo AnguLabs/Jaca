@@ -1,5 +1,6 @@
 import SwiftUI
 import Lemonade
+import AppKit
 
 /// Top-level shell: device sidebar on the left, the active session (tab) on the
 /// right with a tab strip above it.
@@ -14,7 +15,14 @@ struct RootView: View {
         } detail: {
             detail
         }
-        .task { model.startDiscovery() }
+        .task {
+            model.startDiscovery()
+            // Bring the window frontmost so it becomes key on launch.
+            DispatchQueue.main.async {
+                NSApp.activate(ignoringOtherApps: true)
+                NSApp.windows.first?.makeKeyAndOrderFront(nil)
+            }
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { model.persistTabs() }
         }
