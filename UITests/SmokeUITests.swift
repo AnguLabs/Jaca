@@ -34,6 +34,18 @@ final class SmokeUITests: XCTestCase {
         return nil
     }
 
+    /// Clicks a control reliably even when the app window starts inactive: the
+    /// first click on an inactive macOS window only activates it, so we activate
+    /// first and re-click if the expected result hasn't appeared.
+    @discardableResult
+    private func robustClickDevice(_ row: XCUIElement, expect: XCUIElement, timeout: TimeInterval = 8) -> Bool {
+        app.activate()
+        row.click()
+        if expect.waitForExistence(timeout: 3) { return true }
+        row.click()                       // window was just activated by the first click
+        return expect.waitForExistence(timeout: timeout)
+    }
+
     // MARK: - Tests
 
     func testLaunchesAndShowsShell() throws {
@@ -65,9 +77,8 @@ final class SmokeUITests: XCTestCase {
 
     func testStartLogcatSession() throws {
         let row = try XCTUnwrap(firstReadyDeviceRow(), "no ready device connected")
-        row.click()
-        let transport = app.buttons["logTransportButton"]
-        XCTAssertTrue(transport.waitForExistence(timeout: 10), "log session didn't open")
+        XCTAssertTrue(robustClickDevice(row, expect: app.buttons["logTransportButton"], timeout: 10),
+                      "log session didn't open")
         // Let it stream — this is where a render/observation crash would surface.
         Thread.sleep(forTimeInterval: 3)
         assertAlive("start logcat + stream")
@@ -75,20 +86,22 @@ final class SmokeUITests: XCTestCase {
 
     func testMultipleLogcatTabs() throws {
         let row = try XCTUnwrap(firstReadyDeviceRow(), "no ready device connected")
-        row.click()
-        XCTAssertTrue(app.buttons["logTransportButton"].waitForExistence(timeout: 10), "first tab didn't open")
+        XCTAssertTrue(robustClickDevice(row, expect: app.buttons["logTransportButton"], timeout: 10),
+                      "first tab didn't open")
         assertAlive("first tab")
         row.click()
         Thread.sleep(forTimeInterval: 2)
-        // Two tabs should now exist.
-        XCTAssertGreaterThanOrEqual(app.buttons.matching(identifier: "tabClose").count, 1)
+        // Two tabs should now exist (each tab has a close button).
+        XCTAssertGreaterThanOrEqual(app.buttons.matching(identifier: "tabClose").count, 2)
         assertAlive("second tab")
     }
 
     func testStartNetworkInspection() throws {
         let row = try XCTUnwrap(firstReadyDeviceRow(), "no ready device connected")
+        app.activate()
         row.rightClick()
         let item = app.menuItems["Inspect Network"]
+        if !item.waitForExistence(timeout: 4) { row.rightClick() }  // re-arm after activation
         XCTAssertTrue(item.waitForExistence(timeout: 6), "context menu didn't show")
         item.click()
         let transport = app.buttons["netTransportButton"]

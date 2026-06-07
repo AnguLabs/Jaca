@@ -130,6 +130,7 @@ struct LogSessionView: View {
         }
         .buttonStyle(.plain)
         .help("Follow tail")
+        .accessibilityIdentifier("followButton")
     }
 
     private var levelChips: some View {
@@ -140,6 +141,7 @@ struct LogSessionView: View {
                     selected: session.filter.minLevel == level,
                     onChipClicked: { session.setMinLevel(level) }
                 )
+                .accessibilityIdentifier("level-\(level.short)")
             }
         }
     }
