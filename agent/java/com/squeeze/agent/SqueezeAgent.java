@@ -29,6 +29,17 @@ public final class SqueezeAgent {
         Thread t = new Thread(() -> serve(socketName), "squeeze-agent");
         t.setDaemon(true);
         t.start();
+        selfTestHook();
+    }
+
+    /** Stage 2 self-test: call a hooked method so onExit fires regardless of app traffic. */
+    private static void selfTestHook() {
+        try {
+            java.net.URLConnection c = new java.net.URL("http://127.0.0.1/").openConnection();
+            Log.i(TAG, "self-test openConnection -> " + c.getClass().getName());
+        } catch (Exception e) {
+            Log.i(TAG, "self-test openConnection threw: " + e);
+        }
     }
 
     private static void serve(String socketName) {

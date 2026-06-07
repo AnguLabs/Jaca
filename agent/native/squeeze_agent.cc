@@ -14,6 +14,8 @@
 #include <string>
 #include <unistd.h>
 
+#include "squeeze_transform.h"
+
 #define LOG_TAG "SqueezeAgent"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
@@ -41,10 +43,13 @@ jint AttachAgent(JavaVM* vm, char* options) {
   }
 
   if (!dexPath.empty()) {
-    jvmtiError err = jvmti->AddToSystemClassLoaderSearch(dexPath.c_str());
-    LOGI("AddToSystemClassLoaderSearch(%s) -> %d", dexPath.c_str(), err);
+    // Bootstrap (not system) so hooks injected into *boot* classes (java.net.URL,
+    // etc.) can resolve com.squeeze.agent.SqueezeHooks — otherwise every caller of
+    // an instrumented boot method throws NoClassDefFoundError.
+    jvmtiError err = jvmti->AddToBootstrapClassLoaderSearch(dexPath.c_str());
+    LOGI("AddToBootstrapClassLoaderSearch(%s) -> %d", dexPath.c_str(), err);
     if (err != JVMTI_ERROR_NONE) {
-      LOGE("Failed to add dex to classpath: %d", err);
+      LOGE("Failed to add dex to bootstrap classpath: %d", err);
       return JNI_OK;
     }
   }
@@ -55,19 +60,23 @@ jint AttachAgent(JavaVM* vm, char* options) {
     return JNI_OK;
   }
 
-  // AddToSystemClassLoaderSearch puts our dex on the *system* class loader, but a
-  // FindClass from an agent (no Java frame) resolves against the bootstrap loader.
-  // So load our class explicitly via ClassLoader.getSystemClassLoader().loadClass().
-  jclass clClass = jni->FindClass("java/lang/ClassLoader");
-  jmethodID getSys = jni->GetStaticMethodID(clClass, "getSystemClassLoader", "()Ljava/lang/ClassLoader;");
-  jmethodID loadClass = jni->GetMethodID(clClass, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
-  jobject sysLoader = jni->CallStaticObjectMethod(clClass, getSys);
-  jstring clsName = jni->NewStringUTF("com.squeeze.agent.SqueezeAgent");
-  jclass cls = reinterpret_cast<jclass>(jni->CallObjectMethod(sysLoader, loadClass, clsName));
-  jni->DeleteLocalRef(clsName);
+  // Set up the bytecode-instrumentation engine and register our hooks BEFORE
+  // invoking the Java entrypoint (which self-tests a hooked method).
+  squeeze::InitTransforms(jvmti);
+  jclass urlClass = jni->FindClass("java/net/URL");  // boot class — findable from agent
+  if (urlClass != nullptr) {
+    squeeze::RegisterExitHook(jvmti, jni, urlClass, "openConnection", "()Ljava/net/URLConnection;");
+  } else {
+    if (jni->ExceptionCheck()) jni->ExceptionClear();
+    LOGE("Could not find java/net/URL");
+  }
+
+  // Our dex is on the bootstrap loader, so FindClass (agent context → bootstrap)
+  // resolves it directly.
+  jclass cls = jni->FindClass("com/squeeze/agent/SqueezeAgent");
   if (cls == nullptr || jni->ExceptionCheck()) {
     if (jni->ExceptionCheck()) { jni->ExceptionDescribe(); jni->ExceptionClear(); }
-    LOGE("Could not load com.squeeze.agent.SqueezeAgent via system class loader");
+    LOGE("Could not load com.squeeze.agent.SqueezeAgent from bootstrap");
     return JNI_OK;
   }
   jmethodID attach = jni->GetStaticMethodID(cls, "attach", "(Ljava/lang/String;)V");
