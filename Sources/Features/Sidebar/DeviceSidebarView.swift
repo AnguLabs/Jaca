@@ -6,6 +6,7 @@ import Lemonade
 struct DeviceSidebarView: View {
     @Bindable var model: AppModel
     @State private var showHistory = false
+    @State private var showSettings = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: LemonadeTheme.spaces.spacing300) {
@@ -20,6 +21,12 @@ struct DeviceSidebarView: View {
                     icon: .clockArrowUp, contentDescription: "History",
                     onClick: { showHistory = true }, size: .small
                 )
+                Button(action: { showSettings = true }) {
+                    Image(systemName: "gearshape")
+                        .foregroundStyle(LemonadeTheme.colors.content.contentSecondary)
+                }
+                .buttonStyle(.plain)
+                .help("Settings")
             }
             .padding(.top, LemonadeTheme.spaces.spacing200)
 
@@ -31,9 +38,18 @@ struct DeviceSidebarView: View {
                 emptyState
             } else {
                 ScrollView {
-                    VStack(spacing: LemonadeTheme.spaces.spacing100) {
-                        ForEach(model.devices) { device in
-                            DeviceRow(device: device) { model.startSession(for: device) }
+                    VStack(alignment: .leading, spacing: LemonadeTheme.spaces.spacing300) {
+                        ForEach(platforms, id: \.self) { platform in
+                            VStack(alignment: .leading, spacing: LemonadeTheme.spaces.spacing100) {
+                                LemonadeUi.Text(
+                                    platform.displayName.uppercased(),
+                                    textStyle: LemonadeTypography.shared.bodyXSmallOverline,
+                                    color: LemonadeTheme.colors.content.contentTertiary
+                                )
+                                ForEach(model.devices.filter { $0.platform == platform }) { device in
+                                    DeviceRow(device: device) { model.startSession(for: device) }
+                                }
+                            }
                         }
                     }
                 }
@@ -46,6 +62,17 @@ struct DeviceSidebarView: View {
         .sheet(isPresented: $showHistory) {
             HistoryView(model: model)
         }
+        .sheet(isPresented: $showSettings) {
+            SettingsView(model: model)
+        }
+    }
+
+    private var platforms: [DevicePlatform] {
+        var seen: [DevicePlatform] = []
+        for device in model.devices where !seen.contains(device.platform) {
+            seen.append(device.platform)
+        }
+        return seen
     }
 
     private var adbMissingNotice: some View {

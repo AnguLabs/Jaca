@@ -136,7 +136,15 @@ final class LogSession: Identifiable {
     func setPackage(_ package: String) {
         mutateFilter {
             $0.packageLabel = package
-            $0.pids = package.isEmpty ? nil : []
+            switch device.platform {
+            case .android:
+                $0.pids = package.isEmpty ? nil : []
+                $0.processNameQuery = ""
+            case .iosSimulator, .iosDevice:
+                // No pidof on iOS — filter by process/subsystem substring instead.
+                $0.processNameQuery = package
+                $0.pids = nil
+            }
         }
         restartPIDPollingIfNeeded()
     }
@@ -188,7 +196,7 @@ final class LogSession: Identifiable {
     /// set live so app restarts keep being captured.
     private func restartPIDPollingIfNeeded() {
         pidTask?.cancel(); pidTask = nil
-        guard isRunning, !filter.packageLabel.isEmpty else { return }
+        guard device.platform == .android, isRunning, !filter.packageLabel.isEmpty else { return }
         let url = adbURL, serial = device.id, package = filter.packageLabel
         pidTask = Task { [weak self] in
             while !Task.isCancelled {

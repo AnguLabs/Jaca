@@ -30,14 +30,35 @@ final class AppModel {
     private var devicesByPlatform: [DevicePlatform: [Device]] = [:]
 
     init() {
-        adbURL = AndroidToolchain.adbURL()
         history = HistoryStore()
-        if let adbURL {
-            providers.append(AndroidDeviceProvider(adbURL: adbURL))
+        if let days = UserDefaults.standard.object(forKey: "retentionDays") as? Int, days > 0 {
+            retention = TimeInterval(days) * 86_400
         }
+        buildProviders()
         let store = history
         let cutoff = Date().addingTimeInterval(-retention)
         Task { await store?.prune(olderThan: cutoff) }
+    }
+
+    private func buildProviders() {
+        adbURL = AndroidToolchain.adbURL(override: UserDefaults.standard.string(forKey: "adbPath"))
+        providers = []
+        if let adbURL {
+            providers.append(AndroidDeviceProvider(adbURL: adbURL))
+        }
+        providers.append(SimulatorDeviceProvider())   // self-guards when no Xcode
+        providers.append(IOSDeviceProvider())          // self-guards when no devicectl
+    }
+
+    /// Re-resolves the toolchain (e.g. after the adb path changes in Settings)
+    /// and restarts discovery.
+    func reloadProviders() {
+        discoveryTasks.forEach { $0.cancel() }
+        discoveryTasks.removeAll()
+        devicesByPlatform.removeAll()
+        devices = []
+        buildProviders()
+        startDiscovery()
     }
 
     // MARK: - Discovery
@@ -67,31 +88,40 @@ final class AppModel {
 
     @discardableResult
     func startSession(for device: Device, filter: LogFilter = LogFilter(), name: String? = nil) -> LogSession? {
+        guard let source = makeLogSource(for: device) else { return nil }
+        let store = history
+        // adbURL is only used by the Android pid/clear helpers; a placeholder is
+        // fine for iOS sessions (they never call those paths).
+        let toolURL = adbURL ?? AppleToolchain.xcrun
+        let session = LogSession(
+            device: device, source: source, adbURL: toolURL,
+            filter: filter, displayName: name,
+            onPersist: { sid, lines in
+                Task { await store?.appendLines(sessionID: sid, lines) }
+            }
+        )
+        sessions.append(session)
+        selectedSessionID = session.id
+        let pkg = filter.packageLabel
+        let displayName = session.displayName
+        let id = session.id
+        Task {
+            await store?.upsertDevice(device)
+            await store?.beginSession(id: id, device: device, package: pkg, displayName: displayName)
+        }
+        session.start()
+        return session
+    }
+
+    private func makeLogSource(for device: Device) -> LogSource? {
         switch device.platform {
         case .android:
             guard let adbURL else { return nil }
-            let source = AndroidLogSource(adbURL: adbURL, serial: device.id)
-            let store = history
-            let session = LogSession(
-                device: device, source: source, adbURL: adbURL,
-                filter: filter, displayName: name,
-                onPersist: { sid, lines in
-                    Task { await store?.appendLines(sessionID: sid, lines) }
-                }
-            )
-            sessions.append(session)
-            selectedSessionID = session.id
-            let pkg = filter.packageLabel
-            let displayName = session.displayName
-            let id = session.id
-            Task {
-                await store?.upsertDevice(device)
-                await store?.beginSession(id: id, device: device, package: pkg, displayName: displayName)
-            }
-            session.start()
-            return session
-        case .iosSimulator, .iosDevice:
-            return nil  // wired in Phase 2
+            return AndroidLogSource(adbURL: adbURL, serial: device.id)
+        case .iosSimulator:
+            return SimulatorLogSource(udid: device.id)
+        case .iosDevice:
+            return IOSDeviceLogSource(udid: device.id)
         }
     }
 

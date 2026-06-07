@@ -7,13 +7,16 @@ struct LogFilter: Sendable, Equatable {
     var query: String = ""              // free-text or regex over tag+message
     var isRegex: Bool = false
     var tagQuery: String = ""           // substring on tag only
-    /// Resolved PIDs for the package filter; `nil` means "all processes".
+    /// Resolved PIDs for the package filter (Android); `nil` means "all".
     var pids: Set<Int32>? = nil
+    /// Process/subsystem substring filter (iOS, where there's no `pidof`).
+    var processNameQuery: String = ""
     /// Human label of the package filter, for the tab subtitle (e.g. "com.foo").
     var packageLabel: String = ""
 
     var isEmpty: Bool {
-        minLevel == .verbose && query.isEmpty && tagQuery.isEmpty && pids == nil
+        minLevel == .verbose && query.isEmpty && tagQuery.isEmpty
+            && pids == nil && processNameQuery.isEmpty
     }
 
     /// Compiles `query` to a regex once (when `isRegex`), so `matches` stays cheap
@@ -28,6 +31,13 @@ struct LogFilter: Sendable, Equatable {
     func matches(_ line: LogLine, regex: NSRegularExpression?) -> Bool {
         if line.level < minLevel { return false }
         if let pids, !pids.contains(line.pid) { return false }
+        if !processNameQuery.isEmpty {
+            let process = line.processName ?? ""
+            if process.range(of: processNameQuery, options: .caseInsensitive) == nil,
+               line.tag.range(of: processNameQuery, options: .caseInsensitive) == nil {
+                return false
+            }
+        }
         if !tagQuery.isEmpty,
            line.tag.range(of: tagQuery, options: .caseInsensitive) == nil {
             return false
