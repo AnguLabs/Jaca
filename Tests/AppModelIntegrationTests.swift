@@ -61,6 +61,51 @@ final class AppModelIntegrationTests: XCTestCase {
         XCTAssertTrue(sessions.contains { $0.id == session.id.uuidString }, "session not persisted to history")
     }
 
+    /// iOS Simulator: stream general logs, then filter to a specific app
+    /// (MobileSafari) and confirm only that app's lines remain.
+    func testSimulatorGeneralAndAppSpecificLogsLive() async throws {
+        continueAfterFailure = false
+        try XCTSkipUnless(AppleToolchain.hasFullXcode, "no full Xcode")
+        setenv("SQUEEZE_UITEST", "1", 1)
+        defer { unsetenv("SQUEEZE_UITEST") }
+
+        let model = AppModel()
+        model.startDiscovery()
+        let gotSim = await waitUntil(timeout: 12) {
+            model.devices.contains { $0.platform == .iosSimulator && $0.state.isReady }
+        }
+        try XCTSkipUnless(gotSim, "no booted simulator")
+        let sim = model.devices.first { $0.platform == .iosSimulator && $0.state.isReady }!
+
+        // Generate app-specific traffic.
+        let bundleID = "com.apple.mobilesafari"
+        _ = try? await CommandRunner.run(AppleToolchain.xcrun, ["simctl", "launch", sim.id, bundleID],
+                                         environment: AppleToolchain.environment())
+        _ = try? await CommandRunner.run(AppleToolchain.xcrun, ["simctl", "openurl", sim.id, "https://example.com"],
+                                         environment: AppleToolchain.environment())
+
+        // 1) General simulator logs stream.
+        let session = try XCTUnwrap(model.startSession(for: sim), "startSession returned nil")
+        let streamed = await waitUntil(timeout: 15) { session.totalCount > 0 }
+        XCTAssertTrue(streamed, "no simulator logs streamed")
+        let processesUnfiltered = Set(session.visible.compactMap { $0.processName })
+        XCTAssertGreaterThan(processesUnfiltered.count, 1, "expected logs from multiple processes")
+
+        // 2) Filter to the specific app and keep it busy.
+        session.setPackage("MobileSafari")
+        _ = try? await CommandRunner.run(AppleToolchain.xcrun, ["simctl", "openurl", sim.id, "https://apple.com"],
+                                         environment: AppleToolchain.environment())
+        let appLines = await waitUntil(timeout: 12) { session.visible.count >= 3 }
+        XCTAssertTrue(appLines, "no MobileSafari-specific lines captured")
+        XCTAssertTrue(session.visible.allSatisfy {
+            ($0.processName ?? "").localizedCaseInsensitiveContains("MobileSafari")
+                || $0.tag.localizedCaseInsensitiveContains("MobileSafari")
+        }, "app filter leaked unrelated processes")
+        XCTAssertEqual(session.filter.packageLabel, "MobileSafari")
+
+        model.closeSession(session.id)
+    }
+
     /// Full network flow: start a network tab (proxy) and capture a real HTTPS
     /// request routed through it with the generated CA trusted.
     func testNetworkCaptureLive() async throws {
