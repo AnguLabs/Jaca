@@ -10,6 +10,8 @@ final class SmokeUITests: XCTestCase {
         app = XCUIApplication()
         app.launchEnvironment["SQUEEZE_UITEST"] = "1"
         app.launch()
+        // Bring it frontmost — guards against "Running Background" activation flakiness.
+        if app.state != .runningForeground { app.activate() }
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 15), "window never appeared")
     }
 
