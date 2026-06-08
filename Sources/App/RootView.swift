@@ -38,17 +38,29 @@ struct RootView: View {
                 Rectangle()
                     .fill(LemonadeTheme.colors.border.borderNeutralLow)
                     .frame(height: 1)
-                if let log = model.selectedSession as? LogSession {
-                    LogSessionView(session: log)
-                        .id(log.id)
-                } else if let net = model.selectedSession as? NetworkSession {
-                    NetworkSessionView(session: net)
-                        .id(net.id)
-                } else {
-                    EmptySessionView()
+                // Keep every tab's view alive and just show the selected one, so
+                // switching tabs preserves scroll position / selection / state instead
+                // of recreating the view (which caused a full redraw + scroll jump).
+                ZStack {
+                    ForEach(model.sessions, id: \.id) { session in
+                        let active = session.id == model.selectedSessionID
+                        sessionView(for: session, isActive: active)
+                            .opacity(active ? 1 : 0)
+                            .allowsHitTesting(active)
+                            .zIndex(active ? 1 : 0)
+                    }
                 }
             }
             .background(LemonadeTheme.colors.background.bgDefault)
+        }
+    }
+
+    @ViewBuilder
+    private func sessionView(for session: any WorkspaceTab, isActive: Bool) -> some View {
+        if let log = session as? LogSession {
+            LogSessionView(session: log, isActive: isActive)
+        } else if let net = session as? NetworkSession {
+            NetworkSessionView(session: net)
         }
     }
 }

@@ -6,6 +6,7 @@ import AppKit
 /// status bar. Filtering, follow-tail, clear and export all act on the session.
 struct LogSessionView: View {
     @Bindable var session: LogSession
+    var isActive: Bool = true
 
     @State private var searchText = ""
     @State private var packageText = ""
@@ -19,7 +20,7 @@ struct LogSessionView: View {
             if showConnectPrompt {
                 connectPrompt
             } else {
-                LogListView(session: session)
+                LogListView(session: session, isActive: isActive)
             }
             border
             StatusBarView(session: session)
@@ -395,6 +396,7 @@ private struct BottomAnchorKey: PreferenceKey {
 /// auto-pauses follow when the user scrolls up (resumes when scrolled back down).
 private struct LogListView: View {
     let session: LogSession
+    var isActive: Bool = true
     private let bottomID = "log-bottom-anchor"
 
     // Multi-row selection (by line seq). Click selects; ⇧-click extends a range;
@@ -459,7 +461,10 @@ private struct LogListView: View {
                         if minY <= viewport + 8, !session.followTail { session.followTail = true }
                     }
                 }
-                .onAppear { installScrollMonitor() }
+                // Only the active tab listens for scroll (kept-alive hidden tabs must
+                // not toggle their follow state from scrolls meant for the visible tab).
+                .onAppear { if isActive { installScrollMonitor() } }
+                .onChange(of: isActive) { _, active in active ? installScrollMonitor() : removeScrollMonitor() }
                 .onDisappear { removeScrollMonitor() }
                 // ⌘C copies the selected messages (only enabled with a selection, so
                 // it doesn't shadow Copy in the search field).
