@@ -47,13 +47,14 @@ struct LogRowView: View {
                         .fill(LogLevelStyle.badgeBackground(for: line.level))
                 )
 
-            if !line.tag.isEmpty {
-                Text(tagLabel)
-                    .foregroundStyle(LemonadeTheme.colors.content.contentSecondary)
-                    .frame(width: 168, alignment: .leading)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
+            // Always reserve the tag column (even when empty) so the message column
+            // stays aligned and doesn't jump between tagged and untagged lines.
+            Text(line.tag.isEmpty ? "" : tagLabel)
+                .foregroundStyle(LemonadeTheme.colors.content.contentSecondary)
+                .frame(width: 168, alignment: .leading)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .help(line.tag)
 
             Text(line.message)
                 .foregroundStyle(LogLevelStyle.color(for: line.level))
