@@ -198,6 +198,7 @@ final class AppModel {
             }
         )
         let id = session.id
+        session.onStateChanged = { [weak self] in self?.persistTabs() }
         // Record history on each (re)start, whether auto-started or started later.
         session.onStarted = { [weak session] in
             guard let session else { return }
@@ -227,6 +228,7 @@ final class AppModel {
             authority = made
         }
         let session = NetworkSession(device: device, ca: authority, adbURL: adbURL, displayName: name)
+        session.onStateChanged = { [weak self] in self?.persistTabs() }
         sessions.append(session)
         selectedSessionID = session.id
         if autoStart { session.start() }

@@ -8,8 +8,12 @@ import Observation
 @Observable
 final class NetworkSession: WorkspaceTab {
     let id = UUID()
-    var displayName: String
+    var displayName: String { didSet { onStateChanged?() } }
     let device: Device
+
+    /// Called when persisted state (target app / name) changes, so the open-tabs
+    /// snapshot is saved immediately rather than only on quit.
+    var onStateChanged: (() -> Void)?
 
     private(set) var isRunning = false
     private(set) var isConnecting = false
@@ -211,6 +215,7 @@ final class NetworkSession: WorkspaceTab {
     func setTarget(_ package: String?) {
         let pkg = (package?.isEmpty ?? true) ? nil : package
         targetPackage = pkg
+        onStateChanged?()   // persist the inspected app immediately
         if isRunning { stop(); start() }
     }
 

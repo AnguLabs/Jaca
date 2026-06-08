@@ -43,8 +43,12 @@ final class SeqCounter: @unchecked Sendable {
 @Observable
 final class LogSession: WorkspaceTab {
     let id = UUID()
-    var displayName: String
+    var displayName: String { didSet { onStateChanged?() } }
     let device: Device
+
+    /// Called when persisted state (filter/package/name) changes, so the open-tabs
+    /// snapshot is saved immediately rather than only on quit.
+    var onStateChanged: (() -> Void)?
 
     private(set) var filter: LogFilter
     private(set) var isRunning = false
@@ -272,6 +276,7 @@ final class LogSession: WorkspaceTab {
         change(&filter)
         compiledRegex = filter.compiledRegex()
         recomputeVisible()
+        onStateChanged?()   // persist filter/package changes right away
     }
 
     /// Re-filters the whole ring off the main thread (it can be 100k lines), then

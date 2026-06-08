@@ -12,6 +12,19 @@ final class LogConnectTests: XCTestCase {
         return cond()
     }
 
+    func testSetPackageTriggersImmediatePersist() {
+        let device = Device(id: "dev", platform: .android, model: "M", state: .connected)
+        let session = LogSession(device: device, makeSource: { nil },
+                                 adbURL: URL(fileURLWithPath: "/usr/bin/true"))
+        var saves = 0
+        session.onStateChanged = { saves += 1 }
+        session.setPackage("com.example.app")
+        XCTAssertGreaterThan(saves, 0, "changing the package must persist immediately")
+        XCTAssertEqual(session.filter.packageLabel, "com.example.app")
+        session.displayName = "Renamed"
+        XCTAssertGreaterThanOrEqual(saves, 2, "rename must persist too")
+    }
+
     func testConnectToMissingDeviceShowsClearError() async throws {
         let adb = try XCTUnwrap(AndroidToolchain.adbURL(), "adb not found")
         let device = Device(id: "no-such-device-zzz", platform: .android, model: "Ghost", state: .connected)
