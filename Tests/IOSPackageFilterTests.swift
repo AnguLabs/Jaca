@@ -31,8 +31,9 @@ final class IOSPackageFilterTests: XCTestCase {
 
         let session = try XCTUnwrap(model.startSession(for: sim))
         session.setPackage(pkg)
+        session.setHideSystemLogs(false)   // this test validates pid filtering, not the system-noise hide
 
-        // The app logs periodically (watchdog/ping); its filtered lines should appear.
+        // The app's process logs continuously (incl. com.apple.network); filtered lines should appear.
         let got = await waitUntil(25) { session.visible.contains { !$0.isMarker } }
         XCTAssertTrue(got, "no logs shown for \(pkg) — the iOS pid filter isn't matching")
         if let line = session.visible.first(where: { !$0.isMarker }) {

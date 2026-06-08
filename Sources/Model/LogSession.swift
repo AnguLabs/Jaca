@@ -251,6 +251,7 @@ final class LogSession: WorkspaceTab {
     func setMinLevel(_ level: LogLevel) { mutateFilter { $0.minLevel = level } }
     func setRegex(_ on: Bool) { mutateFilter { $0.isRegex = on } }
     func setQuery(_ text: String) { mutateFilter { $0.query = text } }
+    func setHideSystemLogs(_ on: Bool) { mutateFilter { $0.hideSystemLogs = on } }
 
     /// Sets the package filter: stores the label and (re)starts PID polling so the
     /// filter survives the app being killed/relaunched (PIDs change).

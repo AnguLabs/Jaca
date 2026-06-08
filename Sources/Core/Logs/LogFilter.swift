@@ -13,6 +13,9 @@ struct LogFilter: Sendable, Equatable {
     var processNameQuery: String = ""
     /// Human label of the package filter, for the tab subtitle (e.g. "com.foo").
     var packageLabel: String = ""
+    /// Hide Apple framework noise (`com.apple.*` subsystems) that runs inside the
+    /// app's process — like Xcode's console. On by default.
+    var hideSystemLogs: Bool = true
 
     var isEmpty: Bool {
         minLevel == .verbose && query.isEmpty && tagQuery.isEmpty
@@ -30,6 +33,7 @@ struct LogFilter: Sendable, Equatable {
     /// `compiledRegex()` to avoid recompiling per line.
     func matches(_ line: LogLine, regex: NSRegularExpression?) -> Bool {
         if line.isMarker { return true }   // Jaca markers are never filtered out
+        if hideSystemLogs, line.tag.hasPrefix("com.apple") { return false }
         if line.level < minLevel { return false }
         if let pids, !pids.contains(line.pid) { return false }
         if !processNameQuery.isEmpty {

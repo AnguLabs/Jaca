@@ -110,6 +110,13 @@ struct LogSessionView: View {
                     selected: session.filter.isRegex,
                     onChipClicked: { session.setRegex(!session.filter.isRegex) }
                 )
+                if session.device.platform != .android {
+                    LemonadeUi.Chip(
+                        label: "System logs",
+                        selected: !session.filter.hideSystemLogs,
+                        onChipClicked: { session.setHideSystemLogs(!session.filter.hideSystemLogs) }
+                    )
+                }
                 searchField
                 HStack(spacing: 2) {
                     packageField
