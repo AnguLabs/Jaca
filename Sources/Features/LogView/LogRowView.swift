@@ -33,7 +33,9 @@ struct LogRowView: View {
 
             Text(line.message)
                 .foregroundStyle(LogLevelStyle.color(for: line.level))
-                .textSelection(.enabled)   // drag within a line to select/copy a word or part
+                // Only the selected row is text-selectable, so a plain click reliably
+                // selects the row first; then you can drag-select a word within it.
+                .textSelectable(isSelected)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -46,5 +48,12 @@ struct LogRowView: View {
 
     private var tagLabel: String {
         line.pid > 0 ? "\(line.tag) (\(line.pid))" : line.tag
+    }
+}
+
+private extension View {
+    /// `.textSelection(.enabled/.disabled)` can't be a ternary (distinct types).
+    @ViewBuilder func textSelectable(_ on: Bool) -> some View {
+        if on { self.textSelection(.enabled) } else { self.textSelection(.disabled) }
     }
 }

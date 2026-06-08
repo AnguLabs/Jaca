@@ -11,10 +11,17 @@ final class LineBuffer: @unchecked Sendable {
         lock.lock(); lines.append(line); lock.unlock()
     }
 
-    func drain() -> [LogLine] {
+    /// Drains up to `max` lines (oldest first), leaving any remainder for the next
+    /// tick so a big burst is spread across flushes instead of one main-thread hit.
+    func drain(max: Int) -> [LogLine] {
         lock.lock(); defer { lock.unlock() }
-        let out = lines
-        lines.removeAll(keepingCapacity: true)
+        if lines.count <= max {
+            let out = lines
+            lines.removeAll(keepingCapacity: true)
+            return out
+        }
+        let out = Array(lines.prefix(max))
+        lines.removeFirst(max)
         return out
     }
 }
@@ -57,7 +64,9 @@ final class LogSession: WorkspaceTab {
 
     private var ring: [LogLine] = []
     private let ringCap = 100_000
+    private let maxPerFlush = 4_000           // bound main-thread work per tick
     private var compiledRegex: NSRegularExpression?
+    private var recomputeToken = 0
 
     private let pending = LineBuffer()
     private var consumeTask: Task<Void, Never>?
@@ -110,13 +119,14 @@ final class LogSession: WorkspaceTab {
         consumeTask?.cancel(); consumeTask = nil
         flushTask?.cancel(); flushTask = nil
         pidTask?.cancel(); pidTask = nil
-        flush()  // drain remaining
+        flush(max: .max)  // drain everything that's left
     }
 
     func toggle() { isRunning ? stop() : start() }
 
     /// Clears the in-app scrollback (does not touch the device buffer).
     func clear() {
+        recomputeToken &+= 1   // invalidate any in-flight background recompute
         ring.removeAll(keepingCapacity: true)
         visible.removeAll(keepingCapacity: true)
         totalCount = 0
@@ -160,8 +170,33 @@ final class LogSession: WorkspaceTab {
         recomputeVisible()
     }
 
+    /// Re-filters the whole ring off the main thread (it can be 100k lines), then
+    /// assigns on main — so changing the level/query/package never freezes the UI.
+    /// A token discards stale results; a catch-up pass re-adds lines that streamed
+    /// in while the background filter ran.
     private func recomputeVisible() {
-        visible = ring.filter { filter.matches($0, regex: compiledRegex) }
+        recomputeToken &+= 1
+        let token = recomputeToken
+        let snapshot = ring
+        let f = filter
+        let lastSeq = snapshot.last?.seq
+        Task.detached(priority: .userInitiated) {
+            let regex = f.compiledRegex()
+            let result = snapshot.filter { f.matches($0, regex: regex) }
+            await MainActor.run { [weak self] in
+                guard let self, token == self.recomputeToken else { return }
+                var out = result
+                if let lastSeq {
+                    for line in self.ring where line.seq > lastSeq
+                        && self.filter.matches(line, regex: self.compiledRegex) {
+                        out.append(line)
+                    }
+                } else {
+                    out = self.ring.filter { self.filter.matches($0, regex: self.compiledRegex) }
+                }
+                self.visible = out
+            }
+        }
     }
 
     // MARK: - Internals
@@ -175,8 +210,8 @@ final class LogSession: WorkspaceTab {
         }
     }
 
-    private func flush() {
-        let batch = pending.drain()
+    private func flush(max: Int = 4_000) {
+        let batch = pending.drain(max: max)
         guard !batch.isEmpty else { return }
         onPersist?(id, batch)
 

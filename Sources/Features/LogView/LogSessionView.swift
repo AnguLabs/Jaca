@@ -342,6 +342,11 @@ private struct LogListView: View {
     @State private var selection: Set<UInt64> = []
     @State private var anchor: UInt64?
 
+    // Only render the most recent slice so the ForEach never diffs 100k rows; the
+    // full buffer is still kept for filtering/selection/export.
+    private let renderCap = 5_000
+    private var displayed: ArraySlice<LogLine> { session.visible.suffix(renderCap) }
+
     private var selectedLines: [LogLine] { session.visible.filter { selection.contains($0.seq) } }
 
     var body: some View {
@@ -349,14 +354,11 @@ private struct LogListView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(session.visible) { line in
+                        ForEach(displayed) { line in
                             LogRowView(line: line, isSelected: selection.contains(line.seq))
                                 .padding(.horizontal, LemonadeTheme.spaces.spacing300)
                                 .contentShape(Rectangle())
-                                // simultaneous so it fires even over the selectable
-                                // message text: a click (incl. ⇧/⌘) selects the row,
-                                // a drag still selects text within the line.
-                                .simultaneousGesture(TapGesture().onEnded { handleClick(line) })
+                                .onTapGesture { handleClick(line) }
                                 .contextMenu { rowMenu(for: line) }
                                 .id(line.seq)
                         }
@@ -405,11 +407,12 @@ private struct LogListView: View {
 
     private func handleClick(_ line: LogLine) {
         let mods = NSEvent.modifierFlags
-        let seqs = session.visible.map(\.seq)
-        if mods.contains(.shift), let anchor,
-           let a = seqs.firstIndex(of: anchor), let b = seqs.firstIndex(of: line.seq) {
-            let range = a <= b ? a...b : b...a
-            selection = Set(seqs[range])
+        if mods.contains(.shift), let anchor {
+            let seqs = session.visible.map(\.seq)   // O(n) — only on ⇧-click
+            if let a = seqs.firstIndex(of: anchor), let b = seqs.firstIndex(of: line.seq) {
+                let range = a <= b ? a...b : b...a
+                selection = Set(seqs[range])
+            }
         } else if mods.contains(.command) {
             if selection.contains(line.seq) { selection.remove(line.seq) } else { selection.insert(line.seq) }
             anchor = line.seq

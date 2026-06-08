@@ -38,16 +38,18 @@ final class AppModelIntegrationTests: XCTestCase {
         XCTAssertTrue(streamed, "expected streamed log lines")
         XCTAssertFalse(session.visible.isEmpty)
 
-        // Level filter narrows the visible set.
+        // Level filter narrows the visible set (applied off-main, so poll for it).
         session.setMinLevel(.error)
-        _ = await waitUntil(timeout: 2) { true }
-        XCTAssertTrue(session.visible.allSatisfy { $0.level >= .error }, "min-level filter not applied")
+        let levelApplied = await waitUntil(timeout: 3) { session.visible.allSatisfy { $0.level >= .error } }
+        XCTAssertTrue(levelApplied, "min-level filter not applied")
 
-        // Reset + text filter (no crash; matches are a subset).
+        // Reset + text filter (no crash; matches are a subset → here, empty).
         session.setMinLevel(.verbose)
         session.setQuery("zzz_nomatch_zzz")
-        _ = await waitUntil(timeout: 1) { true }
-        XCTAssertTrue(session.visible.allSatisfy { $0.message.contains("zzz_nomatch_zzz") || $0.tag.contains("zzz_nomatch_zzz") })
+        let queryApplied = await waitUntil(timeout: 3) {
+            session.visible.allSatisfy { $0.message.contains("zzz_nomatch_zzz") || $0.tag.contains("zzz_nomatch_zzz") }
+        }
+        XCTAssertTrue(queryApplied)
 
         // Clear empties the view.
         session.clear()
