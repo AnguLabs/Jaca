@@ -260,11 +260,13 @@ final class LogSession: WorkspaceTab {
         mutateFilter {
             $0.packageLabel = package
             switch device.platform {
-            case .android:
+            case .android, .iosSimulator:
+                // Both filter by PID — the bundle id never appears as the process name
+                // on iOS, but the unified log carries the process id (resolved below).
                 $0.pids = package.isEmpty ? nil : []
                 $0.processNameQuery = ""
-            case .iosSimulator, .iosDevice:
-                // No pidof on iOS — filter by process/subsystem substring instead.
+            case .iosDevice:
+                // No easy pid map for physical devices — substring on process/subsystem.
                 $0.processNameQuery = package
                 $0.pids = nil
             }
@@ -345,11 +347,20 @@ final class LogSession: WorkspaceTab {
     /// set live so app restarts keep being captured.
     private func restartPIDPollingIfNeeded() {
         pidTask?.cancel(); pidTask = nil
-        guard device.platform == .android, isRunning, !filter.packageLabel.isEmpty else { return }
+        guard isRunning, !filter.packageLabel.isEmpty else { return }
         let url = adbURL, serial = device.id, package = filter.packageLabel
+        let resolve: @Sendable () async -> Set<Int32>
+        switch device.platform {
+        case .android:
+            resolve = { await AndroidLogSource.resolvePIDs(adbURL: url, serial: serial, package: package) }
+        case .iosSimulator:
+            resolve = { await SimulatorLogSource.resolvePIDs(udid: serial, bundleID: package) }
+        case .iosDevice:
+            return   // physical iOS uses substring matching, no pid polling
+        }
         pidTask = Task { [weak self] in
             while !Task.isCancelled {
-                let resolved = await AndroidLogSource.resolvePIDs(adbURL: url, serial: serial, package: package)
+                let resolved = await resolve()
                 guard let self, !Task.isCancelled else { return }
 
                 // Mark death / restart so it's unmissable in the log.
