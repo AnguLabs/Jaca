@@ -16,7 +16,11 @@ struct LogSessionView: View {
         VStack(spacing: 0) {
             toolbar
             border
-            LogListView(session: session)
+            if showConnectPrompt {
+                connectPrompt
+            } else {
+                LogListView(session: session)
+            }
             border
             StatusBarView(session: session)
         }
@@ -26,6 +30,48 @@ struct LogSessionView: View {
             searchText = session.filter.query
             packageText = session.filter.packageLabel
         }
+    }
+
+    /// Restored/stopped tabs come back disconnected; offer an explicit reconnect.
+    private var showConnectPrompt: Bool { !session.isRunning && session.totalCount == 0 }
+
+    private var connectPrompt: some View {
+        VStack(spacing: LemonadeTheme.spaces.spacing300) {
+            Spacer()
+            Image(systemName: "cable.connector.horizontal")
+                .font(.system(size: 40, weight: .regular))
+                .foregroundStyle(LemonadeTheme.colors.content.contentTertiary)
+            VStack(spacing: LemonadeTheme.spaces.spacing100) {
+                LemonadeUi.Text(session.device.displayModel,
+                                textStyle: LemonadeTypography.shared.bodyLargeMedium,
+                                color: LemonadeTheme.colors.content.contentPrimary)
+                LemonadeUi.Text("Disconnected",
+                                textStyle: LemonadeTypography.shared.bodySmallRegular,
+                                color: LemonadeTheme.colors.content.contentTertiary)
+            }
+            if session.isConnecting {
+                HStack(spacing: LemonadeTheme.spaces.spacing200) {
+                    ProgressView().controlSize(.small)
+                    LemonadeUi.Text("Connecting…",
+                                    textStyle: LemonadeTypography.shared.bodySmallRegular,
+                                    color: LemonadeTheme.colors.content.contentSecondary)
+                }
+            } else {
+                LemonadeUi.Button(label: "Try to Connect", onClick: { session.connect() },
+                                  variant: .primary, type: .solid, size: .medium)
+            }
+            if let status = session.statusMessage {
+                LemonadeUi.Text(status,
+                                textStyle: LemonadeTypography.shared.bodySmallRegular,
+                                color: LemonadeTheme.colors.content.contentCritical)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 360)
+            }
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(LemonadeTheme.colors.background.bgDefault)
+        .accessibilityIdentifier("connectPrompt")
     }
 
     private var border: some View {

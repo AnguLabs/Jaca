@@ -39,6 +39,7 @@ final class LogSession: WorkspaceTab {
 
     private(set) var filter: LogFilter
     private(set) var isRunning = false
+    private(set) var isConnecting = false
     private(set) var visible: [LogLine] = []
     private(set) var totalCount = 0
     private(set) var droppedCount = 0
@@ -122,7 +123,61 @@ final class LogSession: WorkspaceTab {
         flush(max: .max)  // drain everything that's left
     }
 
-    func toggle() { isRunning ? stop() : start() }
+    func toggle() { isRunning ? stop() : connect() }
+
+    /// Verifies the device is reachable (and, for Android, that a filtered package
+    /// is installed) before starting the stream, surfacing a clear message if not.
+    /// Used by restored/stopped tabs to (re)connect with feedback.
+    func connect() {
+        guard !isRunning, !isConnecting else { return }
+        isConnecting = true
+        statusMessage = nil
+        Task { @MainActor in
+            let available = await checkDeviceAvailable()
+            guard available else {
+                isConnecting = false
+                statusMessage = deviceUnavailableMessage
+                return
+            }
+            // Soft check: warn (but still connect) if a filtered package is missing.
+            if device.platform == .android, !filter.packageLabel.isEmpty,
+               await !isPackageInstalled(filter.packageLabel) {
+                statusMessage = "App “\(filter.packageLabel)” isn’t installed on \(device.displayModel)."
+            }
+            isConnecting = false
+            start()
+        }
+    }
+
+    private var deviceUnavailableMessage: String {
+        switch device.platform {
+        case .android:
+            return "\(device.displayModel) isn’t connected — plug it in and authorize USB debugging."
+        case .iosSimulator:
+            return "\(device.displayModel) isn’t booted — start the simulator and try again."
+        case .iosDevice:
+            return "\(device.displayModel) isn’t connected — plug it in and trust this Mac."
+        }
+    }
+
+    private func checkDeviceAvailable() async -> Bool {
+        switch device.platform {
+        case .android:
+            let r = try? await CommandRunner.run(adbURL, ["-s", device.id, "get-state"])
+            return r?.exitCode == 0 && (r?.stdout.contains("device") ?? false)
+        case .iosSimulator:
+            let r = try? await CommandRunner.run(adbURL, ["simctl", "list", "devices", "booted"])
+            return r?.stdout.contains(device.id) ?? false
+        case .iosDevice:
+            let r = try? await CommandRunner.run(adbURL, ["devicectl", "list", "devices"])
+            return r?.stdout.contains(device.id) ?? false
+        }
+    }
+
+    private func isPackageInstalled(_ package: String) async -> Bool {
+        let r = try? await CommandRunner.run(adbURL, ["-s", device.id, "shell", "pm", "list", "packages", package])
+        return r?.stdout.contains("package:\(package)") ?? false
+    }
 
     /// Clears the in-app scrollback (does not touch the device buffer).
     func clear() {
