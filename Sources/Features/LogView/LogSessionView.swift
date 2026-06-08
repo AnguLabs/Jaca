@@ -473,12 +473,13 @@ private struct LogListView: View {
                 .onAppear { if isActive { installScrollMonitor() } }
                 .onChange(of: isActive) { _, active in active ? installScrollMonitor() : removeScrollMonitor() }
                 .onDisappear { removeScrollMonitor() }
-                // ⌘C copies the selected messages (only enabled with a selection, so
-                // it doesn't shadow Copy in the search field).
+                // ⌘C copies the selected messages — only when THIS tab is active and
+                // has a selection, so it never hijacks Copy in another inspector/tab
+                // or the search field (tabs are kept alive, so all would register it).
                 .background {
                     Button("") { copy(selectedLines, messagesOnly: true) }
                         .keyboardShortcut("c", modifiers: .command)
-                        .disabled(selection.isEmpty)
+                        .disabled(!isActive || selection.isEmpty)
                         .hidden()
                 }
             }
