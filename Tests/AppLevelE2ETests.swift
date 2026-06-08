@@ -28,6 +28,21 @@ final class AppLevelE2ETests: XCTestCase {
         return s.trimmingCharacters(in: .whitespaces)
     }
 
+    // MARK: - clear() resets the timeline window (no device needed)
+
+    func testClearResetsTimeRange() throws {
+        let ca = try XCTUnwrap(try? CertificateAuthority())
+        let device = Device(id: "test-host", platform: .android, model: "Test", state: .connected)
+        let session = NetworkSession(device: device, ca: ca, adbURL: nil)
+        let now = Date()
+        session.selectedTimeRange = now...now.addingTimeInterval(5)
+        session.selectedID = UUID()
+        session.clear()
+        XCTAssertNil(session.selectedTimeRange, "clear() must reset the timeline selection")
+        XCTAssertNil(session.selectedID)
+        XCTAssertTrue(session.transactions.isEmpty)
+    }
+
     // MARK: - NetworkSession proxy mode (the default for any app)
 
     func testNetworkSessionProxyCaptureAndExportLive() async throws {

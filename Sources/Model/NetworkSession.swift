@@ -158,6 +158,7 @@ final class NetworkSession: WorkspaceTab {
         transactions.removeAll(keepingCapacity: true)
         indexByID.removeAll(keepingCapacity: true)
         selectedID = nil
+        selectedTimeRange = nil   // reset the timeline window too
     }
 
     private func upsert(_ txn: NetworkTransaction) {

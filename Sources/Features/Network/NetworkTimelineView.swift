@@ -92,14 +92,16 @@ struct NetworkTimelineView: View {
     }
 
     private func dragGesture(width: CGFloat, domain: ClosedRange<Date>) -> some Gesture {
-        DragGesture(minimumDistance: 2)
+        // minimumDistance 0 so a plain click (no drag) also reaches onEnded and
+        // clears the current selection.
+        DragGesture(minimumDistance: 0)
             .onChanged { value in
                 if dragStartX == nil { dragStartX = value.startLocation.x }
                 dragCurrentX = value.location.x
             }
             .onEnded { value in
                 defer { dragStartX = nil; dragCurrentX = nil }
-                guard let lo = dragStartX else { return }
+                let lo = dragStartX ?? value.startLocation.x
                 let minX = min(lo, value.location.x), maxX = max(lo, value.location.x)
                 guard maxX - minX > 3 else { session.selectedTimeRange = nil; return }
                 let span = domain.upperBound.timeIntervalSince(domain.lowerBound)
