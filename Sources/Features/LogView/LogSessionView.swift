@@ -415,7 +415,7 @@ private struct LogListView: View {
 
     // Only render the most recent slice so the ForEach never diffs 100k rows; the
     // full buffer is still kept for filtering/selection/export.
-    private let renderCap = 5_000
+    private let renderCap = 2_000
     private var displayed: ArraySlice<LogLine> { session.visible.suffix(renderCap) }
 
     private var selectedLines: [LogLine] { session.visible.filter { selection.contains($0.seq) } }
@@ -434,12 +434,20 @@ private struct LogListView: View {
                                 .id(line.seq)
                         }
                         Color.clear.frame(height: 1).id(bottomID)
-                            .background(GeometryReader { g in
-                                Color.clear.preference(
-                                    key: BottomAnchorKey.self,
-                                    value: g.frame(in: .named("logScroll")).minY
-                                )
-                            })
+                            // The anchor GeometryReader fires a preference every frame —
+                            // only attach it while THIS tab is active AND paused (the only
+                            // time we need to detect a return to the bottom). While
+                            // following (the common case) it costs nothing.
+                            .background {
+                                if isActive && !session.followTail {
+                                    GeometryReader { g in
+                                        Color.clear.preference(
+                                            key: BottomAnchorKey.self,
+                                            value: g.frame(in: .named("logScroll")).minY
+                                        )
+                                    }
+                                }
+                            }
                     }
                     .padding(.vertical, LemonadeTheme.spaces.spacing100)
                 }
@@ -454,7 +462,7 @@ private struct LogListView: View {
                 }
                 .animation(.spring(response: 0.32, dampingFraction: 0.82), value: session.followTail)
                 .onChange(of: session.visible.count) {
-                    if session.followTail { proxy.scrollTo(bottomID, anchor: .bottom) }
+                    if isActive, session.followTail { proxy.scrollTo(bottomID, anchor: .bottom) }
                 }
                 .onChange(of: session.followTail) { _, follow in
                     if follow { proxy.scrollTo(bottomID, anchor: .bottom) }

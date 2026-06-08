@@ -54,7 +54,6 @@ struct LogRowView: View {
                 .frame(width: 168, alignment: .leading)
                 .lineLimit(1)
                 .truncationMode(.tail)
-                .help(line.tag)
 
             Text(line.message)
                 .foregroundStyle(LogLevelStyle.color(for: line.level))
