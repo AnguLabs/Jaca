@@ -182,35 +182,61 @@ private struct JSONNode: View {
 
     var body: some View {
         if value.isContainer {
-            VStack(alignment: .leading, spacing: 1) {
-                Button(action: { expanded.toggle() }) {
-                    HStack(spacing: 4) {
-                        Image(systemName: expanded ? "minus.square" : "plus.square")
-                            .font(.system(size: 10))
-                            .foregroundStyle(LemonadeTheme.colors.content.contentSecondary)
-                        if let key { keyText(key) }
-                        Text(summary)
-                            .font(font)
-                            .foregroundStyle(LemonadeTheme.colors.content.contentTertiary)
-                    }
-                    .contentShape(Rectangle())
+            if value.childCount == 0 {
+                // Empty container: show both brackets inline, no toggle.
+                HStack(spacing: 4) {
+                    placeholderIcon
+                    if let key { keyText(key); colon }
+                    Text(isObject ? "{ }" : "[ ]").font(font)
+                        .foregroundStyle(LemonadeTheme.colors.content.contentTertiary)
                 }
-                .buttonStyle(.plain)
-
-                if expanded {
-                    VStack(alignment: .leading, spacing: 1) {
-                        children
+            } else {
+                VStack(alignment: .leading, spacing: 1) {
+                    Button(action: { expanded.toggle() }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: expanded ? "minus.square" : "plus.square")
+                                .font(.system(size: 10))
+                                .foregroundStyle(LemonadeTheme.colors.content.contentSecondary)
+                            if let key { keyText(key); colon }
+                            Text(expanded ? openBracket : collapsedSummary)
+                                .font(font)
+                                .foregroundStyle(LemonadeTheme.colors.content.contentTertiary)
+                        }
+                        .contentShape(Rectangle())
                     }
-                    .padding(.leading, 16)
+                    .buttonStyle(.plain)
+
+                    if expanded {
+                        VStack(alignment: .leading, spacing: 1) { children }
+                            .padding(.leading, 16)
+                        HStack(spacing: 4) {
+                            placeholderIcon
+                            Text(closeBracket).font(font)
+                                .foregroundStyle(LemonadeTheme.colors.content.contentTertiary)
+                        }
+                    }
                 }
             }
         } else {
             HStack(spacing: 4) {
-                Image(systemName: "minus.square").font(.system(size: 10)).opacity(0)  // align with toggles
-                if let key { keyText(key); Text(":").font(font).foregroundStyle(LemonadeTheme.colors.content.contentTertiary) }
+                placeholderIcon  // align with toggles
+                if let key { keyText(key); colon }
                 scalarText
             }
         }
+    }
+
+    private var isObject: Bool { if case .object = value { return true }; return false }
+    private var openBracket: String { isObject ? "{" : "[" }
+    private var closeBracket: String { isObject ? "}" : "]" }
+    private var collapsedSummary: String {
+        isObject ? "{ … } \(value.childCount)" : "[ … ] \(value.childCount)"
+    }
+    private var placeholderIcon: some View {
+        Image(systemName: "minus.square").font(.system(size: 10)).opacity(0)
+    }
+    private var colon: some View {
+        Text(":").font(font).foregroundStyle(LemonadeTheme.colors.content.contentTertiary)
     }
 
     @ViewBuilder private var children: some View {
@@ -224,14 +250,6 @@ private struct JSONNode: View {
                 JSONNode(key: String(idx), value: item, depth: depth + 1)
             }
         default: EmptyView()
-        }
-    }
-
-    private var summary: String {
-        switch value {
-        case .object: return expanded ? "{" : "{ … } \(value.childCount)"
-        case .array: return expanded ? "[" : "[ … ] \(value.childCount)"
-        default: return ""
         }
     }
 
