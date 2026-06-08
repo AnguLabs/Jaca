@@ -7,9 +7,11 @@ import AppKit
 struct NetworkDetailView: View {
     let transaction: NetworkTransaction?
     @State private var tab: DetailTab = .overview
+    @State private var bodyMode: BodyMode = .tree
 
     enum DetailTab: String, CaseIterable { case overview = "Overview", headers = "Headers",
         request = "Request", response = "Response", timing = "Timing" }
+    enum BodyMode { case tree, raw }
 
     var body: some View {
         if let txn = transaction {
@@ -53,10 +55,10 @@ struct NetworkDetailView: View {
             headerSection("Request Headers", txn.requestHeaders)
             headerSection("Response Headers", txn.responseHeaders)
         case .request:
-            bodyView(NetworkFormatting.bodyText(txn.requestBody,
-                     contentType: txn.requestHeaders.first { $0.name.lowercased() == "content-type" }?.value))
+            bodyView(data: txn.requestBody,
+                     contentType: txn.requestHeaders.first { $0.name.lowercased() == "content-type" }?.value)
         case .response:
-            bodyView(NetworkFormatting.bodyText(txn.responseBody, contentType: txn.responseContentType))
+            bodyView(data: txn.responseBody, contentType: txn.responseContentType)
         case .timing: timing(txn)
         }
     }
@@ -110,9 +112,20 @@ struct NetworkDetailView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func bodyView(_ text: String) -> some View {
+    @ViewBuilder
+    private func bodyView(data: Data?, contentType: String?) -> some View {
+        let text = NetworkFormatting.bodyText(data, contentType: contentType)
+        let json = JSONParse.parse(data)
         VStack(alignment: .leading, spacing: LemonadeTheme.spaces.spacing200) {
             HStack {
+                if json != nil {
+                    LemonadeUi.SegmentedControl(
+                        properties: [.label("Tree"), .label("Raw")],
+                        selectedTab: bodyMode == .tree ? 0 : 1,
+                        size: .small,
+                        onTabSelected: { bodyMode = $0 == 0 ? .tree : .raw }
+                    )
+                }
                 Spacer()
                 LemonadeUi.Button(label: "Copy", onClick: {
                     NSPasteboard.general.clearContents()
@@ -122,6 +135,8 @@ struct NetworkDetailView: View {
             if text.isEmpty {
                 LemonadeUi.Text("No body.", textStyle: LemonadeTypography.shared.bodySmallRegular,
                                 color: LemonadeTheme.colors.content.contentTertiary)
+            } else if let json, bodyMode == .tree {
+                JSONTreeView(value: json)
             } else {
                 Text(text)
                     .font(LogLevelStyle.mono(11))
