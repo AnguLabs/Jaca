@@ -1,6 +1,7 @@
 #include "squeeze_transform.h"
 
 #include <android/log.h>
+#include <atomic>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -44,8 +45,24 @@ class JvmtiAllocator : public dex::Writer::Allocator {
   jvmtiEnv* jvmti_;
 };
 
-void JNICALL OnClassFileLoaded(jvmtiEnv* jvmti, JNIEnv* /*jni*/,
-                               jclass /*class_being_redefined*/, jobject /*loader*/,
+std::atomic<bool> g_appLoaderSet{false};
+
+// The first app class we instrument (e.g. okhttp3.OkHttpClient) is loaded by the
+// app class loader. Stash it in SqueezeHooks so the Kotlin capture can reflectively
+// build an okhttp3.Interceptor against the app's okhttp.
+void MaybeSetAppLoader(JNIEnv* jni, jobject loader) {
+  if (loader == nullptr || g_appLoaderSet.load()) return;
+  jclass hooks = jni->FindClass("com/squeeze/agent/SqueezeHooks");
+  if (hooks == nullptr) { jni->ExceptionClear(); return; }
+  jfieldID fid = jni->GetStaticFieldID(hooks, "appClassLoader", "Ljava/lang/ClassLoader;");
+  if (fid == nullptr) { jni->ExceptionClear(); return; }
+  jni->SetStaticObjectField(hooks, fid, loader);
+  g_appLoaderSet.store(true);
+  LOGI("appClassLoader captured from instrumented app class");
+}
+
+void JNICALL OnClassFileLoaded(jvmtiEnv* jvmti, JNIEnv* jni,
+                               jclass /*class_being_redefined*/, jobject loader,
                                const char* name, jobject /*protection_domain*/,
                                jint class_data_len, const unsigned char* class_data,
                                jint* new_class_data_len, unsigned char** new_class_data) {
@@ -59,6 +76,7 @@ void JNICALL OnClassFileLoaded(jvmtiEnv* jvmti, JNIEnv* /*jni*/,
     if (it == g_transforms.end()) return;
     specs = it->second;
   }
+  MaybeSetAppLoader(jni, loader);  // non-null loader == an app class
 
   dex::Reader reader(class_data, class_data_len);
   auto class_index = reader.FindClassIndex(desc.c_str());
@@ -109,6 +127,18 @@ void InitTransforms(jvmtiEnv* jvmti) {
   jvmti->SetEventCallbacks(&callbacks, sizeof(callbacks));
 }
 
+// Returns true if newly added; false if this (method,signature) was already
+// registered for the class (idempotent across re-attach).
+static bool AddSpec(const std::string& desc, const char* method, const char* signature) {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  auto& specs = g_transforms[desc];
+  for (const auto& s : specs) {
+    if (s.method == method && s.signature == signature) return false;
+  }
+  specs.push_back({method, signature});
+  return true;
+}
+
 bool RegisterExitHook(jvmtiEnv* jvmti, JNIEnv* /*jni*/, jclass clazz,
                       const char* method, const char* signature) {
   char* sig = nullptr;
@@ -119,22 +149,49 @@ bool RegisterExitHook(jvmtiEnv* jvmti, JNIEnv* /*jni*/, jclass clazz,
   const std::string desc(sig);
   jvmti->Deallocate(reinterpret_cast<unsigned char*>(sig));
 
-  {
-    std::lock_guard<std::mutex> lock(g_mutex);
-    auto& specs = g_transforms[desc];
-    for (const auto& s : specs) {
-      if (s.method == method && s.signature == signature) {
-        LOGI("Exit hook already registered for %s.%s%s — skipping", desc.c_str(), method, signature);
-        return true;  // idempotent: avoid double-instrumentation on re-attach
-      }
-    }
-    specs.push_back({method, signature});
+  if (!AddSpec(desc, method, signature)) {
+    LOGI("Exit hook already registered for %s.%s%s — skipping", desc.c_str(), method, signature);
+    return true;
   }
 
   jvmti->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_CLASS_FILE_LOAD_HOOK, nullptr);
   jvmtiError e = jvmti->RetransformClasses(1, &clazz);
   LOGI("RetransformClasses(%s) -> %d", desc.c_str(), e);
   return e == JVMTI_ERROR_NONE;
+}
+
+bool RegisterExitHookByName(jvmtiEnv* jvmti, JNIEnv* jni, const char* classDescriptor,
+                            const char* method, const char* signature) {
+  const std::string desc(classDescriptor);
+  if (!AddSpec(desc, method, signature)) {
+    LOGI("Exit hook already registered for %s.%s%s — skipping", desc.c_str(), method, signature);
+    return true;
+  }
+  jvmti->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_CLASS_FILE_LOAD_HOOK, nullptr);
+
+  // Retransform any already-loaded matching class (app classes can't be FindClass'd
+  // from the agent; GetLoadedClasses sees all loaders). Future loads hit the hook.
+  jint count = 0;
+  jclass* classes = nullptr;
+  if (jvmti->GetLoadedClasses(&count, &classes) == JVMTI_ERROR_NONE && classes != nullptr) {
+    int retransformed = 0;
+    for (jint i = 0; i < count; i++) {
+      char* sig = nullptr;
+      if (jvmti->GetClassSignature(classes[i], &sig, nullptr) == JVMTI_ERROR_NONE && sig != nullptr) {
+        if (desc == sig) {
+          jvmtiError e = jvmti->RetransformClasses(1, &classes[i]);
+          LOGI("RetransformClasses(%s, already-loaded) -> %d", desc.c_str(), e);
+          retransformed++;
+        }
+        jvmti->Deallocate(reinterpret_cast<unsigned char*>(sig));
+      }
+      jni->DeleteLocalRef(classes[i]);
+    }
+    jvmti->Deallocate(reinterpret_cast<unsigned char*>(classes));
+    LOGI("RegisterExitHookByName(%s): %d already-loaded match(es); hook armed for future loads",
+         desc.c_str(), retransformed);
+  }
+  return true;
 }
 
 }  // namespace squeeze

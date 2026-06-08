@@ -73,7 +73,11 @@ mirrors AOSP's App Inspection and is built from open-source pieces:
 3. The hook returns a transparent **wrapper** around the `HttpsURLConnection` that
    tees the request/response streams and records method, URL, headers, bodies,
    timing, and the initiating call stack.
-4. Each transaction is streamed as one JSON line over an adb-forwarded
+4. For OkHttp it also hooks `okhttp3.OkHttpClient.networkInterceptors()` (an app
+   class, found via `GetLoadedClasses`/`RetransformClasses`) and **injects a capture
+   interceptor** — built as a reflective `java.lang.reflect.Proxy` of
+   `okhttp3.Interceptor` so the agent needn't compile against the app's OkHttp.
+5. Each transaction is streamed as one JSON line over an adb-forwarded
    `localabstract` socket back to Squeeze.
 
 There's a classloader subtlety that drove the design. The hook trampoline has to
@@ -169,9 +173,10 @@ Roughly 5.9k lines of Swift and 3.2k of agent code (excluding vendored slicer).
 
 Honest about what each capture mode can and can't do:
 
-- **Agent (in-process):** debuggable apps only; currently hooks
-  `HttpURLConnection`/`HttpsURLConnection` (OkHttp 2/3 and gRPC are on the list).
-  It's the only mode that gives you the request call stack.
+- **Agent (in-process):** debuggable apps only; hooks `HttpURLConnection`/
+  `HttpsURLConnection` **and `okhttp3`** (including ktor-over-OkHttp), which covers
+  the bulk of modern apps. OkHttp2 and gRPC are still on the list. It's the only
+  mode that gives you the request call stack.
 - **Proxy:** works for any app, but the app must trust the installed CA — release
   builds that pin certificates or don't trust user CAs can't be decrypted. No call
   stack (impossible from outside the process).

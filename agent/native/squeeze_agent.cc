@@ -70,6 +70,11 @@ jint AttachAgent(JavaVM* vm, char* options) {
     if (jni->ExceptionCheck()) jni->ExceptionClear();
     LOGE("Could not find java/net/URL");
   }
+  // OkHttp3 lives on the app loader (can't FindClass it from the agent). Hook
+  // networkInterceptors() by name so the capture can inject its interceptor —
+  // this is where the bulk of modern app traffic (incl. ktor-over-OkHttp) flows.
+  squeeze::RegisterExitHookByName(jvmti, jni, "Lokhttp3/OkHttpClient;",
+                                  "networkInterceptors", "()Ljava/util/List;");
 
   // Our dex is on the bootstrap loader, so FindClass (agent context → bootstrap)
   // resolves it directly.

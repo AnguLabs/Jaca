@@ -23,6 +23,10 @@ class SqueezeCapture : SqueezeExitHandler {
             if (returnObject is HttpsURLConnection) {
                 return TrackedHttpsURLConnection(returnObject, SqueezeTracker(returnObject.url.toString()))
             }
+            // okhttp3.OkHttpClient.networkInterceptors() → inject our interceptor
+            if (returnObject is List<*> && methodSignature?.contains("networkInterceptors") == true) {
+                return OkHttpHook.inject(returnObject)
+            }
         } catch (t: Throwable) {
             Log.e(TAG, "onExit wrap error", t)
         }

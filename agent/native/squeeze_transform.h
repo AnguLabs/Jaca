@@ -15,4 +15,11 @@ void InitTransforms(jvmtiEnv* jvmti);
 bool RegisterExitHook(jvmtiEnv* jvmti, JNIEnv* jni, jclass clazz,
                       const char* method, const char* signature);
 
+// Like RegisterExitHook but for a class we can't FindClass (e.g. an app class on
+// the app loader such as okhttp3.OkHttpClient). Registers the transform by
+// descriptor, retransforms any already-loaded matching classes, and relies on the
+// ClassFileLoadHook for future loads. `classDescriptor` is "Lokhttp3/OkHttpClient;".
+bool RegisterExitHookByName(jvmtiEnv* jvmti, JNIEnv* jni, const char* classDescriptor,
+                            const char* method, const char* signature);
+
 }  // namespace squeeze

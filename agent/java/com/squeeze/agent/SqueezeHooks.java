@@ -9,6 +9,10 @@ package com.squeeze.agent;
 public final class SqueezeHooks {
     public static volatile SqueezeExitHandler handler;
 
+    /** Class loader of the first instrumented app class (e.g. okhttp3.OkHttpClient).
+     *  Set from native; used by the capture to build an okhttp3.Interceptor by reflection. */
+    public static volatile ClassLoader appClassLoader;
+
     public static Object onExit(String methodSignature, Object returnObject) {
         SqueezeExitHandler h = handler;
         if (h == null) return returnObject;
