@@ -373,6 +373,19 @@ private struct PackagePicker: View {
 
 // MARK: - Log list
 
+private extension View {
+    /// Liquid Glass capsule on macOS 26+, with a frosted-material fallback.
+    @ViewBuilder func glassCapsule() -> some View {
+        if #available(macOS 26.0, *) {
+            self.glassEffect(.regular.interactive(), in: .capsule)
+        } else {
+            self.background(.ultraThinMaterial, in: Capsule())
+                .overlay(Capsule().strokeBorder(Color.white.opacity(0.18), lineWidth: 1))
+                .shadow(color: .black.opacity(0.28), radius: 12, y: 5)
+        }
+    }
+}
+
 private struct BottomAnchorKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
@@ -388,6 +401,8 @@ private struct LogListView: View {
     // ⌘-click toggles. ⌘C copies the selected messages.
     @State private var selection: Set<UInt64> = []
     @State private var anchor: UInt64?
+    @State private var scrollMonitor: Any?
+    @State private var pausedCount = 0      // visible.count when the user paused follow
 
     // Only render the most recent slice so the ForEach never diffs 100k rows; the
     // full buffer is still kept for filtering/selection/export.
@@ -421,23 +436,31 @@ private struct LogListView: View {
                 }
                 .coordinateSpace(name: "logScroll")
                 .background(LemonadeTheme.colors.background.bgDefault)
+                .overlay(alignment: .bottomTrailing) {
+                    if !session.followTail {
+                        jumpToLatestButton(proxy)
+                            .padding(20)
+                            .transition(.move(edge: .trailing).combined(with: .opacity))
+                    }
+                }
+                .animation(.spring(response: 0.32, dampingFraction: 0.82), value: session.followTail)
                 .onChange(of: session.visible.count) {
                     if session.followTail { proxy.scrollTo(bottomID, anchor: .bottom) }
                 }
-                .onChange(of: session.followTail) {
-                    if session.followTail { proxy.scrollTo(bottomID, anchor: .bottom) }
+                .onChange(of: session.followTail) { _, follow in
+                    if follow { proxy.scrollTo(bottomID, anchor: .bottom) }
+                    else { pausedCount = session.visible.count }
                 }
                 .onPreferenceChange(BottomAnchorKey.self) { minY in
-                    // minY is the bottom anchor's position within the visible area.
+                    // Resume following only when the user returns to the bottom; the
+                    // scroll-wheel monitor handles pausing immediately on scroll-up.
                     let viewport = outer.size.height
                     DispatchQueue.main.async {
-                        if minY > viewport + 80, session.followTail {
-                            session.followTail = false      // user scrolled up
-                        } else if minY <= viewport + 8, !session.followTail {
-                            session.followTail = true       // back at bottom
-                        }
+                        if minY <= viewport + 8, !session.followTail { session.followTail = true }
                     }
                 }
+                .onAppear { installScrollMonitor() }
+                .onDisappear { removeScrollMonitor() }
                 // ⌘C copies the selected messages (only enabled with a selection, so
                 // it doesn't shadow Copy in the search field).
                 .background {
@@ -448,6 +471,46 @@ private struct LogListView: View {
                 }
             }
         }
+    }
+
+    // MARK: - Follow tail
+
+    /// Glassy "jump to latest" pill, shown when the user has scrolled up. Tapping it
+    /// resumes following the live tail.
+    private func jumpToLatestButton(_ proxy: ScrollViewProxy) -> some View {
+        let n = max(0, session.visible.count - pausedCount)
+        return Button {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                session.followTail = true
+                proxy.scrollTo(bottomID, anchor: .bottom)
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.down").font(.system(size: 12, weight: .bold))
+                if n > 0 {
+                    Text(n > 999 ? "999+ new" : "\(n) new").font(.system(size: 12, weight: .semibold))
+                }
+            }
+            .foregroundStyle(LemonadeTheme.colors.content.contentPrimary)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+        }
+        .buttonStyle(.plain)
+        .glassCapsule()
+        .accessibilityIdentifier("jumpToLatest")
+    }
+
+    /// Scrolling up (toward earlier logs) immediately stops auto-follow, so a busy
+    /// stream doesn't yank the view back to the bottom while you're reading.
+    private func installScrollMonitor() {
+        guard scrollMonitor == nil else { return }
+        scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
+            if event.scrollingDeltaY > 0.5, session.followTail { session.followTail = false }
+            return event
+        }
+    }
+    private func removeScrollMonitor() {
+        if let m = scrollMonitor { NSEvent.removeMonitor(m); scrollMonitor = nil }
     }
 
     // MARK: - Selection & copy
