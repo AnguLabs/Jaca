@@ -7,10 +7,12 @@ final class LogClipboardTests: XCTestCase {
                 pid: pid, tid: 0, message: msg, raw: "raw")
     }
 
-    func testMessagesOnlyCopiesPureMessagesOnePerLine() {
-        let lines = [line("Wi-Fi lock acquired"), line("Connection lost"), line("Wi-Fi lock released")]
+    func testMessagesOnlyPrefixesLevelOnePerLine() {
+        let lines = [line("Wi-Fi lock acquired", level: .debug),
+                     line("Connection lost", level: .debug),
+                     line("read-only value.", level: .warn)]
         let text = LogClipboard.text(for: lines, messagesOnly: true)
-        XCTAssertEqual(text, "Wi-Fi lock acquired\nConnection lost\nWi-Fi lock released")
+        XCTAssertEqual(text, "[D] Wi-Fi lock acquired\n[D] Connection lost\n[W] read-only value.")
         XCTAssertFalse(text.contains("Pushy"))      // no tag
         XCTAssertFalse(text.contains("30802"))      // no pid
     }

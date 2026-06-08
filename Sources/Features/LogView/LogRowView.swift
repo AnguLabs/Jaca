@@ -33,6 +33,7 @@ struct LogRowView: View {
 
             Text(line.message)
                 .foregroundStyle(LogLevelStyle.color(for: line.level))
+                .textSelection(.enabled)   // drag within a line to select/copy a word or part
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
         }
