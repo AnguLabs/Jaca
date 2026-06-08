@@ -263,6 +263,25 @@ final class AppModel {
     }
 
     func select(_ id: UUID) { selectedSessionID = id }
+
+    /// Reorders tabs: move the dragged session to the target's position.
+    func moveSession(dragging id: UUID, over targetID: UUID) {
+        guard id != targetID,
+              let from = sessions.firstIndex(where: { $0.id == id }),
+              let to = sessions.firstIndex(where: { $0.id == targetID }) else { return }
+        let item = sessions.remove(at: from)
+        sessions.insert(item, at: to)
+        persistTabs()
+    }
+
+    /// Cycles the selected tab (Shift+Tab), wrapping around.
+    func cycleTab(forward: Bool) {
+        guard !sessions.isEmpty else { return }
+        let ids = sessions.map(\.id)
+        let current = selectedSessionID.flatMap { ids.firstIndex(of: $0) } ?? 0
+        let next = forward ? (current + 1) % ids.count : (current - 1 + ids.count) % ids.count
+        selectedSessionID = ids[next]
+    }
 }
 
 /// Lightweight, Codable snapshot of a tab for session restore.
