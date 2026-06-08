@@ -58,12 +58,18 @@ final class AndroidDeviceProvider: DeviceProvider {
                 var modelCache: [String: String] = [:]
                 while !Task.isCancelled {
                     var devices = await Self.queryDevices(adbURL: adbURL)
-                    // Fill missing model names for ready devices via getprop (cached).
-                    for index in devices.indices where devices[index].model.isEmpty && devices[index].state.isReady {
+                    // Name ready devices: emulators by AVD name (matches the emulator
+                    // window title), physical devices by model. Cached per serial.
+                    for index in devices.indices where devices[index].state.isReady {
                         let serial = devices[index].id
                         if let cached = modelCache[serial] {
                             devices[index].model = cached
-                        } else if let model = await Self.queryModel(adbURL: adbURL, serial: serial) {
+                        } else if serial.hasPrefix("emulator-"),
+                                  let avd = await Self.queryAVDName(adbURL: adbURL, serial: serial) {
+                            modelCache[serial] = avd
+                            devices[index].model = avd
+                        } else if devices[index].model.isEmpty,
+                                  let model = await Self.queryModel(adbURL: adbURL, serial: serial) {
                             modelCache[serial] = model
                             devices[index].model = model
                         }
@@ -91,5 +97,16 @@ final class AndroidDeviceProvider: DeviceProvider {
         ), result.exitCode == 0 else { return nil }
         let model = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         return model.isEmpty ? nil : model
+    }
+
+    /// AVD name of an emulator (e.g. "teya_pixel9_api36"), matching its window title.
+    /// `adb emu avd name` prints "<name>\nOK".
+    static func queryAVDName(adbURL: URL, serial: String) async -> String? {
+        guard let result = try? await CommandRunner.run(adbURL, ["-s", serial, "emu", "avd", "name"]),
+              result.exitCode == 0 else { return nil }
+        return result.stdout
+            .split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty && $0 != "OK" }
     }
 }

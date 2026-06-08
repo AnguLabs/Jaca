@@ -90,3 +90,16 @@ final class LiveAndroidTests: XCTestCase {
         }
     }
 }
+
+extension LiveAndroidTests {
+    func testEmulatorShowsAVDNameNotGenericModel() async throws {
+        let adb = try XCTUnwrap(AndroidToolchain.adbURL(), "adb not found")
+        let devices = try? await CommandRunner.run(adb, ["devices"])
+        try XCTSkipUnless(devices?.stdout.contains("emulator-5554") == true, "no emulator")
+        let name = await AndroidDeviceProvider.queryAVDName(adbURL: adb, serial: "emulator-5554")
+        let n = try XCTUnwrap(name, "no AVD name")
+        XCTAssertFalse(n.isEmpty)
+        XCTAssertNotEqual(n, "OK")
+        XCTAssertFalse(n.lowercased().contains("sdk gphone"), "should be the AVD name, not the generic model")
+    }
+}
