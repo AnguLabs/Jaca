@@ -353,7 +353,10 @@ private struct LogListView: View {
                             LogRowView(line: line, isSelected: selection.contains(line.seq))
                                 .padding(.horizontal, LemonadeTheme.spaces.spacing300)
                                 .contentShape(Rectangle())
-                                .onTapGesture { handleClick(line) }
+                                // simultaneous so it fires even over the selectable
+                                // message text: a click (incl. ⇧/⌘) selects the row,
+                                // a drag still selects text within the line.
+                                .simultaneousGesture(TapGesture().onEnded { handleClick(line) })
                                 .contextMenu { rowMenu(for: line) }
                                 .id(line.seq)
                         }
