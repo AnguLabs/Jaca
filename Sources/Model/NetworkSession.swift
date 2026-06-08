@@ -133,6 +133,27 @@ final class NetworkSession: WorkspaceTab {
 
     func toggle() { isRunning ? stop() : start() }
 
+    var isAndroid: Bool { device.platform == .android }
+
+    /// Apps installed on the device (for the in-process-agent target picker).
+    func installedApps() async -> [AppEntry] {
+        await InstalledApps.list(for: device, adbURL: adbURL)
+    }
+
+    /// Whether `package` is debuggable (so the agent can attach without root).
+    func isDebuggable(_ package: String) async -> Bool {
+        guard let adbURL, device.platform == .android else { return false }
+        return await AgentController.isDebuggable(adbURL: adbURL, serial: device.id, package: package)
+    }
+
+    /// Choose the app to inspect in-process. Empty/nil → whole device (proxy).
+    /// Restarts capture so the mode (agent vs proxy) is re-decided.
+    func setTarget(_ package: String?) {
+        let pkg = (package?.isEmpty ?? true) ? nil : package
+        targetPackage = pkg
+        if isRunning { stop(); start() }
+    }
+
     func clear() {
         transactions.removeAll(keepingCapacity: true)
         indexByID.removeAll(keepingCapacity: true)

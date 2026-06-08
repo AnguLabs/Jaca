@@ -49,10 +49,14 @@ struct NetworkSessionView: View {
                         .fill(LemonadeTheme.colors.background.bgNeutralSubtle))
             }
             .buttonStyle(.plain)
-            .help(session.isRunning ? "Stop proxy" : "Start proxy")
+            .help(session.isRunning ? "Stop capture" : "Start capture")
             .accessibilityIdentifier("netTransportButton")
 
             LemonadeUi.IconButton(icon: .trash, contentDescription: "Clear") { session.clear() }
+
+            if session.isAndroid {
+                NetworkAppPicker(session: session)
+            }
 
             LemonadeUi.SearchField(
                 input: $searchText,
@@ -63,6 +67,8 @@ struct NetworkSessionView: View {
             .frame(maxWidth: 360)
 
             Spacer()
+
+            modeBadge
 
             if let status = session.statusMessage {
                 LemonadeUi.Text(status, textStyle: LemonadeTypography.shared.bodyXSmallRegular,
@@ -75,6 +81,24 @@ struct NetworkSessionView: View {
         .padding(.horizontal, LemonadeTheme.spaces.spacing300)
         .padding(.vertical, LemonadeTheme.spaces.spacing200)
         .background(LemonadeTheme.colors.background.bgElevated)
+    }
+
+    private var modeBadge: some View {
+        let isAgent = session.captureMode == .agent
+        return HStack(spacing: 4) {
+            Circle()
+                .fill(isAgent ? LemonadeTheme.colors.content.contentBrand
+                              : LemonadeTheme.colors.content.contentTertiary)
+                .frame(width: 6, height: 6)
+            Text(isAgent ? "in-process" : "proxy")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(LemonadeTheme.colors.content.contentSecondary)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(Capsule().fill(LemonadeTheme.colors.background.bgNeutralSubtle))
+        .help(isAgent ? "Capturing in-process via the agent (no proxy/CA)"
+                      : "Capturing via the MITM proxy")
     }
 
     private func exportHAR() {
@@ -168,6 +192,134 @@ struct NetworkSessionView: View {
     private func metric(_ text: String) -> some View {
         LemonadeUi.Text(text, textStyle: LemonadeTypography.shared.bodyXSmallRegular,
                         color: LemonadeTheme.colors.content.contentSecondary, maxLines: 1)
+    }
+}
+
+/// Picks the app to inspect in-process. Lists installed apps, tags the debuggable
+/// ones ("agent" — those the in-process capture can attach to), and offers a
+/// "Whole device (proxy)" option to fall back to the MITM proxy.
+private struct NetworkAppPicker: View {
+    let session: NetworkSession
+    @State private var show = false
+    @State private var apps: [AppEntry] = []
+    @State private var debuggable: Set<String> = []
+    @State private var loading = false
+    @State private var loaded = false
+    @State private var query = ""
+
+    var body: some View {
+        Button(action: { show = true; if !loaded { load() } }) {
+            HStack(spacing: 5) {
+                Image(systemName: "ladybug").font(.system(size: 11, weight: .semibold))
+                Text(buttonLabel).font(.system(size: 11, weight: .medium)).lineLimit(1)
+                Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold))
+            }
+            .foregroundStyle(session.targetPackage == nil
+                ? LemonadeTheme.colors.content.contentSecondary
+                : LemonadeTheme.colors.content.contentBrand)
+            .padding(.horizontal, 10).frame(height: 30)
+            .background(RoundedRectangle(cornerRadius: LemonadeTheme.radius.radius150)
+                .fill(LemonadeTheme.colors.background.bgNeutralSubtle))
+        }
+        .buttonStyle(.plain)
+        .help("Choose a debuggable app to inspect in-process (agent), or the whole device (proxy)")
+        .accessibilityIdentifier("netAppPicker")
+        .popover(isPresented: $show, arrowEdge: .bottom) { popover }
+    }
+
+    private var buttonLabel: String {
+        guard let p = session.targetPackage else { return "Inspect app" }
+        return p.components(separatedBy: ".").last ?? p
+    }
+
+    private var sorted: [AppEntry] {
+        let f = query.isEmpty ? apps : apps.filter {
+            $0.id.localizedCaseInsensitiveContains(query) || ($0.name ?? "").localizedCaseInsensitiveContains(query)
+        }
+        return f.sorted { a, b in
+            let da = debuggable.contains(a.id), db = debuggable.contains(b.id)
+            if da != db { return da }                        // debuggable first
+            if a.isUserApp != b.isUserApp { return a.isUserApp }
+            return a.display.localizedCaseInsensitiveCompare(b.display) == .orderedAscending
+        }
+    }
+
+    private var popover: some View {
+        VStack(spacing: 0) {
+            TextField("Search apps…", text: $query)
+                .textFieldStyle(.roundedBorder)
+                .padding(LemonadeTheme.spaces.spacing200)
+                .accessibilityIdentifier("netAppSearch")
+            Rectangle().fill(LemonadeTheme.colors.border.borderNeutralLow).frame(height: 1)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    row(title: "Whole device (proxy)", subtitle: "capture all apps via MITM proxy",
+                        debug: false, selected: session.targetPackage == nil) { select(nil) }
+                    if loading && apps.isEmpty {
+                        ProgressView().padding(LemonadeTheme.spaces.spacing400).frame(maxWidth: .infinity)
+                    }
+                    ForEach(sorted) { app in
+                        row(title: app.display, subtitle: app.name != nil ? app.id : nil,
+                            debug: debuggable.contains(app.id),
+                            selected: session.targetPackage == app.id) { select(app.id) }
+                    }
+                }
+            }
+        }
+        .frame(width: 360, height: 420)
+    }
+
+    private func row(title: String, subtitle: String?, debug: Bool, selected: Bool,
+                     action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: LemonadeTheme.spaces.spacing200) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title).foregroundStyle(LemonadeTheme.colors.content.contentPrimary)
+                        .font(.system(size: 12)).lineLimit(1)
+                    if let subtitle {
+                        Text(subtitle).foregroundStyle(LemonadeTheme.colors.content.contentTertiary)
+                            .font(.system(size: 10, design: .monospaced)).lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 6)
+                if debug {
+                    Text("agent").font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(LemonadeTheme.colors.content.contentBrand)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Capsule().fill(LemonadeTheme.colors.background.bgNeutralSubtle))
+                }
+                if selected {
+                    Image(systemName: "checkmark").font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(LemonadeTheme.colors.content.contentBrand)
+                }
+            }
+            .padding(.horizontal, LemonadeTheme.spaces.spacing300)
+            .padding(.vertical, LemonadeTheme.spaces.spacing100)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("netAppRow")
+    }
+
+    private func load() {
+        loading = true
+        Task { @MainActor in
+            let result = await session.installedApps()
+            apps = result
+            loaded = true
+            loading = false
+            await withTaskGroup(of: (String, Bool).self) { group in
+                for app in result where app.isUserApp {
+                    group.addTask { (app.id, await session.isDebuggable(app.id)) }
+                }
+                for await (id, ok) in group where ok { debuggable.insert(id) }
+            }
+        }
+    }
+
+    private func select(_ id: String?) {
+        show = false
+        DispatchQueue.main.async { session.setTarget(id) }
     }
 }
 

@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0"   stop-color="#FFDE45"/>
+      <stop offset="0.55" stop-color="#FFC01E"/>
+      <stop offset="1"   stop-color="#FB9000"/>
+    </linearGradient>
+    <linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.35"/>
+      <stop offset="0.4" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="leaf" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5BD074"/>
+      <stop offset="1" stop-color="#2BA84A"/>
+    </linearGradient>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="10" stdDeviation="16" flood-color="#7A3D00" flood-opacity="0.28"/>
+    </filter>
+    <radialGradient id="flesh" cx="0.5" cy="0.42" r="0.65">
+      <stop offset="0" stop-color="#FFF7DA"/>
+      <stop offset="1" stop-color="#FFE39A"/>
+    </radialGradient>
+  </defs>
+
+  <!-- squircle -->
+  <rect x="100" y="100" width="824" height="824" rx="185" ry="185" fill="url(#bg)"/>
+  <rect x="100" y="100" width="824" height="824" rx="185" ry="185" fill="url(#gloss)"/>
+
+  <!-- leaf (behind the lemon, peeking top-right) -->
+  <g transform="rotate(-32 512.0 518.0)" filter="url(#soft)">
+    <path d="M 662.0 218.0 C 842.0 218.0 872.0 368.0 762.0 448.0
+             C 662.0 368.0 662.0 288.0 662.0 218.0 Z" fill="url(#leaf)"/>
+    <path d="M 692.0 248.0 C 762.0 308.0 762.0 368.0 757.0 423.0"
+          stroke="#FFFFFF" stroke-opacity="0.45" stroke-width="9" fill="none" stroke-linecap="round"/>
+  </g>
+
+  <!-- cut lemon -->
+  <g filter="url(#soft)">
+    <circle cx="512.0" cy="518.0" r="300" fill="#FFFFFF"/>
+    <circle cx="512.0" cy="518.0" r="268" fill="url(#flesh)"/>
+    <path d="M 512.0 518.0 L 527.3 268.5 A 250.0 250.0 0 0 1 646.3 307.2 Z" fill="#FFFFFF"/>
+<path d="M 512.0 518.0 L 671.0 325.1 A 250.0 250.0 0 0 1 744.6 426.4 Z" fill="#FFFFFF"/>
+<path d="M 512.0 518.0 L 754.0 455.4 A 250.0 250.0 0 0 1 754.0 580.6 Z" fill="#FFFFFF"/>
+<path d="M 512.0 518.0 L 744.6 609.6 A 250.0 250.0 0 0 1 671.0 710.9 Z" fill="#FFFFFF"/>
+<path d="M 512.0 518.0 L 646.3 728.8 A 250.0 250.0 0 0 1 527.3 767.5 Z" fill="#FFFFFF"/>
+<path d="M 512.0 518.0 L 496.7 767.5 A 250.0 250.0 0 0 1 377.7 728.8 Z" fill="#FFFFFF"/>
+<path d="M 512.0 518.0 L 353.0 710.9 A 250.0 250.0 0 0 1 279.4 609.6 Z" fill="#FFFFFF"/>
+<path d="M 512.0 518.0 L 270.0 580.6 A 250.0 250.0 0 0 1 270.0 455.4 Z" fill="#FFFFFF"/>
+<path d="M 512.0 518.0 L 279.4 426.4 A 250.0 250.0 0 0 1 353.0 325.1 Z" fill="#FFFFFF"/>
+<path d="M 512.0 518.0 L 377.7 307.2 A 250.0 250.0 0 0 1 496.7 268.5 Z" fill="#FFFFFF"/>
+    <circle cx="512.0" cy="518.0" r="30" fill="#FFFFFF"/>
+    <circle cx="512.0" cy="518.0" r="268" fill="none" stroke="#FFD66B" stroke-opacity="0.5" stroke-width="3"/>
+  </g>
+
+  <!-- squeeze droplet -->
+  <path d="M 512.0 848.0 C 556.0 910.0 556.0 948.0 512.0 956.0
+           C 468.0 948.0 468.0 910.0 512.0 848.0 Z"
+        fill="#FFFFFF" filter="url(#soft)"/>
+</svg>
