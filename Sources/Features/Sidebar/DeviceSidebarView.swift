@@ -156,6 +156,8 @@ private struct DeviceRow: View {
                         ? LemonadeTheme.colors.interaction.bgSubtleInteractive
                         : .clear)
             )
+            // Whole row is clickable, not just the text/icon.
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(!device.state.isReady)

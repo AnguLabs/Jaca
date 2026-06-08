@@ -69,17 +69,20 @@ struct TabStripView: View {
             .padding(.horizontal, LemonadeTheme.spaces.spacing300)
             .padding(.vertical, LemonadeTheme.spaces.spacing200)
             .background(
-                RoundedRectangle(cornerRadius: LemonadeTheme.radius.radius150)
+                RoundedRectangle(cornerRadius: LemonadeTheme.radius.radius200)
                     .fill(isSelected
-                        ? LemonadeTheme.colors.background.bgDefault
-                        : .clear)
+                        ? LemonadeTheme.colors.content.contentPositive.opacity(0.14)
+                        : LemonadeTheme.colors.background.bgNeutralSubtle)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: LemonadeTheme.radius.radius150)
+                RoundedRectangle(cornerRadius: LemonadeTheme.radius.radius200)
                     .stroke(isSelected
-                        ? LemonadeTheme.colors.border.borderNeutralMedium
-                        : .clear, lineWidth: 1)
+                        ? LemonadeTheme.colors.content.contentPositive
+                        : LemonadeTheme.colors.border.borderNeutralMedium,
+                        lineWidth: isSelected ? 1.5 : 1)
             )
+            // Whole card is clickable, not just the text.
+            .contentShape(RoundedRectangle(cornerRadius: LemonadeTheme.radius.radius200))
         }
         .buttonStyle(.plain)
         .simultaneousGesture(TapGesture(count: 2).onEnded {
