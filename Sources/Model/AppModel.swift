@@ -127,7 +127,8 @@ final class AppModel {
                 let session = startSession(for: device, filter: filter, name: descriptor.displayName, autoStart: false)
                 if !descriptor.packageLabel.isEmpty { session?.setPackage(descriptor.packageLabel) }
             case .network:
-                startNetworkSession(for: device, name: descriptor.displayName, autoStart: false)
+                let session = startNetworkSession(for: device, name: descriptor.displayName, autoStart: false)
+                if !descriptor.packageLabel.isEmpty { session?.targetPackage = descriptor.packageLabel }
             }
         }
         isRestoring = false
@@ -158,7 +159,7 @@ final class AppModel {
         if let net = tab as? NetworkSession {
             return TabDescriptor(kind: .network, platform: net.device.platform, deviceID: net.device.id,
                                  displayName: net.displayName, minLevel: 0, query: "",
-                                 isRegex: false, packageLabel: "")
+                                 isRegex: false, packageLabel: net.targetPackage ?? "")
         }
         return nil
     }

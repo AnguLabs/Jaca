@@ -12,6 +12,7 @@ final class NetworkSession: WorkspaceTab {
     let device: Device
 
     private(set) var isRunning = false
+    private(set) var isConnecting = false
     private(set) var transactions: [NetworkTransaction] = []
     var selectedID: UUID?
     var filterText = ""
@@ -131,7 +132,77 @@ final class NetworkSession: WorkspaceTab {
         }
     }
 
-    func toggle() { isRunning ? stop() : start() }
+    func toggle() { isRunning ? stop() : connect() }
+
+    /// Verifies the device is reachable before capturing, surfacing a clear message
+    /// otherwise. Used by restored/stopped tabs to (re)connect with feedback.
+    func connect() {
+        guard !isRunning, !isConnecting else { return }
+        isConnecting = true
+        statusMessage = nil
+        Task { @MainActor in
+            let available = await checkDeviceAvailable()
+            guard available else {
+                isConnecting = false
+                statusMessage = deviceUnavailableMessage
+                return
+            }
+            // Validate the in-process target app and surface a precise reason.
+            if device.platform == .android, let pkg = targetPackage, !pkg.isEmpty {
+                if await !isPackageInstalled(pkg) {
+                    isConnecting = false
+                    statusMessage = "App “\(pkg)” isn’t installed on \(device.displayModel)."
+                    return
+                }
+                if await isDebuggable(pkg), await !isAppRunning(pkg) {
+                    isConnecting = false
+                    statusMessage = "App “\(pkg)” isn’t running — launch it on the device, then Connect."
+                    return
+                }
+                // installed-but-not-debuggable falls through to proxy (mode badge shows it).
+            }
+            isConnecting = false
+            start()
+        }
+    }
+
+    private func isPackageInstalled(_ package: String) async -> Bool {
+        guard let adbURL else { return false }
+        let r = try? await CommandRunner.run(adbURL, ["-s", device.id, "shell", "pm", "list", "packages", package])
+        return r?.stdout.contains("package:\(package)") ?? false
+    }
+
+    private func isAppRunning(_ package: String) async -> Bool {
+        guard let adbURL else { return false }
+        let r = try? await CommandRunner.run(adbURL, ["-s", device.id, "shell", "pidof", package])
+        return !((r?.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) ?? true)
+    }
+
+    private var deviceUnavailableMessage: String {
+        switch device.platform {
+        case .android:
+            return "\(device.displayModel) isn’t connected — plug it in and authorize USB debugging."
+        case .iosSimulator:
+            return "\(device.displayModel) isn’t booted — start the simulator and try again."
+        case .iosDevice:
+            return "\(device.displayModel) isn’t connected — plug it in and trust this Mac."
+        }
+    }
+
+    private func checkDeviceAvailable() async -> Bool {
+        switch device.platform {
+        case .android:
+            guard let adbURL else { return false }
+            let r = try? await CommandRunner.run(adbURL, ["-s", device.id, "get-state"])
+            return r?.exitCode == 0 && (r?.stdout.contains("device") ?? false)
+        case .iosSimulator:
+            let r = try? await CommandRunner.run(AppleToolchain.xcrun, ["simctl", "list", "devices", "booted"])
+            return r?.stdout.contains(device.id) ?? false
+        case .iosDevice:
+            let r = try? await CommandRunner.run(AppleToolchain.xcrun, ["devicectl", "list", "devices"])
+            return r?.stdout.contains(device.id) ?? false
+        }
+    }
 
     var isAndroid: Bool { device.platform == .android }
 
