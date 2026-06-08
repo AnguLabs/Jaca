@@ -59,6 +59,15 @@ struct LogLine: Identifiable, Sendable, Hashable {
     let message: String
     let raw: String
     var processName: String?
+    /// Synthetic line injected by Jaca (app died/restarted, stream reconnect) —
+    /// rendered distinctively and never hidden by filters.
+    var isMarker: Bool = false
 
     var id: UInt64 { seq }
+
+    /// A synthetic marker line (seq is stamped by the session's monotonic counter).
+    static func marker(_ message: String) -> LogLine {
+        LogLine(seq: 0, timestamp: Date(), level: .info, tag: "", pid: -1, tid: 0,
+                message: message, raw: message, processName: nil, isMarker: true)
+    }
 }

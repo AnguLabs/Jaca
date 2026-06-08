@@ -175,13 +175,23 @@ final class AppModel {
     @discardableResult
     func startSession(for device: Device, filter: LogFilter = LogFilter(),
                       name: String? = nil, autoStart: Bool = true) -> LogSession? {
-        guard let source = makeLogSource(for: device) else { return nil }
+        guard makeLogSource(for: device) != nil else { return nil }   // device has a usable source
         let store = history
         // adbURL is only used by the Android pid/clear helpers; a placeholder is
         // fine for iOS sessions (they never call those paths).
         let toolURL = adbURL ?? AppleToolchain.xcrun
+        // A factory (not a fixed instance) so the session can re-spawn the tool to
+        // auto-reconnect after a device/stream drop.
+        let adb = adbURL
+        let makeSource: @Sendable () -> LogSource? = {
+            switch device.platform {
+            case .android: return adb.map { AndroidLogSource(adbURL: $0, serial: device.id) }
+            case .iosSimulator: return SimulatorLogSource(udid: device.id)
+            case .iosDevice: return IOSDeviceLogSource(udid: device.id)
+            }
+        }
         let session = LogSession(
-            device: device, source: source, adbURL: toolURL,
+            device: device, makeSource: makeSource, adbURL: toolURL,
             filter: filter, displayName: name,
             onPersist: { sid, lines in
                 Task { await store?.appendLines(sessionID: sid, lines) }

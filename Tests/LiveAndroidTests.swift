@@ -38,9 +38,8 @@ final class LiveAndroidTests: XCTestCase {
         let store = try XCTUnwrap(HistoryStore(url: url))
         defer { try? FileManager.default.removeItem(at: url) }
 
-        let source = AndroidLogSource(adbURL: adb, serial: ready.id)
         let session = LogSession(
-            device: ready, source: source, adbURL: adb,
+            device: ready, makeSource: { AndroidLogSource(adbURL: adb, serial: ready.id) }, adbURL: adb,
             onPersist: { sid, lines in Task { await store.appendLines(sessionID: sid, lines) } }
         )
         await store.beginSession(id: session.id, device: ready, package: "", displayName: "live")

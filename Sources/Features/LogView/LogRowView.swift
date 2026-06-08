@@ -7,7 +7,31 @@ struct LogRowView: View {
     let line: LogLine
     var isSelected: Bool = false
 
+    /// A violet not used by any log level, so death/restart/reconnect events pop.
+    private static let markerColor = Color(red: 0.62, green: 0.45, blue: 1.0)
+
     var body: some View {
+        if line.isMarker {
+            markerRow
+        } else {
+            logRow
+        }
+    }
+
+    /// Section-divider style with padding above/below, so the event is unmissable.
+    private var markerRow: some View {
+        HStack(spacing: 10) {
+            Rectangle().fill(Self.markerColor.opacity(0.45)).frame(height: 1)
+            Text(line.message)
+                .font(LogLevelStyle.mono(11).weight(.semibold))
+                .foregroundStyle(Self.markerColor)
+                .fixedSize()
+            Rectangle().fill(Self.markerColor.opacity(0.45)).frame(height: 1)
+        }
+        .padding(.vertical, 12)
+    }
+
+    private var logRow: some View {
         HStack(alignment: .top, spacing: LemonadeTheme.spaces.spacing200) {
             Text(line.timestamp.logClock)
                 .foregroundStyle(LemonadeTheme.colors.content.contentTertiary)

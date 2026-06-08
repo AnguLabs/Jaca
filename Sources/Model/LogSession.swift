@@ -26,6 +26,15 @@ final class LineBuffer: @unchecked Sendable {
     }
 }
 
+/// Monotonic, thread-safe id source. The session stamps every line (and marker)
+/// with it so ids stay unique + ordered across stream reconnects (each `LogSource`
+/// restart would otherwise reset its own seq to 0).
+final class SeqCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: UInt64 = 0
+    func next() -> UInt64 { lock.lock(); defer { lock.unlock() }; let v = value; value &+= 1; return v }
+}
+
 /// One tab: a single running (or stopped) log stream bound to a device + filter,
 /// with an editable display name. Incoming lines accumulate off-main and are
 /// coalesced into the observed `visible` slice on a ~30ms timer to stay smooth
@@ -59,15 +68,24 @@ final class LogSession: WorkspaceTab {
         return parts.joined(separator: " · ")
     }
 
-    private let source: LogSource
+    private let makeSource: @Sendable () -> LogSource?
+    private var source: LogSource?
+    private let seq = SeqCounter()
     let adbURL: URL
     private let onPersist: (@Sendable (UUID, [LogLine]) -> Void)?
+
+    // Package liveness, for death/restart markers.
+    private var appWasAlive = false
+    private var sawAppAlive = false
 
     private var ring: [LogLine] = []
     private let ringCap = 100_000
     private let maxPerFlush = 4_000           // bound main-thread work per tick
     private var compiledRegex: NSRegularExpression?
     private var recomputeToken = 0
+    /// Every PID the filtered package has had this session. We accumulate and never
+    /// clear it, so a crashing/relaunching app keeps showing its logs (incl. the crash).
+    private var accumulatedPids: Set<Int32> = []
 
     private let pending = LineBuffer()
     private var consumeTask: Task<Void, Never>?
@@ -76,14 +94,14 @@ final class LogSession: WorkspaceTab {
 
     init(
         device: Device,
-        source: LogSource,
+        makeSource: @escaping @Sendable () -> LogSource?,
         adbURL: URL,
         filter: LogFilter = LogFilter(),
         displayName: String? = nil,
         onPersist: (@Sendable (UUID, [LogLine]) -> Void)? = nil
     ) {
         self.device = device
-        self.source = source
+        self.makeSource = makeSource
         self.adbURL = adbURL
         self.filter = filter
         self.onPersist = onPersist
@@ -95,28 +113,57 @@ final class LogSession: WorkspaceTab {
 
     func start() {
         guard !isRunning else { return }
-        do {
-            let stream = try source.start()
-            isRunning = true
-            statusMessage = nil
-            onStarted?()
-            let buffer = pending
-            consumeTask = Task.detached(priority: .utility) {
-                for await line in stream {
-                    buffer.append(line)
-                }
-            }
-            startFlushLoop()
-            restartPIDPollingIfNeeded()
-        } catch {
-            statusMessage = error.localizedDescription
+        isRunning = true
+        statusMessage = nil
+        onStarted?()
+        startFlushLoop()
+        restartPIDPollingIfNeeded()
+        consumeTask = Task.detached(priority: .utility) { [weak self] in
+            await self?.consumeLoop()
         }
+    }
+
+    /// Connects the source and streams; if the stream ends while we're still running
+    /// (device unplugged, adb restarted, …) it injects a reconnect marker and retries
+    /// forever — automatic reconnection. Every line is re-stamped with our monotonic
+    /// seq so ids stay unique across reconnects.
+    private func consumeLoop() async {
+        let buffer = pending, counter = seq
+        var disconnected = false
+        while await isRunning, !Task.isCancelled {
+            guard let stream = await openStream() else {   // couldn't spawn the tool
+                if !disconnected { injectMarker("✕ can’t reach \(device.displayModel) — retrying…"); disconnected = true }
+                try? await Task.sleep(for: .seconds(2)); continue
+            }
+            if disconnected { injectMarker("✓ \(device.displayModel) reconnected"); disconnected = false }
+            for await line in stream {
+                var l = line; l.seq = counter.next(); buffer.append(l)
+            }
+            // stream ended
+            guard await isRunning, !Task.isCancelled else { break }
+            injectMarker("✕ log stream to \(device.displayModel) lost — reconnecting…")
+            disconnected = true
+            try? await Task.sleep(for: .seconds(1))
+        }
+    }
+
+    private func openStream() -> AsyncStream<LogLine>? {
+        let s = makeSource()
+        source = s
+        return try? s?.start()
+    }
+
+    /// Injects a synthetic, always-visible marker line (thread-safe; callable off-main).
+    nonisolated func injectMarker(_ message: String) {
+        var m = LogLine.marker(message)
+        m.seq = seq.next()
+        pending.append(m)
     }
 
     func stop() {
         guard isRunning else { return }
         isRunning = false
-        source.stop()
+        source?.stop(); source = nil
         consumeTask?.cancel(); consumeTask = nil
         flushTask?.cancel(); flushTask = nil
         pidTask?.cancel(); pidTask = nil
@@ -204,6 +251,8 @@ final class LogSession: WorkspaceTab {
     /// Sets the package filter: stores the label and (re)starts PID polling so the
     /// filter survives the app being killed/relaunched (PIDs change).
     func setPackage(_ package: String) {
+        accumulatedPids.removeAll()   // new target → forget the previous app's PIDs
+        appWasAlive = false; sawAppAlive = false
         mutateFilter {
             $0.packageLabel = package
             switch device.platform {
@@ -295,15 +344,40 @@ final class LogSession: WorkspaceTab {
         let url = adbURL, serial = device.id, package = filter.packageLabel
         pidTask = Task { [weak self] in
             while !Task.isCancelled {
-                let pids = await AndroidLogSource.resolvePIDs(adbURL: url, serial: serial, package: package)
+                let resolved = await AndroidLogSource.resolvePIDs(adbURL: url, serial: serial, package: package)
                 guard let self, !Task.isCancelled else { return }
-                if self.filter.pids != pids {
-                    self.filter.pids = pids
+
+                // Mark death / restart so it's unmissable in the log.
+                let isAlive = !resolved.isEmpty
+                if isAlive {
+                    if !self.appWasAlive && self.sawAppAlive {
+                        let pids = resolved.sorted().map(String.init).joined(separator: ", ")
+                        self.injectMarker("▶︎ \(package) restarted — pid \(pids)")
+                    }
+                    self.sawAppAlive = true
+                } else if self.appWasAlive {
+                    self.injectMarker("■ \(package) terminated")
+                }
+                self.appWasAlive = isAlive
+
+                // Accumulate; never clear. If the app is dead (resolved empty) we keep
+                // the known PIDs so its logs stay visible. New PIDs (relaunch) are added.
+                let next = Self.accumulatePIDs(self.accumulatedPids, with: resolved)
+                if next != self.accumulatedPids {
+                    self.accumulatedPids = next
+                    self.filter.pids = next
                     self.recomputeVisible()
                 }
                 try? await Task.sleep(for: .milliseconds(1500))
             }
         }
+    }
+
+    /// Accumulates an app's PIDs across restarts. An empty `resolved` (the app died /
+    /// is being reinstalled) keeps the current set, so its logs are never hidden; new
+    /// PIDs from a relaunch/reinstall are added.
+    nonisolated static func accumulatePIDs(_ current: Set<Int32>, with resolved: Set<Int32>) -> Set<Int32> {
+        resolved.isEmpty ? current : current.union(resolved)
     }
 
     /// Installed apps/packages on this device, for the filter dropdown.

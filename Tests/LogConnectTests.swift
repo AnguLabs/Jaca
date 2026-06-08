@@ -15,8 +15,9 @@ final class LogConnectTests: XCTestCase {
     func testConnectToMissingDeviceShowsClearError() async throws {
         let adb = try XCTUnwrap(AndroidToolchain.adbURL(), "adb not found")
         let device = Device(id: "no-such-device-zzz", platform: .android, model: "Ghost", state: .connected)
-        let source = AndroidLogSource(adbURL: adb, serial: device.id)
-        let session = LogSession(device: device, source: source, adbURL: adb)
+        let session = LogSession(device: device,
+                                 makeSource: { AndroidLogSource(adbURL: adb, serial: device.id) },
+                                 adbURL: adb)
 
         session.connect()
         let settled = await waitUntil(5) { !session.isConnecting }

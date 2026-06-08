@@ -29,6 +29,7 @@ struct LogFilter: Sendable, Equatable {
     /// Whether `line` passes the filter. Pass the precompiled `regex` from
     /// `compiledRegex()` to avoid recompiling per line.
     func matches(_ line: LogLine, regex: NSRegularExpression?) -> Bool {
+        if line.isMarker { return true }   // Jaca markers are never filtered out
         if line.level < minLevel { return false }
         if let pids, !pids.contains(line.pid) { return false }
         if !processNameQuery.isEmpty {
