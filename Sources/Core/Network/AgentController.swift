@@ -87,78 +87,107 @@ final class AgentController: @unchecked Sendable {
     }
 
     func start() {
-        Task { await setup() }
+        stopped = false
+        Task { await run() }
     }
+
+    private var tmpDir: String { "/data/local/tmp/squeeze" }
+    private var codeCache: String { "/data/data/\(package)/code_cache" }
 
     private func adb(_ args: [String]) async -> CommandRunner.Result? {
         try? await CommandRunner.run(adbURL, ["-s", serial] + args)
     }
 
-    private func setup() async {
-        let cc = "/data/data/\(package)/code_cache"
-        let tmp = "/data/local/tmp/squeeze"
+    /// Pushes artifacts + sets up the forward once, starts the auto-reconnecting
+    /// reader, then supervises the app's pid: re-attaches whenever the app restarts
+    /// (a reinstall kills the old process and launches a new one with a new pid).
+    private func run() async {
+        await pushArtifacts()
+        guard await setupForward() else { onStatus("agent: adb forward failed"); return }
+        startReaderLoop()
 
-        guard let pidOut = await adb(["shell", "pidof", package]) else {
-            onStatus("agent: app not running"); return
+        var lastPid: String?
+        var announcedWaiting = false
+        while !stopped {
+            if let pid = await currentPid() {
+                if pid != lastPid {                       // app (re)started → (re)attach
+                    lastPid = pid
+                    announcedWaiting = false
+                    await attachTo(pid: pid)
+                }
+            } else {
+                lastPid = nil
+                if !announcedWaiting {
+                    onStatus("agent: waiting for \(package) to start…")
+                    announcedWaiting = true
+                }
+            }
+            try? await Task.sleep(for: .seconds(2))
         }
-        // pidof returns "1234 5678\n" — take the first, fully trimmed (a stray
-        // newline here would corrupt the attach-agent command).
-        let pid = pidOut.stdout
+    }
+
+    private func pushArtifacts() async {
+        _ = await adb(["shell", "mkdir", "-p", tmpDir])
+        _ = await adb(["push", soPath.path, "\(tmpDir)/libsqueezeagent.so"])
+        _ = await adb(["push", bootDexPath.path, "\(tmpDir)/squeezeagent-boot.dex"])
+        _ = await adb(["push", captureDexPath.path, "\(tmpDir)/squeezeagent-capture.dex"])
+    }
+
+    private func currentPid() async -> String? {
+        guard let out = await adb(["shell", "pidof", package]) else { return nil }
+        // pidof returns "1234 5678\n" — first, fully trimmed (a stray newline would
+        // corrupt the attach-agent command).
+        let pid = out.stdout
             .split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\r" })
             .first.map(String.init) ?? ""
-        guard !pid.isEmpty else { onStatus("agent: app not running"); return }
+        return pid.isEmpty ? nil : pid
+    }
 
-        _ = await adb(["shell", "mkdir", "-p", tmp])
-        _ = await adb(["push", soPath.path, "\(tmp)/libsqueezeagent.so"])
-        _ = await adb(["push", bootDexPath.path, "\(tmp)/squeezeagent-boot.dex"])
-        _ = await adb(["push", captureDexPath.path, "\(tmp)/squeezeagent-capture.dex"])
-        // Copy into the app's code_cache (SELinux: app can exec from there) via run-as.
+    /// Copies artifacts into the (possibly fresh) app's code_cache and attaches the
+    /// agent. Called once per new process — a clean reinstall wipes code_cache, so we
+    /// re-copy every time rather than assuming it survives.
+    private func attachTo(pid: String) async {
+        let cc = codeCache
         _ = await adb(["shell", "run-as", package, "rm", "-rf",
                        "code_cache/libsqueezeagent.so", "code_cache/squeezeagent-boot.dex",
                        "code_cache/squeezeagent-capture.dex", "code_cache/squeeze_opt"])
         for file in ["libsqueezeagent.so", "squeezeagent-boot.dex", "squeezeagent-capture.dex"] {
-            _ = await adb(["shell", "run-as \(package) sh -c 'cat > \(cc)/\(file)' < \(tmp)/\(file)"])
+            _ = await adb(["shell", "run-as \(package) sh -c 'cat > \(cc)/\(file)' < \(tmpDir)/\(file)"])
         }
         _ = await adb(["shell", "run-as", package, "chmod", "444",
                        "code_cache/squeezeagent-boot.dex", "code_cache/squeezeagent-capture.dex"])  // ART rejects writable dex
-
         let spec = "\(cc)/libsqueezeagent.so=\(cc)/squeezeagent-boot.dex,\(cc)/squeezeagent-capture.dex,\(socketName)"
         _ = await adb(["shell", "cmd activity attach-agent \(pid) '\(spec)'"])
-
-        guard let fwd = await adb(["forward", "tcp:0", "localabstract:\(socketName)"]),
-              let port = Int32(fwd.stdout.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-            onStatus("agent: adb forward failed"); return
-        }
-        forwardedPort = port
-        onStatus("agent: in-process (debuggable)")
-        startReader(port: port)
+        onStatus("agent: in-process (attached pid \(pid))")
     }
 
-    private func startReader(port: Int32) {
-        let thread = Thread { [weak self] in self?.readLoop(port: port) }
+    private func setupForward() async -> Bool {
+        guard let fwd = await adb(["forward", "tcp:0", "localabstract:\(socketName)"]),
+              let port = Int32(fwd.stdout.trimmingCharacters(in: .whitespacesAndNewlines)) else { return false }
+        forwardedPort = port
+        return true
+    }
+
+    private func startReaderLoop() {
+        let thread = Thread { [weak self] in self?.readerLoop() }
         thread.name = "squeeze-agent-reader"
         readerThread = thread
         thread.start()
     }
 
-    private func readLoop(port: Int32) {
-        // `connect()` to adb's forward always succeeds, but adb closes the stream if
-        // the device-side localabstract server isn't accepting yet (a race right
-        // after attach). So retry the whole connect+read until we actually receive
-        // bytes (the agent's hello), then stream for real.
-        var attempts = 0
-        while !stopped && attempts < 40 {
-            attempts += 1
-            let s = connect(port: port)
-            if s < 0 { Thread.sleep(forTimeInterval: 0.25); continue }
+    /// Connects to the forwarded socket and streams; on disconnect (process died or
+    /// not yet attached) it retries forever until stopped, so a re-attached app's
+    /// fresh agent is picked up automatically.
+    private func readerLoop() {
+        while !stopped {
+            let s = connect(port: forwardedPort)
+            if s < 0 { Thread.sleep(forTimeInterval: 0.3); continue }
             fd = s
-            onStatus("agent: connected :\(port)")
-            let receivedAny = streamFrom(fd: s)
+            _ = streamFrom(fd: s)
             if fd >= 0 { close(fd); fd = -1 }
-            if receivedAny || stopped { return }
-            Thread.sleep(forTimeInterval: 0.25)  // closed before any data — retry
+            if stopped { return }
+            Thread.sleep(forTimeInterval: 0.3)   // socket closed → retry / await re-attach
         }
-        onStatus("agent: could not connect to socket :\(port)")
     }
 
     /// Reads newline-delimited JSON from `s`. Returns true if any bytes arrived.

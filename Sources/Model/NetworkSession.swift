@@ -147,19 +147,14 @@ final class NetworkSession: WorkspaceTab {
                 statusMessage = deviceUnavailableMessage
                 return
             }
-            // Validate the in-process target app and surface a precise reason.
-            if device.platform == .android, let pkg = targetPackage, !pkg.isEmpty {
-                if await !isPackageInstalled(pkg) {
-                    isConnecting = false
-                    statusMessage = "App “\(pkg)” isn’t installed on \(device.displayModel)."
-                    return
-                }
-                if await isDebuggable(pkg), await !isAppRunning(pkg) {
-                    isConnecting = false
-                    statusMessage = "App “\(pkg)” isn’t running — launch it on the device, then Connect."
-                    return
-                }
-                // installed-but-not-debuggable falls through to proxy (mode badge shows it).
+            // Validate the in-process target app. We DON'T block on "not running" —
+            // the agent supervisor waits for the app and re-attaches on each restart
+            // (so it survives reinstalls). Only a genuinely-absent app is an error.
+            if device.platform == .android, let pkg = targetPackage, !pkg.isEmpty,
+               await !isPackageInstalled(pkg) {
+                isConnecting = false
+                statusMessage = "App “\(pkg)” isn’t installed on \(device.displayModel)."
+                return
             }
             isConnecting = false
             start()
@@ -170,12 +165,6 @@ final class NetworkSession: WorkspaceTab {
         guard let adbURL else { return false }
         let r = try? await CommandRunner.run(adbURL, ["-s", device.id, "shell", "pm", "list", "packages", package])
         return r?.stdout.contains("package:\(package)") ?? false
-    }
-
-    private func isAppRunning(_ package: String) async -> Bool {
-        guard let adbURL else { return false }
-        let r = try? await CommandRunner.run(adbURL, ["-s", device.id, "shell", "pidof", package])
-        return !((r?.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) ?? true)
     }
 
     private var deviceUnavailableMessage: String {

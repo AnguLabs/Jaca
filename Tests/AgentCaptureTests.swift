@@ -90,4 +90,61 @@ final class LiveAgentCaptureTests: XCTestCase {
             XCTAssertNotNil(t.callStack, "agent transactions should carry a call stack")
         }
     }
+
+    private func waitUntil(_ timeout: TimeInterval, _ cond: () -> Bool) async -> Bool {
+        let start = Date()
+        while Date().timeIntervalSince(start) < timeout {
+            if cond() { return true }
+            try? await Task.sleep(for: .milliseconds(300))
+        }
+        return cond()
+    }
+
+    /// The agent must survive the app restarting with a new pid (as a reinstall does):
+    /// the supervisor re-attaches automatically and keeps capturing.
+    func testAgentReattachesAfterAppRestart() async throws {
+        let adb = try XCTUnwrap(AndroidToolchain.adbURL(), "adb not found")
+        let serial = "emulator-5554", pkg = "com.teya.ac.dev"
+        let devices = try? await CommandRunner.run(adb, ["devices"])
+        try XCTSkipUnless(devices?.stdout.contains(serial) == true, "no emulator")
+        try XCTSkipUnless(AgentArtifacts.isAvailable, "agent artifacts not built")
+        let debuggable = await AgentController.isDebuggable(adbURL: adb, serial: serial, package: pkg)
+        try XCTSkipUnless(debuggable, "test app not present/debuggable")
+
+        func launch() async {
+            _ = try? await CommandRunner.run(adb, ["-s", serial, "shell", "am", "force-stop", pkg])
+            _ = try? await CommandRunner.run(adb, ["-s", serial, "shell", "am", "start", "-n", "\(pkg)/com.teya.ac.TeyaActivity"])
+        }
+        func pidOf() async -> String {
+            ((try? await CommandRunner.run(adb, ["-s", serial, "shell", "pidof", pkg]))?.stdout ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        await launch()
+        var pid1 = await pidOf()
+        for _ in 0..<10 where pid1.isEmpty { try await Task.sleep(for: .seconds(1)); pid1 = await pidOf() }
+        try XCTSkipUnless(!pid1.isEmpty, "could not launch \(pkg)")
+
+        let box = TxnBox()
+        let controller = AgentController(
+            adbURL: adb, serial: serial, package: pkg,
+            soPath: AgentArtifacts.soURL()!, bootDexPath: AgentArtifacts.bootDexURL!,
+            captureDexPath: AgentArtifacts.captureDexURL!,
+            onTransaction: { box.add($0) }, onStatus: { _ in })
+        controller.start()
+
+        let first = await waitUntil(30) { box.count > 0 }
+        XCTAssertTrue(first, "no capture from the first process")
+        let beforeRestart = box.count
+
+        // Simulate a reinstall: kill + relaunch → new pid.
+        await launch()
+        var pid2 = await pidOf()
+        for _ in 0..<12 where pid2.isEmpty || pid2 == pid1 { try await Task.sleep(for: .seconds(1)); pid2 = await pidOf() }
+        XCTAssertNotEqual(pid2, pid1, "expected a new pid after restart")
+
+        let reattached = await waitUntil(45) { box.count > beforeRestart }
+        controller.stop()
+        XCTAssertTrue(reattached, "agent did not re-attach + capture after the app restarted")
+    }
 }
