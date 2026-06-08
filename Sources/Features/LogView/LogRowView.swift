@@ -1,11 +1,11 @@
 import SwiftUI
 import Lemonade
-import AppKit
 
-/// A single monospaced log line. Kept lightweight — rendered inside a virtualized
-/// list under high throughput.
+/// A single monospaced log line. Presentational only — selection + copy are handled
+/// by the list so multiple lines can be selected and copied at once.
 struct LogRowView: View {
     let line: LogLine
+    var isSelected: Bool = false
 
     var body: some View {
         HStack(alignment: .top, spacing: LemonadeTheme.spaces.spacing200) {
@@ -33,24 +33,17 @@ struct LogRowView: View {
 
             Text(line.message)
                 .foregroundStyle(LogLevelStyle.color(for: line.level))
-                .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .font(LogLevelStyle.mono())
         .padding(.vertical, 1)
-        .contextMenu {
-            Button("Copy Line") { copy(line.raw) }
-            Button("Copy Message") { copy(line.message) }
-        }
+        .background(isSelected
+            ? LemonadeTheme.colors.interaction.bgSubtleInteractive
+            : Color.clear)
     }
 
     private var tagLabel: String {
         line.pid > 0 ? "\(line.tag) (\(line.pid))" : line.tag
-    }
-
-    private func copy(_ text: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
     }
 }

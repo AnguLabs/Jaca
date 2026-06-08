@@ -337,14 +337,24 @@ private struct LogListView: View {
     let session: LogSession
     private let bottomID = "log-bottom-anchor"
 
+    // Multi-row selection (by line seq). Click selects; ⇧-click extends a range;
+    // ⌘-click toggles. ⌘C copies the selected messages.
+    @State private var selection: Set<UInt64> = []
+    @State private var anchor: UInt64?
+
+    private var selectedLines: [LogLine] { session.visible.filter { selection.contains($0.seq) } }
+
     var body: some View {
         GeometryReader { outer in
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(session.visible) { line in
-                            LogRowView(line: line)
+                            LogRowView(line: line, isSelected: selection.contains(line.seq))
                                 .padding(.horizontal, LemonadeTheme.spaces.spacing300)
+                                .contentShape(Rectangle())
+                                .onTapGesture { handleClick(line) }
+                                .contextMenu { rowMenu(for: line) }
                                 .id(line.seq)
                         }
                         Color.clear.frame(height: 1).id(bottomID)
@@ -376,8 +386,57 @@ private struct LogListView: View {
                         }
                     }
                 }
+                // ⌘C copies the selected messages (only enabled with a selection, so
+                // it doesn't shadow Copy in the search field).
+                .background {
+                    Button("") { copy(selectedLines, messagesOnly: true) }
+                        .keyboardShortcut("c", modifiers: .command)
+                        .disabled(selection.isEmpty)
+                        .hidden()
+                }
             }
         }
+    }
+
+    // MARK: - Selection & copy
+
+    private func handleClick(_ line: LogLine) {
+        let mods = NSEvent.modifierFlags
+        let seqs = session.visible.map(\.seq)
+        if mods.contains(.shift), let anchor,
+           let a = seqs.firstIndex(of: anchor), let b = seqs.firstIndex(of: line.seq) {
+            let range = a <= b ? a...b : b...a
+            selection = Set(seqs[range])
+        } else if mods.contains(.command) {
+            if selection.contains(line.seq) { selection.remove(line.seq) } else { selection.insert(line.seq) }
+            anchor = line.seq
+        } else {
+            selection = [line.seq]
+            anchor = line.seq
+        }
+    }
+
+    @ViewBuilder
+    private func rowMenu(for line: LogLine) -> some View {
+        // Act on the selection if the right-clicked row is part of it, else just this row.
+        let target = selection.contains(line.seq) && selection.count > 1 ? selectedLines : [line]
+        let n = target.count
+        Button(n > 1 ? "Copy \(n) Messages" : "Copy Message") { copy(target, messagesOnly: true) }
+        Button(n > 1 ? "Copy \(n) Lines (with time & tag)" : "Copy Line") { copy(target, messagesOnly: false) }
+        Divider()
+        Button("Select All") {
+            selection = Set(session.visible.map(\.seq))
+            anchor = session.visible.last?.seq
+        }
+        if !selection.isEmpty {
+            Button("Deselect") { selection.removeAll(); anchor = nil }
+        }
+    }
+
+    private func copy(_ lines: [LogLine], messagesOnly: Bool) {
+        guard !lines.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(LogClipboard.text(for: lines, messagesOnly: messagesOnly), forType: .string)
     }
 }
 
