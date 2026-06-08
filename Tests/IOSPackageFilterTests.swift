@@ -12,6 +12,25 @@ final class IOSPackageFilterTests: XCTestCase {
         return cond()
     }
 
+    /// The connect gate must recognize a booted simulator even when the Android SDK
+    /// is installed (it previously ran `simctl` via the adb path and failed).
+    func testSimulatorConnectGatePassesWithAndroidSDKPresent() async throws {
+        let model = AppModel()
+        model.startDiscovery()
+        let ready = await waitUntil(12) { model.devices.contains { $0.platform == .iosSimulator && $0.state.isReady } }
+        try XCTSkipUnless(ready, "no booted simulator")
+        let sim = model.devices.first { $0.platform == .iosSimulator && $0.state.isReady }!
+
+        let session = try XCTUnwrap(model.startSession(for: sim, autoStart: false))
+        session.connect()
+        let settled = await waitUntil(8) { !session.isConnecting }
+        XCTAssertTrue(settled, "connect() never settled")
+        XCTAssertTrue(session.isRunning,
+                      "booted simulator should connect (status: \(session.statusMessage ?? "nil"))")
+        XCTAssertNotEqual(session.statusMessage?.contains("isn’t booted"), true)
+        model.closeSession(session.id)
+    }
+
     /// Filtering an iOS-simulator session by a bundle id must show that app's logs.
     /// (The bug: we matched the bundle id against the process name, which is the
     /// executable — "Teya Dev" — so nothing matched. Now we filter by the resolved pid.)

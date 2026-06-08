@@ -217,10 +217,12 @@ final class LogSession: WorkspaceTab {
             let r = try? await CommandRunner.run(adbURL, ["-s", device.id, "get-state"])
             return r?.exitCode == 0 && (r?.stdout.contains("device") ?? false)
         case .iosSimulator:
-            let r = try? await CommandRunner.run(adbURL, ["simctl", "list", "devices", "booted"])
+            // iOS uses xcrun, not adb — `adbURL` is the adb path when the Android SDK
+            // is installed, which would make `adb simctl …` fail.
+            let r = try? await CommandRunner.run(AppleToolchain.xcrun, ["simctl", "list", "devices", "booted"])
             return r?.stdout.contains(device.id) ?? false
         case .iosDevice:
-            let r = try? await CommandRunner.run(adbURL, ["devicectl", "list", "devices"])
+            let r = try? await CommandRunner.run(AppleToolchain.xcrun, ["devicectl", "list", "devices"])
             return r?.stdout.contains(device.id) ?? false
         }
     }
