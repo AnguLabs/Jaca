@@ -59,6 +59,7 @@ struct LogSessionView: View {
             } else {
                 LemonadeUi.Button(label: "Try to Connect", onClick: { session.connect() },
                                   variant: .primary, type: .solid, size: .medium)
+                    .fixedSize()   // size to the label instead of filling the width
             }
             if let status = session.statusMessage {
                 LemonadeUi.Text(status,
