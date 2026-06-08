@@ -52,7 +52,7 @@ struct NetworkSetupSheet: View {
         case .android:
             stepSection("Android", [
                 "The device proxy is set automatically while this tab runs (http_proxy = \(session.hostAddress):\(session.boundPort)).",
-                "Install the CA: tap “Push CA to device”, then on the device open Settings → Security → Encryption & credentials → Install a certificate → CA certificate, and pick SqueezeProxyCA from Downloads.",
+                "Install the CA: tap “Push CA to device”, then on the device open Settings → Security → Encryption & credentials → Install a certificate → CA certificate, and pick JacaProxyCA from Downloads.",
                 "To capture an app's HTTPS, it must trust user CAs (debug builds via network-security-config). Release apps that pin certs or don't trust user CAs can't be intercepted.",
             ])
         case .iosSimulator:
@@ -95,7 +95,7 @@ struct NetworkSetupSheet: View {
 
     private func exportCA() {
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = "SqueezeProxyCA.pem"
+        panel.nameFieldStringValue = "JacaProxyCA.pem"
         panel.canCreateDirectories = true
         if panel.runModal() == .OK, let url = panel.url {
             try? session.ca.exportRootCertificate(to: url)

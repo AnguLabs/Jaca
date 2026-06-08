@@ -34,11 +34,11 @@ final class AppModel {
     private var isRestoring = false
     private static let tabsKey = "openTabs"
     /// Clean, isolated state for UI tests (no restore, no persistence pollution).
-    private let uiTestMode = ProcessInfo.processInfo.environment["SQUEEZE_UITEST"] == "1"
+    private let uiTestMode = ProcessInfo.processInfo.environment["JACA_UITEST"] == "1"
     /// UI-test hook: auto-open a session for the first ready device of this
     /// platform (works around macOS not delivering content clicks to an inactive
     /// test window). Value is a DevicePlatform rawValue.
-    private let autoSessionPlatform = ProcessInfo.processInfo.environment["SQUEEZE_AUTO_SESSION"]
+    private let autoSessionPlatform = ProcessInfo.processInfo.environment["JACA_AUTO_SESSION"]
         .flatMap { DevicePlatform(rawValue: $0) }
 
     init() {

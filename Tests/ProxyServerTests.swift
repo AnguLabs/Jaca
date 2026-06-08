@@ -1,5 +1,5 @@
 import XCTest
-@testable import Squeeze
+@testable import Jaca
 
 /// End-to-end MITM proxy check: route a real HTTPS request through the proxy with
 /// the generated root CA trusted, and confirm TLS is terminated, the upstream is

@@ -174,7 +174,7 @@ final class NetworkSession: WorkspaceTab {
 
     private func configureDeviceProxy() {
         // Don't mutate a real device's proxy during UI tests.
-        if ProcessInfo.processInfo.environment["SQUEEZE_UITEST"] == "1" { return }
+        if ProcessInfo.processInfo.environment["JACA_UITEST"] == "1" { return }
         guard device.platform == .android, let adbURL else { return }
         let serial = device.id, host = hostAddress, port = boundPort
         Task {
@@ -198,7 +198,7 @@ final class NetworkSession: WorkspaceTab {
             let ok = await ProxyConfigurator.pushCACertToAndroid(adbURL: adbURL, serial: serial, caPEM: caURL)
             await MainActor.run {
                 statusMessage = ok
-                    ? "CA pushed to /sdcard/Download/SqueezeProxyCA.pem — install it in Settings."
+                    ? "CA pushed to /sdcard/Download/JacaProxyCA.pem — install it in Settings."
                     : "Failed to push CA certificate."
             }
         }

@@ -60,7 +60,7 @@ enum HARExport {
         let har: [String: Any] = [
             "log": [
                 "version": "1.2",
-                "creator": ["name": "Squeeze", "version": "0.1.0"],
+                "creator": ["name": "Jaca", "version": "0.1.0"],
                 "entries": entries,
             ],
         ]

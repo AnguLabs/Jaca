@@ -42,7 +42,7 @@ actor HistoryStore {
         } else {
             let base = FileManager.default
                 .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-                .appendingPathComponent("Squeeze", isDirectory: true)
+                .appendingPathComponent("Jaca", isDirectory: true)
             try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
             dbURL = base.appendingPathComponent("history.sqlite")
         }

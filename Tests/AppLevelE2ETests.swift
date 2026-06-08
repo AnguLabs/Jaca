@@ -1,5 +1,5 @@
 import XCTest
-@testable import Squeeze
+@testable import Jaca
 
 /// End-to-end tests that drive the app's real session types the way the UI does
 /// (NetworkSession's agent/proxy orchestration, AppModel logcat with filters),
@@ -46,8 +46,8 @@ final class AppLevelE2ETests: XCTestCase {
     // MARK: - NetworkSession proxy mode (the default for any app)
 
     func testNetworkSessionProxyCaptureAndExportLive() async throws {
-        setenv("SQUEEZE_UITEST", "1", 1)   // don't mutate a real device proxy
-        defer { unsetenv("SQUEEZE_UITEST") }
+        setenv("JACA_UITEST", "1", 1)   // don't mutate a real device proxy
+        defer { unsetenv("JACA_UITEST") }
         let ca = try XCTUnwrap(try? CertificateAuthority())
         let device = Device(id: "test-host", platform: .android, model: "Test", state: .connected)
         let session = NetworkSession(device: device, ca: ca, adbURL: nil)
@@ -126,8 +126,8 @@ final class AppLevelE2ETests: XCTestCase {
     // MARK: - Logcat package filter resolves live PIDs (Android)
 
     func testLogcatPackagePidResolutionLive() async throws {
-        setenv("SQUEEZE_UITEST", "1", 1)
-        defer { unsetenv("SQUEEZE_UITEST") }
+        setenv("JACA_UITEST", "1", 1)
+        defer { unsetenv("JACA_UITEST") }
         let adb = try XCTUnwrap(AndroidToolchain.adbURL(), "adb not found")
         let model = AppModel()
         model.startDiscovery()

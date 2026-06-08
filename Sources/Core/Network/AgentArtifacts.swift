@@ -34,7 +34,7 @@ enum AgentArtifacts {
 
     private static func devPath(_ rel: String) -> URL? {
         let p = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("workspace/squeeze/\(rel)")
+            .appendingPathComponent("workspace/jaca/\(rel)")
         return FileManager.default.fileExists(atPath: p.path) ? p : nil
     }
 }

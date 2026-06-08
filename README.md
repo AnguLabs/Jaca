@@ -1,4 +1,4 @@
-# Squeeze
+# Jaca
 
 A native macOS app for watching what your connected devices are doing — their
 logs and their network traffic — in a fast, multi-tab "terminal" UI.
@@ -32,7 +32,7 @@ SwiftUI and the [Lemonade design system](../lemonade-design-system).
 1. **In-process agent** (debuggable Android apps): injects into the app process
    and reads requests/responses *before* TLS — no proxy, no CA, immune to cert
    pinning, and it even captures the **call stack** that made each request. This
-   is how Android Studio's Network Inspector works; Squeeze reimplements it.
+   is how Android Studio's Network Inspector works; Jaca reimplements it.
 2. **MITM proxy** (everything else): a local HTTPS-intercepting proxy. Works for
    any app that trusts the proxy's CA; blocked by pinning. Captures full
    request/response, headers, bodies, and timing, with a drag-to-select timeline
@@ -78,7 +78,7 @@ mirrors AOSP's App Inspection and is built from open-source pieces:
    interceptor** — built as a reflective `java.lang.reflect.Proxy` of
    `okhttp3.Interceptor` so the agent needn't compile against the app's OkHttp.
 5. Each transaction is streamed as one JSON line over an adb-forwarded
-   `localabstract` socket back to Squeeze.
+   `localabstract` socket back to Jaca.
 
 There's a classloader subtlety that drove the design. The hook trampoline has to
 live on the **bootstrap** classloader (so an instrumented boot class like `URL`
@@ -115,7 +115,7 @@ The scripts set `DEVELOPER_DIR` to Xcode automatically (handy when `xcode-select
 points at the CLT). Other entry points:
 
 ```bash
-./scripts/gen.sh          # regenerate Squeeze.xcodeproj from project.yml (XcodeGen)
+./scripts/gen.sh          # regenerate Jaca.xcodeproj from project.yml (XcodeGen)
 ./scripts/build.sh        # build only
 ./scripts/uitest.sh       # run the XCUITest UI suite (clears stray instances first)
 ```
@@ -190,7 +190,7 @@ Honest about what each capture mode can and can't do:
 ## Tests
 
 ```bash
-xcodebuild -scheme Squeeze -only-testing:SqueezeTests test   # logic + live integration
+xcodebuild -scheme Jaca -only-testing:JacaTests test   # logic + live integration
 ./scripts/uitest.sh                                          # UI flows
 ```
 

@@ -1,5 +1,5 @@
 import XCTest
-@testable import Squeeze
+@testable import Jaca
 
 final class SimulatorLogParserTests: XCTestCase {
     func testParsesNdjsonLine() {

@@ -27,7 +27,7 @@ enum ProxyConfigurator {
     /// Pushes the root CA to the device's shared storage for easy manual install.
     static func pushCACertToAndroid(adbURL: URL, serial: String, caPEM: URL) async -> Bool {
         let result = try? await CommandRunner.run(
-            adbURL, ["-s", serial, "push", caPEM.path, "/sdcard/Download/SqueezeProxyCA.pem"]
+            adbURL, ["-s", serial, "push", caPEM.path, "/sdcard/Download/JacaProxyCA.pem"]
         )
         return result?.exitCode == 0
     }

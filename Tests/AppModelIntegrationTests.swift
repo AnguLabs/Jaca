@@ -1,5 +1,5 @@
 import XCTest
-@testable import Squeeze
+@testable import Jaca
 
 /// Exercises full feature flows through the real models + live devices/proxy,
 /// without depending on GUI window activation (which is flaky under automation).
@@ -19,8 +19,8 @@ final class AppModelIntegrationTests: XCTestCase {
     func testLogcatFullFlowLive() async throws {
         continueAfterFailure = false
         try XCTSkipUnless(AndroidToolchain.adbURL() != nil, "adb not found")
-        setenv("SQUEEZE_UITEST", "1", 1)   // isolate from restored tabs / persistence
-        defer { unsetenv("SQUEEZE_UITEST") }
+        setenv("JACA_UITEST", "1", 1)   // isolate from restored tabs / persistence
+        defer { unsetenv("JACA_UITEST") }
         let model = AppModel()
         model.startDiscovery()
 
@@ -64,8 +64,8 @@ final class AppModelIntegrationTests: XCTestCase {
     /// Installed-apps enumeration (the filter dropdown's data) for whatever
     /// devices are connected.
     func testInstalledAppsLive() async throws {
-        setenv("SQUEEZE_UITEST", "1", 1)
-        defer { unsetenv("SQUEEZE_UITEST") }
+        setenv("JACA_UITEST", "1", 1)
+        defer { unsetenv("JACA_UITEST") }
         let model = AppModel()
         model.startDiscovery()
         _ = await waitUntil(timeout: 10) { !model.devices.isEmpty }
@@ -88,8 +88,8 @@ final class AppModelIntegrationTests: XCTestCase {
     func testSimulatorGeneralAndAppSpecificLogsLive() async throws {
         continueAfterFailure = false
         try XCTSkipUnless(AppleToolchain.hasFullXcode, "no full Xcode")
-        setenv("SQUEEZE_UITEST", "1", 1)
-        defer { unsetenv("SQUEEZE_UITEST") }
+        setenv("JACA_UITEST", "1", 1)
+        defer { unsetenv("JACA_UITEST") }
 
         let model = AppModel()
         model.startDiscovery()
@@ -133,8 +133,8 @@ final class AppModelIntegrationTests: XCTestCase {
     func testSelectIOSAppFilterFromDropdownLive() async throws {
         continueAfterFailure = false
         try XCTSkipUnless(AppleToolchain.hasFullXcode, "no full Xcode")
-        setenv("SQUEEZE_UITEST", "1", 1)
-        defer { unsetenv("SQUEEZE_UITEST") }
+        setenv("JACA_UITEST", "1", 1)
+        defer { unsetenv("JACA_UITEST") }
 
         let model = AppModel()
         model.startDiscovery()
@@ -166,8 +166,8 @@ final class AppModelIntegrationTests: XCTestCase {
     /// Showcase: route a couple of real HTTPS requests through the inspector and
     /// print what it captured (so the captured detail is visible in the log).
     func testNetworkCaptureShowcaseLive() async throws {
-        setenv("SQUEEZE_UITEST", "1", 1)
-        defer { unsetenv("SQUEEZE_UITEST") }
+        setenv("JACA_UITEST", "1", 1)
+        defer { unsetenv("JACA_UITEST") }
         let model = AppModel()
         let device = Device(id: "test-host", platform: .android, model: "Test", state: .connected)
         let session = try XCTUnwrap(model.startNetworkSession(for: device))
@@ -203,8 +203,8 @@ final class AppModelIntegrationTests: XCTestCase {
     /// Full network flow: start a network tab (proxy) and capture a real HTTPS
     /// request routed through it with the generated CA trusted.
     func testNetworkCaptureLive() async throws {
-        setenv("SQUEEZE_UITEST", "1", 1)            // skip mutating any real device proxy
-        defer { unsetenv("SQUEEZE_UITEST") }
+        setenv("JACA_UITEST", "1", 1)            // skip mutating any real device proxy
+        defer { unsetenv("JACA_UITEST") }
 
         let model = AppModel()
         let device = Device(id: "test-host", platform: .android, model: "Test", state: .connected)

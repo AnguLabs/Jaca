@@ -18,12 +18,12 @@ final class CertificateAuthority: @unchecked Sendable {
     let rootCertificatePEM: String
     let storageDirectory: URL
 
-    /// Loads the CA from `directory` (default: Application Support/Squeeze/ca),
+    /// Loads the CA from `directory` (default: Application Support/Jaca/ca),
     /// generating and persisting a new one if absent.
     init(directory: URL? = nil) throws {
         let dir = directory ?? FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Squeeze/ca", isDirectory: true)
+            .appendingPathComponent("Jaca/ca", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         storageDirectory = dir
 
@@ -83,8 +83,8 @@ final class CertificateAuthority: @unchecked Sendable {
     private static func makeRootCA() throws -> (Certificate, P256.Signing.PrivateKey) {
         let key = P256.Signing.PrivateKey()
         let name = try DistinguishedName {
-            CommonName("Squeeze Proxy CA")
-            OrganizationName("Squeeze")
+            CommonName("Jaca Proxy CA")
+            OrganizationName("Jaca")
         }
         let cert = try Certificate(
             version: .v3,

@@ -8,7 +8,7 @@ final class SmokeUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
         app = XCUIApplication()
-        app.launchEnvironment["SQUEEZE_UITEST"] = "1"
+        app.launchEnvironment["JACA_UITEST"] = "1"
         app.launch()
         // Bring it frontmost — guards against "Running Background" activation flakiness.
         if app.state != .runningForeground { app.activate() }
@@ -123,8 +123,8 @@ final class SmokeUITests: XCTestCase {
     /// click, which macOS won't deliver to an inactive test window).
     private func launchWithAutoSession(_ platform: String) {
         app = XCUIApplication()
-        app.launchEnvironment["SQUEEZE_UITEST"] = "1"
-        app.launchEnvironment["SQUEEZE_AUTO_SESSION"] = platform
+        app.launchEnvironment["JACA_UITEST"] = "1"
+        app.launchEnvironment["JACA_AUTO_SESSION"] = platform
         app.launch()
         _ = app.windows.firstMatch.waitForExistence(timeout: 15)
         ensureWindowActive()

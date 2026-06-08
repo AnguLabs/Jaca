@@ -1,4 +1,4 @@
-name: Squeeze
+name: Jaca
 options:
   bundleIdPrefix: dev.srsouza
   createIntermediateGroups: true
@@ -39,7 +39,7 @@ settings:
     ENABLE_APP_SANDBOX: NO
 
 targets:
-  Squeeze:
+  Jaca:
     type: application
     platform: macOS
     deploymentTarget: "14.0"
@@ -65,52 +65,52 @@ targets:
         product: SwiftASN1
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: dev.srsouza.Squeeze
-        PRODUCT_NAME: Squeeze
+        PRODUCT_BUNDLE_IDENTIFIER: dev.srsouza.Jaca
+        PRODUCT_NAME: Jaca
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.developer-tools"
         INFOPLIST_KEY_NSHumanReadableCopyright: ""
         COMBINE_HIDPI_IMAGES: YES
 
-  SqueezeTests:
+  JacaTests:
     type: bundle.unit-test
     platform: macOS
     deploymentTarget: "14.0"
     sources:
       - path: Tests
     dependencies:
-      - target: Squeeze
+      - target: Jaca
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: dev.srsouza.SqueezeTests
+        PRODUCT_BUNDLE_IDENTIFIER: dev.srsouza.JacaTests
         GENERATE_INFOPLIST_FILE: YES
 
-  SqueezeUITests:
+  JacaUITests:
     type: bundle.ui-testing
     platform: macOS
     deploymentTarget: "14.0"
     sources:
       - path: UITests
     dependencies:
-      - target: Squeeze
+      - target: Jaca
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: dev.srsouza.SqueezeUITests
+        PRODUCT_BUNDLE_IDENTIFIER: dev.srsouza.JacaUITests
         GENERATE_INFOPLIST_FILE: YES
-        TEST_TARGET_NAME: Squeeze
+        TEST_TARGET_NAME: Jaca
 
 schemes:
-  Squeeze:
+  Jaca:
     build:
       targets:
-        Squeeze: all
-        SqueezeTests: [test]
-        SqueezeUITests: [test]
+        Jaca: all
+        JacaTests: [test]
+        JacaUITests: [test]
     run:
       config: Debug
     test:
       config: Debug
       targets:
-        - SqueezeTests
-        - SqueezeUITests
+        - JacaTests
+        - JacaUITests

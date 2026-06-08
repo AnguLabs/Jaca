@@ -1,5 +1,5 @@
 import XCTest
-@testable import Squeeze
+@testable import Jaca
 
 /// Live checks against a booted iOS simulator. Skipped when no full Xcode or no
 /// booted simulator is present.

@@ -2,7 +2,7 @@ import SwiftUI
 import Lemonade
 
 @main
-struct SqueezeApp: App {
+struct JacaApp: App {
     @AppStorage("colorScheme") private var colorScheme = "dark"
 
     init() {

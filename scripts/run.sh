@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Build then launch the Squeeze .app.
+# Build then launch the Jaca .app.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 CONFIG="${1:-Debug}"
-[ -d Squeeze.xcodeproj ] || xcodegen generate
+[ -d Jaca.xcodeproj ] || xcodegen generate
 APP_PATH="$(xcodebuild \
-  -project Squeeze.xcodeproj \
-  -scheme Squeeze \
+  -project Jaca.xcodeproj \
+  -scheme Jaca \
   -configuration "$CONFIG" \
   -destination 'platform=macOS' \
   CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=YES \

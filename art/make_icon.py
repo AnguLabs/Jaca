@@ -72,5 +72,5 @@ svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="{S}" height="{S}" viewB
            C {cx-44} {cy+430} {cx-44} {cy+392} {cx} {cy+330} Z"
         fill="#FFFFFF" filter="url(#soft)"/>
 </svg>'''
-open("/tmp/squeeze_icon.svg","w").write(svg)
+open("/tmp/jaca_icon.svg","w").write(svg)
 print("svg written")

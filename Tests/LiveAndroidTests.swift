@@ -1,5 +1,5 @@
 import XCTest
-@testable import Squeeze
+@testable import Jaca
 
 /// End-to-end checks against a real connected device/emulator. Skipped when adb
 /// or a device isn't available, so the suite stays green in headless CI.
@@ -47,7 +47,7 @@ final class LiveAndroidTests: XCTestCase {
 
         session.start()
         // Generate guaranteed traffic, then let it stream, flush (30ms) and persist.
-        _ = try? await CommandRunner.run(adb, ["-s", ready.id, "shell", "log", "-t", "SqueezeTest", "hello-from-test"])
+        _ = try? await CommandRunner.run(adb, ["-s", ready.id, "shell", "log", "-t", "JacaTest", "hello-from-test"])
         try await Task.sleep(for: .seconds(3))
         session.stop()
         try await Task.sleep(for: .milliseconds(500))  // let persist tasks drain

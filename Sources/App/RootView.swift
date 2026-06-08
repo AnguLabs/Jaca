@@ -61,7 +61,7 @@ struct EmptySessionView: View {
                 tint: LemonadeTheme.colors.content.contentSecondary
             )
             LemonadeUi.Text(
-                "Squeeze",
+                "Jaca",
                 textStyle: LemonadeTypography.shared.headingSmall,
                 color: LemonadeTheme.colors.content.contentPrimary
             )
