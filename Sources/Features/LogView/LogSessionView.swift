@@ -90,6 +90,7 @@ struct LogSessionView: View {
                 transportButton
                 clearMenu
                 followButton
+                if session.crashCount > 0 { crashBadge }
                 Spacer()
                 if let status = session.statusMessage {
                     LemonadeUi.Text(
@@ -130,6 +131,26 @@ struct LogSessionView: View {
         .padding(.horizontal, LemonadeTheme.spaces.spacing300)
         .padding(.vertical, LemonadeTheme.spaces.spacing200)
         .background(LemonadeTheme.colors.background.bgElevated)
+    }
+
+    /// Red, clickable crash counter — jumps to the most recent crash.
+    private var crashBadge: some View {
+        Button(action: { session.jumpToLastCrash() }) {
+            HStack(spacing: 5) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 10, weight: .bold))
+                Text("\(session.crashCount) crash\(session.crashCount == 1 ? "" : "es")")
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            .foregroundStyle(LemonadeTheme.colors.content.contentCritical)
+            .padding(.horizontal, 9)
+            .frame(height: 30)
+            .background(Capsule().fill(LemonadeTheme.colors.content.contentCritical.opacity(0.14)))
+            .overlay(Capsule().strokeBorder(LemonadeTheme.colors.content.contentCritical.opacity(0.4), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .help("Jump to the most recent crash")
+        .accessibilityIdentifier("crashBadge")
     }
 
     private var clearMenu: some View {
@@ -475,6 +496,11 @@ private struct LogListView: View {
                         pausedCount = session.visible.count
                         frozen = Array(session.visible.suffix(renderCap))  // freeze what's shown
                     }
+                }
+                .onChange(of: session.scrollTarget) { _, target in
+                    guard let target else { return }
+                    proxy.scrollTo(target, anchor: .center)            // e.g. jump to last crash
+                    session.scrollTarget = nil
                 }
                 .onPreferenceChange(BottomAnchorKey.self) { minY in
                     // Resume following only when the user returns to the bottom; the

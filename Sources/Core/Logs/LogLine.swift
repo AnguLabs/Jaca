@@ -62,12 +62,15 @@ struct LogLine: Identifiable, Sendable, Hashable {
     /// Synthetic line injected by Jaca (app died/restarted, stream reconnect) —
     /// rendered distinctively and never hidden by filters.
     var isMarker: Bool = false
+    /// A marker that should stand out in red (e.g. a crash).
+    var markerCritical: Bool = false
 
     var id: UInt64 { seq }
 
     /// A synthetic marker line (seq is stamped by the session's monotonic counter).
-    static func marker(_ message: String) -> LogLine {
+    static func marker(_ message: String, critical: Bool = false) -> LogLine {
         LogLine(seq: 0, timestamp: Date(), level: .info, tag: "", pid: -1, tid: 0,
-                message: message, raw: message, processName: nil, isMarker: true)
+                message: message, raw: message, processName: nil, isMarker: true,
+                markerCritical: critical)
     }
 }

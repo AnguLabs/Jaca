@@ -56,6 +56,11 @@ final class LogSession: WorkspaceTab {
     private(set) var visible: [LogLine] = []
     private(set) var totalCount = 0
     private(set) var droppedCount = 0
+    /// Crashes (FATAL EXCEPTION / native fatal) detected among the filtered lines.
+    private(set) var crashCount = 0
+    private(set) var lastCrashSeq: UInt64?
+    /// Set to a line seq to request the list scroll to it (e.g. jump to last crash).
+    var scrollTarget: UInt64?
     var followTail = true
     var statusMessage: String?
 
@@ -158,10 +163,17 @@ final class LogSession: WorkspaceTab {
     }
 
     /// Injects a synthetic, always-visible marker line (thread-safe; callable off-main).
-    nonisolated func injectMarker(_ message: String) {
-        var m = LogLine.marker(message)
+    nonisolated func injectMarker(_ message: String, critical: Bool = false) {
+        var m = LogLine.marker(message, critical: critical)
         m.seq = seq.next()
         pending.append(m)
+    }
+
+    /// Pauses follow and scrolls the list to the most recent crash.
+    func jumpToLastCrash() {
+        guard let seq = lastCrashSeq else { return }
+        followTail = false
+        scrollTarget = seq
     }
 
     func stop() {
@@ -239,6 +251,8 @@ final class LogSession: WorkspaceTab {
         visible.removeAll(keepingCapacity: true)
         totalCount = 0
         droppedCount = 0
+        crashCount = 0
+        lastCrashSeq = nil
     }
 
     /// Clears the device-side logcat buffer too (`adb logcat -c`).
@@ -343,6 +357,11 @@ final class LogSession: WorkspaceTab {
         }
         for line in batch where filter.matches(line, regex: compiledRegex) {
             visible.append(line)
+            if CrashDetector.isCrash(line) {
+                crashCount += 1
+                lastCrashSeq = line.seq
+                injectMarker("💥 \(CrashDetector.label(line))", critical: true)
+            }
         }
     }
 

@@ -19,14 +19,16 @@ struct LogRowView: View {
     }
 
     /// Section-divider style with padding above/below, so the event is unmissable.
+    /// Crash markers render in critical red.
     private var markerRow: some View {
-        HStack(spacing: 10) {
-            Rectangle().fill(Self.markerColor.opacity(0.45)).frame(height: 1)
+        let color = line.markerCritical ? LemonadeTheme.colors.content.contentCritical : Self.markerColor
+        return HStack(spacing: 10) {
+            Rectangle().fill(color.opacity(0.45)).frame(height: 1)
             Text(line.message)
                 .font(LogLevelStyle.mono(11).weight(.semibold))
-                .foregroundStyle(Self.markerColor)
+                .foregroundStyle(color)
                 .fixedSize()
-            Rectangle().fill(Self.markerColor.opacity(0.45)).frame(height: 1)
+            Rectangle().fill(color.opacity(0.45)).frame(height: 1)
         }
         .padding(.vertical, 12)
     }
