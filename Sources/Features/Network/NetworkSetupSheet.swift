@@ -51,7 +51,7 @@ struct NetworkSetupSheet: View {
         switch session.device.platform {
         case .android:
             stepSection("Android", [
-                "The device proxy is set automatically while this tab runs (http_proxy = \(session.hostAddress):\(session.boundPort)).",
+                "Start proxy capture from the tab — Jaca then sets the device proxy while it runs (http_proxy = \(session.hostAddress):\(session.boundPort)) and reverts it when you stop.",
                 "Install the CA: tap “Push CA to device”, then on the device open Settings → Security → Encryption & credentials → Install a certificate → CA certificate, and pick JacaProxyCA from Downloads.",
                 "To capture an app's HTTPS, it must trust user CAs (debug builds via network-security-config). Release apps that pin certs or don't trust user CAs can't be intercepted.",
             ])

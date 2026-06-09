@@ -174,6 +174,7 @@ final class AppModelIntegrationTests: XCTestCase {
         let device = Device(id: "test-host", platform: .android, model: "Test", state: .connected)
         let session = try XCTUnwrap(model.startNetworkSession(for: device))
         defer { session.stop() }
+        session.startProxyCapture()
         _ = await waitUntil(timeout: 5) { session.isRunning && session.boundPort > 0 }
 
         let caPath = session.ca.storageDirectory.appendingPathComponent("rootCA.pem").path
@@ -212,6 +213,7 @@ final class AppModelIntegrationTests: XCTestCase {
         let device = Device(id: "test-host", platform: .android, model: "Test", state: .connected)
         let session = try XCTUnwrap(model.startNetworkSession(for: device), "no CA / proxy")
         defer { session.stop() }
+        session.startProxyCapture()
 
         let ready = await waitUntil(timeout: 5) { session.isRunning && session.boundPort > 0 }
         XCTAssertTrue(ready, "proxy didn't start")

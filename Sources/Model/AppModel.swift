@@ -236,6 +236,31 @@ final class AppModel {
         return session
     }
 
+    // MARK: - Stranded device proxy (cleanup backstop)
+
+    /// The device's current global HTTP proxy if it looks like one Jaca set (its
+    /// host is this Mac) and no live session is actively using it — i.e. a proxy
+    /// left behind by a kill/crash that the teardown couldn't revert. nil otherwise.
+    /// Drives the sidebar "Revert" affordance so a stranded proxy is a one-click fix.
+    func strandedProxy(for device: Device) async -> String? {
+        guard device.platform == .android, let adbURL else { return nil }
+        let activelyUsed = sessions.contains { tab in
+            (tab as? NetworkSession).map { $0.proxyConfigured && $0.device.id == device.id } ?? false
+        }
+        if activelyUsed { return nil }
+        guard let current = await ProxyConfigurator.currentAndroidProxy(adbURL: adbURL, serial: device.id) else {
+            return nil
+        }
+        let ours = ProxyConfigurator.hostAddress(for: device)
+        return ProxyConfigurator.proxyHost(current) == ours ? current : nil
+    }
+
+    /// Clears the device's global HTTP proxy — the sidebar "Revert" action.
+    func revertDeviceProxy(_ device: Device) async {
+        guard device.platform == .android, let adbURL else { return }
+        await ProxyConfigurator.clearAndroidProxy(adbURL: adbURL, serial: device.id)
+    }
+
     private func makeLogSource(for device: Device) -> LogSource? {
         switch device.platform {
         case .android:

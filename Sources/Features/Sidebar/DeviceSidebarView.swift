@@ -52,7 +52,9 @@ struct DeviceSidebarView: View {
                                     DeviceRow(
                                         device: device,
                                         onStart: { model.startSession(for: device) },
-                                        onInspectNetwork: { model.startNetworkSession(for: device) }
+                                        onInspectNetwork: { model.startNetworkSession(for: device, autoStart: false) },
+                                        checkProxy: { await model.strandedProxy(for: device) },
+                                        revertProxy: { await model.revertDeviceProxy(device) }
                                     )
                                 }
                             }
@@ -114,9 +116,25 @@ private struct DeviceRow: View {
     let device: Device
     let onStart: () -> Void
     let onInspectNetwork: () -> Void
+    /// Returns the device's stranded Jaca proxy (host == this Mac), or nil.
+    let checkProxy: () async -> String?
+    /// Clears the device's HTTP proxy.
+    let revertProxy: () async -> Void
     @State private var hovering = false
+    @State private var stranded: String?
+    @State private var reverting = false
 
     var body: some View {
+        VStack(alignment: .leading, spacing: LemonadeTheme.spaces.spacing100) {
+            deviceButton
+            if let proxy = stranded { strandedBanner(proxy) }
+        }
+        .task(id: device.state) {
+            stranded = device.state.isReady ? await checkProxy() : nil
+        }
+    }
+
+    private var deviceButton: some View {
         Button(action: { if device.state.isReady { onStart() } }) {
             HStack(spacing: LemonadeTheme.spaces.spacing200) {
                 LemonadeUi.Icon(
@@ -167,6 +185,45 @@ private struct DeviceRow: View {
         .contextMenu {
             Button("Start Logcat", action: onStart)
             Button("Inspect Network", action: onInspectNetwork)
+        }
+    }
+
+    /// Shown when this device still has a proxy Jaca set but a teardown couldn't
+    /// revert (e.g. the app was force-killed). One click clears it.
+    private func strandedBanner(_ proxy: String) -> some View {
+        HStack(spacing: LemonadeTheme.spaces.spacing200) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 11))
+                .foregroundStyle(LemonadeTheme.colors.content.contentCaution)
+            VStack(alignment: .leading, spacing: 1) {
+                LemonadeUi.Text("Proxy left set by Jaca",
+                                textStyle: LemonadeTypography.shared.bodyXSmallSemiBold,
+                                color: LemonadeTheme.colors.content.contentPrimary, maxLines: 1)
+                LemonadeUi.Text(proxy,
+                                textStyle: LemonadeTypography.shared.bodyXSmallRegular,
+                                color: LemonadeTheme.colors.content.contentTertiary, maxLines: 1)
+            }
+            Spacer(minLength: 6)
+            if reverting {
+                ProgressView().controlSize(.small)
+            } else {
+                LemonadeUi.Button(label: "Revert", onClick: { revert() },
+                                  variant: .neutral, type: .subtle, size: .small)
+            }
+        }
+        .padding(.horizontal, LemonadeTheme.spaces.spacing200)
+        .padding(.vertical, LemonadeTheme.spaces.spacing100)
+        .background(RoundedRectangle(cornerRadius: LemonadeTheme.radius.radius150)
+            .fill(LemonadeTheme.colors.background.bgNeutralSubtle))
+        .accessibilityIdentifier("strandedProxyBanner")
+    }
+
+    private func revert() {
+        reverting = true
+        Task {
+            await revertProxy()
+            stranded = await checkProxy()   // clears the banner once it's actually gone
+            reverting = false
         }
     }
 

@@ -52,7 +52,7 @@ final class AppLevelE2ETests: XCTestCase {
         let device = Device(id: "test-host", platform: .android, model: "Test", state: .connected)
         let session = NetworkSession(device: device, ca: ca, adbURL: nil)
 
-        session.start()
+        session.startProxyCapture()
         let started = await waitUntil(8) { session.isRunning && session.boundPort > 0 }
         try XCTSkipUnless(started, "proxy didn't start")
         XCTAssertEqual(session.captureMode, .proxy)
@@ -107,12 +107,9 @@ final class AppLevelE2ETests: XCTestCase {
         let ca = try XCTUnwrap(try? CertificateAuthority())
         let device = Device(id: serial, platform: .android, model: "Emulator", state: .connected)
         let session = NetworkSession(device: device, ca: ca, adbURL: adb)
-        session.targetPackage = pkg          // <- triggers in-process agent path
-
-        session.start()
-        // The orchestrator must pick the agent for a debuggable target.
+        session.startAgentCapture(package: pkg)   // explicit in-process agent mode
         let agentChosen = await waitUntil(10) { session.captureMode == .agent }
-        XCTAssertTrue(agentChosen, "orchestrator should pick the agent for a debuggable app")
+        XCTAssertTrue(agentChosen, "explicit agent mode should capture in-process")
 
         // Pipeline connected (status) and/or a transaction with a call stack.
         let ok = await waitUntil(25) {

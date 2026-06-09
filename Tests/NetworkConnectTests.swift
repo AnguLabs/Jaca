@@ -12,15 +12,18 @@ final class NetworkConnectTests: XCTestCase {
         return cond()
     }
 
-    func testConnectToMissingDeviceShowsClearError() async throws {
+    func testAgentCaptureOnMissingDeviceShowsClearError() async throws {
+        // Agent mode must reach the device to attach in-process; on a missing
+        // device it should surface a clear message and not start. (Proxy mode, by
+        // contrast, runs a local server regardless of device reachability.)
         let adb = try XCTUnwrap(AndroidToolchain.adbURL(), "adb not found")
         let ca = try XCTUnwrap(try? CertificateAuthority())
         let device = Device(id: "no-such-device-zzz", platform: .android, model: "Ghost", state: .connected)
         let session = NetworkSession(device: device, ca: ca, adbURL: adb)
 
-        session.connect()
+        session.startAgentCapture(package: "com.example.missing")
         let settled = await waitUntil(5) { !session.isConnecting }
-        XCTAssertTrue(settled, "connect() never settled")
+        XCTAssertTrue(settled, "startAgentCapture() never settled")
         XCTAssertFalse(session.isRunning, "should not start when the device is unavailable")
         let msg = try XCTUnwrap(session.statusMessage)
         XCTAssertTrue(msg.contains("isn’t connected"), "expected a clear message, got: \(msg)")

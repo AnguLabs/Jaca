@@ -1,8 +1,20 @@
 import SwiftUI
+import AppKit
 import Lemonade
+
+/// Reverts any device proxy Jaca configured when the app quits normally
+/// (`applicationWillTerminate` fires on Cmd-Q / the Quit menu). Catchable signals
+/// are handled in `ProxyCleanup`; a hard SIGKILL is covered by the sidebar
+/// "Revert" affordance.
+final class JacaAppDelegate: NSObject, NSApplicationDelegate {
+    func applicationWillTerminate(_ notification: Notification) {
+        ProxyCleanup.revertAll()
+    }
+}
 
 @main
 struct JacaApp: App {
+    @NSApplicationDelegateAdaptor(JacaAppDelegate.self) private var appDelegate
     @AppStorage("colorScheme") private var colorScheme = "dark"
 
     init() {

@@ -1,9 +1,11 @@
 import Foundation
 import Observation
 
-/// One network-inspection tab: runs a MITM proxy bound to a device and collects
-/// captured HTTP(S) transactions. Auto-configures the Android device proxy; for
-/// iOS it surfaces manual setup (see NetworkSetupSheet).
+/// One network-inspection tab. The user explicitly picks a capture mode — proxy
+/// (device-wide MITM) or in-process agent (one debuggable Android app) — and only
+/// then does capture start. Proxy mode configures the Android device's HTTP proxy
+/// while running and reverts it on stop; iOS surfaces manual setup (see
+/// NetworkSetupSheet).
 @MainActor
 @Observable
 final class NetworkSession: WorkspaceTab {
@@ -30,6 +32,13 @@ final class NetworkSession: WorkspaceTab {
     private(set) var captureMode: CaptureMode = .proxy
     /// For agent mode: the debuggable app to attach to. nil → proxy (device-wide).
     var targetPackage: String?
+    /// Whether the user has explicitly chosen a capture mode. Capture never starts
+    /// (and the device proxy is never configured) until this is true — a fresh tab
+    /// shows the mode chooser instead of silently turning on the proxy.
+    private(set) var hasSelectedMode = false
+
+    /// In-process agent capture is Android-only and needs the bundled agent artifacts.
+    var agentAvailable: Bool { device.platform == .android && AgentArtifacts.isAvailable }
 
     let ca: CertificateAuthority
     private let adbURL: URL?
@@ -74,23 +83,89 @@ final class NetworkSession: WorkspaceTab {
         self.displayName = displayName ?? "Network · \(device.displayModel)"
     }
 
+    /// Explicitly begin device-wide MITM proxy capture. On Android this configures
+    /// the device's global HTTP proxy while running, so it's strictly user-initiated.
+    func startProxyCapture() {
+        targetPackage = nil
+        captureMode = .proxy
+        hasSelectedMode = true
+        onStateChanged?()
+        beginConnecting()
+    }
+
+    /// Explicitly begin in-process agent capture for one debuggable app (no proxy/CA).
+    func startAgentCapture(package: String) {
+        targetPackage = package
+        captureMode = .agent
+        hasSelectedMode = true
+        onStateChanged?()
+        beginConnecting()
+    }
+
+    /// Restart whichever mode was last chosen — the toolbar play button after a stop.
+    func resume() {
+        guard hasSelectedMode else { return }
+        if captureMode == .agent, let pkg = targetPackage, !pkg.isEmpty {
+            startAgentCapture(package: pkg)
+        } else {
+            startProxyCapture()
+        }
+    }
+
+    /// Brings the chosen mode up. Proxy mode runs a local MITM server and can
+    /// capture regardless of device reachability (point a device/sim at it
+    /// manually; on a reachable Android device the proxy is auto-configured as a
+    /// best effort). Agent mode must reach the device to attach in-process, so it
+    /// verifies the device is up and the target app is installed first.
+    private func beginConnecting() {
+        guard !isRunning, !isConnecting else { return }
+        statusMessage = nil
+        if captureMode == .proxy {
+            start()
+            return
+        }
+        isConnecting = true
+        Task { @MainActor in
+            let available = await checkDeviceAvailable()
+            guard available else {
+                isConnecting = false
+                statusMessage = deviceUnavailableMessage
+                return
+            }
+            // The app must exist. We DON'T block on "not running" — the agent
+            // supervisor waits for the app and re-attaches on each restart.
+            if device.platform == .android, let pkg = targetPackage, !pkg.isEmpty,
+               await !isPackageInstalled(pkg) {
+                isConnecting = false
+                statusMessage = "App “\(pkg)” isn’t installed on \(device.displayModel)."
+                return
+            }
+            isConnecting = false
+            start()
+        }
+    }
+
     func start() {
-        guard !isRunning else { return }
+        // Never capture (and never touch the device proxy) without an explicit choice.
+        guard !isRunning, hasSelectedMode else { return }
         isRunning = true
         statusMessage = nil
         Task { await startBackend() }
     }
 
-    /// Picks in-process agent (debuggable target app) when possible, else proxy.
+    /// Runs the backend for the mode the user chose. Agent mode surfaces a clear
+    /// error rather than silently falling back to the proxy.
     private func startBackend() async {
-        if device.platform == .android, let adbURL, let pkg = targetPackage, !pkg.isEmpty,
-           AgentArtifacts.isAvailable,
-           await AgentController.isDebuggable(adbURL: adbURL, serial: device.id, package: pkg) {
-            captureMode = .agent
-            startAgent(adbURL: adbURL, package: pkg)
-        } else {
-            captureMode = .proxy
+        switch captureMode {
+        case .proxy:
             startProxy()
+        case .agent:
+            guard let adbURL, let pkg = targetPackage, !pkg.isEmpty, AgentArtifacts.isAvailable else {
+                isRunning = false
+                statusMessage = "The in-process agent isn’t available for this app."
+                return
+            }
+            startAgent(adbURL: adbURL, package: pkg)
         }
     }
 
@@ -136,34 +211,7 @@ final class NetworkSession: WorkspaceTab {
         }
     }
 
-    func toggle() { isRunning ? stop() : connect() }
-
-    /// Verifies the device is reachable before capturing, surfacing a clear message
-    /// otherwise. Used by restored/stopped tabs to (re)connect with feedback.
-    func connect() {
-        guard !isRunning, !isConnecting else { return }
-        isConnecting = true
-        statusMessage = nil
-        Task { @MainActor in
-            let available = await checkDeviceAvailable()
-            guard available else {
-                isConnecting = false
-                statusMessage = deviceUnavailableMessage
-                return
-            }
-            // Validate the in-process target app. We DON'T block on "not running" —
-            // the agent supervisor waits for the app and re-attaches on each restart
-            // (so it survives reinstalls). Only a genuinely-absent app is an error.
-            if device.platform == .android, let pkg = targetPackage, !pkg.isEmpty,
-               await !isPackageInstalled(pkg) {
-                isConnecting = false
-                statusMessage = "App “\(pkg)” isn’t installed on \(device.displayModel)."
-                return
-            }
-            isConnecting = false
-            start()
-        }
-    }
+    func toggle() { isRunning ? stop() : resume() }
 
     private func isPackageInstalled(_ package: String) async -> Bool {
         guard let adbURL else { return false }
@@ -210,13 +258,16 @@ final class NetworkSession: WorkspaceTab {
         return await AgentController.isDebuggable(adbURL: adbURL, serial: device.id, package: package)
     }
 
-    /// Choose the app to inspect in-process. Empty/nil → whole device (proxy).
-    /// Restarts capture so the mode (agent vs proxy) is re-decided.
+    /// Choose what to capture: a specific app (in-process agent) or the whole
+    /// device (proxy). Either choice is an explicit start of that mode — picking
+    /// an app starts the agent; picking "whole device" starts the proxy.
     func setTarget(_ package: String?) {
-        let pkg = (package?.isEmpty ?? true) ? nil : package
-        targetPackage = pkg
-        onStateChanged?()   // persist the inspected app immediately
-        if isRunning { stop(); start() }
+        if isRunning { stop() }
+        if let pkg = package, !pkg.isEmpty {
+            startAgentCapture(package: pkg)
+        } else {
+            startProxyCapture()
+        }
     }
 
     func clear() {
@@ -242,6 +293,9 @@ final class NetworkSession: WorkspaceTab {
         if ProcessInfo.processInfo.environment["JACA_UITEST"] == "1" { return }
         guard device.platform == .android, let adbURL else { return }
         let serial = device.id, host = hostAddress, port = boundPort
+        // Arm the global cleanup registry first, so a crash/kill between setting the
+        // proxy and a normal stop() still gets reverted on the way out.
+        ProxyCleanup.register(adbPath: adbURL.path, serial: serial)
         Task {
             await ProxyConfigurator.setAndroidProxy(adbURL: adbURL, serial: serial, host: host, port: port)
             await MainActor.run { self.proxyConfigured = true }
@@ -252,6 +306,7 @@ final class NetworkSession: WorkspaceTab {
         guard device.platform == .android, let adbURL, proxyConfigured else { return }
         let serial = device.id
         proxyConfigured = false
+        ProxyCleanup.deregister(adbPath: adbURL.path, serial: serial)
         Task { await ProxyConfigurator.clearAndroidProxy(adbURL: adbURL, serial: serial) }
     }
 

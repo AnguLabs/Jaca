@@ -13,8 +13,8 @@ struct NetworkSessionView: View {
         VStack(spacing: 0) {
             toolbar
             divider
-            if showConnectPrompt {
-                connectPrompt
+            if showCaptureChooser {
+                captureChooser
             } else {
                 if !session.transactions.isEmpty {
                     NetworkTimelineView(session: session)
@@ -40,23 +40,26 @@ struct NetworkSessionView: View {
         Rectangle().fill(LemonadeTheme.colors.border.borderNeutralLow).frame(height: 1)
     }
 
-    /// Restored/stopped network tabs come back disconnected; offer an explicit reconnect.
-    private var showConnectPrompt: Bool { !session.isRunning && session.transactions.isEmpty }
+    /// A fresh/stopped tab with no captured traffic shows the capture-mode chooser
+    /// instead of auto-starting — proxy mode must be picked deliberately because it
+    /// reconfigures the device.
+    private var showCaptureChooser: Bool { !session.isRunning && session.transactions.isEmpty }
 
-    private var connectPrompt: some View {
+    private var captureChooser: some View {
         VStack(spacing: LemonadeTheme.spaces.spacing300) {
             Spacer()
-            Image(systemName: "cable.connector.horizontal")
+            Image(systemName: "arrow.left.arrow.right.circle")
                 .font(.system(size: 40, weight: .regular))
                 .foregroundStyle(LemonadeTheme.colors.content.contentTertiary)
             VStack(spacing: LemonadeTheme.spaces.spacing100) {
                 LemonadeUi.Text(session.device.displayModel,
                                 textStyle: LemonadeTypography.shared.bodyLargeMedium,
                                 color: LemonadeTheme.colors.content.contentPrimary)
-                LemonadeUi.Text(session.targetPackage.map { "In-process: \($0)" } ?? "Whole device · proxy",
+                LemonadeUi.Text("Choose how to capture traffic",
                                 textStyle: LemonadeTypography.shared.bodySmallRegular,
                                 color: LemonadeTheme.colors.content.contentTertiary)
             }
+
             if session.isConnecting {
                 HStack(spacing: LemonadeTheme.spaces.spacing200) {
                     ProgressView().controlSize(.small)
@@ -65,22 +68,49 @@ struct NetworkSessionView: View {
                                     color: LemonadeTheme.colors.content.contentSecondary)
                 }
             } else {
-                LemonadeUi.Button(label: "Try to Connect", onClick: { session.connect() },
-                                  variant: .primary, type: .solid, size: .medium)
-                    .fixedSize()
+                VStack(spacing: LemonadeTheme.spaces.spacing200) {
+                    LemonadeUi.Button(label: "Start proxy capture", onClick: { session.startProxyCapture() },
+                                      leadingIcon: .arrowLeftRight, variant: .primary, type: .solid, size: .medium)
+                        .fixedSize()
+                    LemonadeUi.Text(proxyCaption,
+                                    textStyle: LemonadeTypography.shared.bodyXSmallRegular,
+                                    textAlign: .center,
+                                    color: LemonadeTheme.colors.content.contentTertiary)
+                        .frame(maxWidth: 420)
+
+                    if session.agentAvailable {
+                        LemonadeUi.Text("— or —",
+                                        textStyle: LemonadeTypography.shared.bodyXSmallOverline,
+                                        color: LemonadeTheme.colors.content.contentTertiary)
+                            .padding(.top, LemonadeTheme.spaces.spacing100)
+                        NetworkAppPicker(session: session)
+                        LemonadeUi.Text("Inspect one debuggable app in-process — no proxy or CA, and you get the call stack behind each request.",
+                                        textStyle: LemonadeTypography.shared.bodyXSmallRegular,
+                                        textAlign: .center,
+                                        color: LemonadeTheme.colors.content.contentTertiary)
+                            .frame(maxWidth: 420)
+                    }
+                }
             }
+
             if let status = session.statusMessage {
                 LemonadeUi.Text(status,
                                 textStyle: LemonadeTypography.shared.bodySmallRegular,
                                 color: LemonadeTheme.colors.content.contentCritical)
                     .multilineTextAlignment(.center)
-                    .frame(maxWidth: 380)
+                    .frame(maxWidth: 420)
             }
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(LemonadeTheme.colors.background.bgDefault)
-        .accessibilityIdentifier("networkConnectPrompt")
+        .accessibilityIdentifier("networkCaptureChooser")
+    }
+
+    private var proxyCaption: String {
+        session.isAndroid
+            ? "Routes the whole device through Jaca's MITM proxy. Sets the device's HTTP proxy while capturing and reverts it on stop."
+            : "Routes traffic through Jaca's MITM proxy. Point the device/simulator at it via Setup."
     }
 
     private var toolbar: some View {
@@ -206,13 +236,15 @@ struct NetworkSessionView: View {
             Spacer()
             LemonadeUi.Icon(icon: .arrowLeftRight, contentDescription: nil, size: .large,
                             tint: LemonadeTheme.colors.content.contentTertiary)
-            LemonadeUi.Text(session.isRunning ? "Waiting for traffic…" : "Proxy stopped",
+            LemonadeUi.Text(session.isRunning ? "Waiting for traffic…" : "Capture stopped",
                             textStyle: LemonadeTypography.shared.bodySmallRegular,
                             color: LemonadeTheme.colors.content.contentSecondary)
-            LemonadeUi.Text("Open Setup to point your device at the proxy and trust the CA.",
-                            textStyle: LemonadeTypography.shared.bodyXSmallRegular,
-                            textAlign: .center,
-                            color: LemonadeTheme.colors.content.contentTertiary)
+            if session.captureMode == .proxy {
+                LemonadeUi.Text("Open Setup to point your device at the proxy and trust the CA.",
+                                textStyle: LemonadeTypography.shared.bodyXSmallRegular,
+                                textAlign: .center,
+                                color: LemonadeTheme.colors.content.contentTertiary)
+            }
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
