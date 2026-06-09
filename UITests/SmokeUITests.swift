@@ -119,6 +119,17 @@ final class SmokeUITests: XCTestCase {
         assertAlive("second tab")
     }
 
+    /// Auto-opens a logcat session (no device-row click) and lets it stream into the
+    /// NSTableView-backed log list — a render/observation crash would surface here.
+    func testAutoLogcatStreamsIntoTable() throws {
+        launchWithAutoSession("android")
+        guard app.buttons["logTransportButton"].waitForExistence(timeout: 15) else {
+            throw XCTSkip("no ready Android device to auto-open a log session")
+        }
+        Thread.sleep(forTimeInterval: 4)   // stream a few seconds of real logcat
+        assertAlive("auto logcat streaming into the virtualized table")
+    }
+
     /// Launch with a session auto-opened for `platform` (bypasses the device-row
     /// click, which macOS won't deliver to an inactive test window).
     private func launchWithAutoSession(_ platform: String) {

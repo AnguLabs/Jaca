@@ -56,6 +56,10 @@ final class LogSession: WorkspaceTab {
     private(set) var visible: [LogLine] = []
     private(set) var totalCount = 0
     private(set) var droppedCount = 0
+    /// Bumped whenever `visible` is replaced wholesale (clear / filter change) — as
+    /// opposed to an append. The virtualized list uses it to choose a full reload vs
+    /// a cheap row-count update.
+    private(set) var listEpoch = 0
     /// Crashes (FATAL EXCEPTION / native fatal) detected among the filtered lines.
     private(set) var crashCount = 0
     private(set) var lastCrashSeq: UInt64?
@@ -88,7 +92,9 @@ final class LogSession: WorkspaceTab {
     private var sawAppAlive = false
 
     private var ring: [LogLine] = []
-    private let ringCap = 100_000
+    // Virtualized rendering makes display cost independent of buffer size, so we keep
+    // a large scrollback and drop far less. (Memory ≈ this × ~300 B.)
+    private let ringCap = 500_000
     private let maxPerFlush = 4_000           // bound main-thread work per tick
     private var compiledRegex: NSRegularExpression?
     private var recomputeToken = 0
@@ -253,6 +259,7 @@ final class LogSession: WorkspaceTab {
         droppedCount = 0
         crashCount = 0
         lastCrashSeq = nil
+        listEpoch &+= 1
     }
 
     /// Clears the device-side logcat buffer too (`adb logcat -c`).
@@ -323,6 +330,7 @@ final class LogSession: WorkspaceTab {
                     out = self.ring.filter { self.filter.matches($0, regex: self.compiledRegex) }
                 }
                 self.visible = out
+                self.listEpoch &+= 1
             }
         }
     }

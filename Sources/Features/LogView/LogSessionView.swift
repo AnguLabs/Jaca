@@ -415,129 +415,41 @@ private extension View {
     }
 }
 
-private struct BottomAnchorKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
-}
-
-/// Virtualized, monospaced log list. Auto-scrolls while following the tail, and
-/// auto-pauses follow when the user scrolls up (resumes when scrolled back down).
+/// Monospaced log list backed by an NSTableView (see `LogTableView`) — a fixed-row
+/// virtualized list that holds a huge buffer at a flat cost, stays pinned to the tail
+/// while following, and keeps your position rock-steady when you scroll up.
 private struct LogListView: View {
     let session: LogSession
     var isActive: Bool = true
-    private let bottomID = "log-bottom-anchor"
-
-    // Multi-row selection (by line seq). Click selects; ⇧-click extends a range;
-    // ⌘-click toggles. ⌘C copies the selected messages.
-    @State private var selection: Set<UInt64> = []
-    @State private var anchor: UInt64?
-    @State private var scrollMonitor: Any?
-    @State private var pausedCount = 0      // visible.count when the user paused follow
-    @State private var frozen: [LogLine]?   // snapshot while paused, so streaming doesn't shift the view
-
-    // Only render the most recent slice so the ForEach never diffs 100k rows; the
-    // full buffer is still kept for filtering/selection/export.
-    private let renderCap = 2_000
-    // While following, show the live tail window; while paused (scrolled up), show a
-    // frozen snapshot so incoming lines don't slide the window and jump the scroll.
-    private var displayed: [LogLine] { frozen ?? Array(session.visible.suffix(renderCap)) }
-
-    private var selectedLines: [LogLine] { session.visible.filter { selection.contains($0.seq) } }
+    @State private var pausedCount = 0   // visible.count when the user paused follow
 
     var body: some View {
-        GeometryReader { outer in
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(displayed) { line in
-                            LogRowView(line: line, isSelected: selection.contains(line.seq))
-                                .padding(.horizontal, LemonadeTheme.spaces.spacing300)
-                                .contentShape(Rectangle())
-                                .onTapGesture { handleClick(line) }
-                                .contextMenu { rowMenu(for: line) }
-                                .id(line.seq)
-                        }
-                        Color.clear.frame(height: 1).id(bottomID)
-                            // The anchor GeometryReader fires a preference every frame —
-                            // only attach it while THIS tab is active AND paused (the only
-                            // time we need to detect a return to the bottom). While
-                            // following (the common case) it costs nothing.
-                            .background {
-                                if isActive && !session.followTail {
-                                    GeometryReader { g in
-                                        Color.clear.preference(
-                                            key: BottomAnchorKey.self,
-                                            value: g.frame(in: .named("logScroll")).minY
-                                        )
-                                    }
-                                }
-                            }
-                    }
-                    .padding(.vertical, LemonadeTheme.spaces.spacing100)
-                }
-                .coordinateSpace(name: "logScroll")
+        ZStack(alignment: .bottomTrailing) {
+            // Reading these values here is what establishes the @Observable dependency,
+            // so the table's updateNSView runs on each flush / filter change / follow toggle.
+            LogTableView(session: session, isActive: isActive,
+                         revision: session.visible.count, epoch: session.listEpoch,
+                         follow: session.followTail, target: session.scrollTarget)
                 .background(LemonadeTheme.colors.background.bgDefault)
-                .overlay(alignment: .bottomTrailing) {
-                    if !session.followTail {
-                        jumpToLatestButton(proxy)
-                            .padding(20)
-                            .transition(.move(edge: .trailing).combined(with: .opacity))
-                    }
-                }
-                .animation(.spring(response: 0.32, dampingFraction: 0.82), value: session.followTail)
-                .onChange(of: session.visible.count) {
-                    if isActive, session.followTail { proxy.scrollTo(bottomID, anchor: .bottom) }
-                }
-                .onChange(of: session.followTail) { _, follow in
-                    if follow {
-                        frozen = nil                                   // resume live tail
-                        proxy.scrollTo(bottomID, anchor: .bottom)
-                    } else {
-                        pausedCount = session.visible.count
-                        frozen = Array(session.visible.suffix(renderCap))  // freeze what's shown
-                    }
-                }
-                .onChange(of: session.scrollTarget) { _, target in
-                    guard let target else { return }
-                    proxy.scrollTo(target, anchor: .center)            // e.g. jump to last crash
-                    session.scrollTarget = nil
-                }
-                .onPreferenceChange(BottomAnchorKey.self) { minY in
-                    // Resume following only when the user returns to the bottom; the
-                    // scroll-wheel monitor handles pausing immediately on scroll-up.
-                    let viewport = outer.size.height
-                    DispatchQueue.main.async {
-                        if minY <= viewport + 8, !session.followTail { session.followTail = true }
-                    }
-                }
-                // Only the active tab listens for scroll (kept-alive hidden tabs must
-                // not toggle their follow state from scrolls meant for the visible tab).
-                .onAppear { if isActive { installScrollMonitor() } }
-                .onChange(of: isActive) { _, active in active ? installScrollMonitor() : removeScrollMonitor() }
-                .onDisappear { removeScrollMonitor() }
-                // ⌘C copies the selected messages — only when THIS tab is active and
-                // has a selection, so it never hijacks Copy in another inspector/tab
-                // or the search field (tabs are kept alive, so all would register it).
-                .background {
-                    Button("") { copy(selectedLines, messagesOnly: true) }
-                        .keyboardShortcut("c", modifiers: .command)
-                        .disabled(!isActive || selection.isEmpty)
-                        .hidden()
-                }
+            if !session.followTail {
+                jumpToLatestButton()
+                    .padding(20)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
             }
+        }
+        .animation(.spring(response: 0.32, dampingFraction: 0.82), value: session.followTail)
+        .onChange(of: session.followTail) { _, follow in
+            if !follow { pausedCount = session.visible.count }
         }
     }
 
-    // MARK: - Follow tail
-
     /// Glassy "jump to latest" pill, shown when the user has scrolled up. Tapping it
-    /// resumes following the live tail.
-    private func jumpToLatestButton(_ proxy: ScrollViewProxy) -> some View {
+    /// resumes following — the table scrolls to the bottom on the next update.
+    private func jumpToLatestButton() -> some View {
         let n = max(0, session.visible.count - pausedCount)
         return Button {
             withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
                 session.followTail = true
-                proxy.scrollTo(bottomID, anchor: .bottom)
             }
         } label: {
             HStack(spacing: 6) {
@@ -553,61 +465,6 @@ private struct LogListView: View {
         .buttonStyle(.plain)
         .glassCapsule()
         .accessibilityIdentifier("jumpToLatest")
-    }
-
-    /// Scrolling up (toward earlier logs) immediately stops auto-follow, so a busy
-    /// stream doesn't yank the view back to the bottom while you're reading.
-    private func installScrollMonitor() {
-        guard scrollMonitor == nil else { return }
-        scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
-            if event.scrollingDeltaY > 0.5, session.followTail { session.followTail = false }
-            return event
-        }
-    }
-    private func removeScrollMonitor() {
-        if let m = scrollMonitor { NSEvent.removeMonitor(m); scrollMonitor = nil }
-    }
-
-    // MARK: - Selection & copy
-
-    private func handleClick(_ line: LogLine) {
-        let mods = NSEvent.modifierFlags
-        if mods.contains(.shift), let anchor {
-            let seqs = session.visible.map(\.seq)   // O(n) — only on ⇧-click
-            if let a = seqs.firstIndex(of: anchor), let b = seqs.firstIndex(of: line.seq) {
-                let range = a <= b ? a...b : b...a
-                selection = Set(seqs[range])
-            }
-        } else if mods.contains(.command) {
-            if selection.contains(line.seq) { selection.remove(line.seq) } else { selection.insert(line.seq) }
-            anchor = line.seq
-        } else {
-            selection = [line.seq]
-            anchor = line.seq
-        }
-    }
-
-    @ViewBuilder
-    private func rowMenu(for line: LogLine) -> some View {
-        // Act on the selection if the right-clicked row is part of it, else just this row.
-        let target = selection.contains(line.seq) && selection.count > 1 ? selectedLines : [line]
-        let n = target.count
-        Button(n > 1 ? "Copy \(n) Messages" : "Copy Message") { copy(target, messagesOnly: true) }
-        Button(n > 1 ? "Copy \(n) Lines (with time & tag)" : "Copy Line") { copy(target, messagesOnly: false) }
-        Divider()
-        Button("Select All") {
-            selection = Set(session.visible.map(\.seq))
-            anchor = session.visible.last?.seq
-        }
-        if !selection.isEmpty {
-            Button("Deselect") { selection.removeAll(); anchor = nil }
-        }
-    }
-
-    private func copy(_ lines: [LogLine], messagesOnly: Bool) {
-        guard !lines.isEmpty else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(LogClipboard.text(for: lines, messagesOnly: messagesOnly), forType: .string)
     }
 }
 
