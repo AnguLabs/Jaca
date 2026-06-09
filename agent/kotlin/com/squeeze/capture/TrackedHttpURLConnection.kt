@@ -2,19 +2,16 @@ package com.squeeze.capture
 
 import java.io.InputStream
 import java.io.OutputStream
+import java.net.HttpURLConnection
 import java.net.URL
 import java.security.Permission
-import java.security.Principal
-import java.security.cert.Certificate
-import javax.net.ssl.HostnameVerifier
-import javax.net.ssl.HttpsURLConnection
-import javax.net.ssl.SSLSocketFactory
 
-/** Delegating HttpsURLConnection that records the request/response via SqueezeTracker. */
-class TrackedHttpsURLConnection(
-    private val d: HttpsURLConnection,
+/** Delegating HttpURLConnection (cleartext http://) that records the request/response
+ *  via SqueezeTracker. Mirrors TrackedHttpsURLConnection without the SSL specifics. */
+class TrackedHttpURLConnection(
+    private val d: HttpURLConnection,
     private val tracker: SqueezeTracker,
-) : HttpsURLConnection(d.url) {
+) : HttpURLConnection(d.url) {
 
     private var requestCaptured = false
 
@@ -22,8 +19,7 @@ class TrackedHttpsURLConnection(
         if (requestCaptured) return
         requestCaptured = true
         try {
-            // HttpURLConnection keeps requestMethod == "GET" until connect even when
-            // doOutput is set (which implies POST), so correct it here like AOSP does.
+            // requestMethod stays "GET" until connect even when doOutput implies POST.
             tracker.setMethod(if (d.doOutput && d.requestMethod == "GET") "POST" else d.requestMethod)
             tracker.setRequestHeaders(d.requestProperties)
         } catch (t: Throwable) {}
@@ -100,15 +96,4 @@ class TrackedHttpsURLConnection(
     override fun addRequestProperty(key: String?, value: String?) { d.addRequestProperty(key, value) }
     override fun getRequestProperty(key: String?): String? = d.getRequestProperty(key)
     override fun getRequestProperties(): MutableMap<String, MutableList<String>> = d.requestProperties
-
-    // --- HttpsURLConnection specifics ---
-    override fun getCipherSuite(): String? = d.cipherSuite
-    override fun getLocalCertificates(): Array<Certificate>? = d.localCertificates
-    override fun getServerCertificates(): Array<Certificate> = d.serverCertificates
-    override fun getPeerPrincipal(): Principal = d.peerPrincipal
-    override fun getLocalPrincipal(): Principal? = d.localPrincipal
-    override fun setHostnameVerifier(v: HostnameVerifier?) { d.hostnameVerifier = v }
-    override fun getHostnameVerifier(): HostnameVerifier = d.hostnameVerifier
-    override fun setSSLSocketFactory(sf: SSLSocketFactory?) { d.sslSocketFactory = sf }
-    override fun getSSLSocketFactory(): SSLSocketFactory = d.sslSocketFactory
 }

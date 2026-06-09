@@ -8,47 +8,58 @@ import java.lang.reflect.Proxy
 import java.util.zip.GZIPInputStream
 
 /**
- * Injects a capture interceptor into okhttp3 clients. We can't compile against the
- * app's okhttp (it's on the app class loader, not ours), so the interceptor is a
- * dynamic Proxy of okhttp3.Interceptor and all okhttp calls go through reflection.
+ * Injects a capture interceptor into okhttp clients (okhttp3 and okhttp2/squareup).
+ * We can't compile against the app's okhttp (it's on the app class loader, not ours),
+ * so the interceptor is a dynamic Proxy of the relevant Interceptor interface and all
+ * okhttp calls go through reflection.
  *
- * Hooked via SqueezeHooks on okhttp3.OkHttpClient.networkInterceptors(): the exit
- * hook returns a list with our interceptor prepended, so it runs for every call.
+ * Hooked via SqueezeHooks on OkHttpClient.networkInterceptors(): the exit hook returns
+ * a list with our interceptor prepended, so it runs for every call. okhttp3 and okhttp2
+ * expose the same chain methods (request()/proceed()) so one reflective Handler serves
+ * both; only the Interceptor interface type differs.
  */
 object OkHttpHook {
     private const val TAG = "SqueezeAgent"
-    private const val BODY_PEEK = 512L * 1024
+    private const val BODY_PEEK = 1024L * 1024   // cap captured bodies at 1 MB
 
-    @Volatile private var interceptor: Any? = null
-    @Volatile private var failed = false
+    private val interceptors = java.util.concurrent.ConcurrentHashMap<String, Any>()
+    private val failed = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
-    /** Returns a new list with our interceptor first, or the original on any failure. */
-    fun inject(existing: List<*>): List<*> {
-        val ic = ensureInterceptor() ?: return existing
-        // Avoid double-injecting if okhttp calls this twice for one chain.
+    /** Returns a list with our interceptor first, or the original on any failure.
+     *  [ifaceName] is the okhttp Interceptor interface to proxy (okhttp3 vs squareup). */
+    fun inject(existing: List<*>, ifaceName: String): List<*> {
+        val ic = ensureInterceptor(ifaceName) ?: return existing
         if (existing.any { it === ic }) return existing
-        val out = ArrayList<Any?>(existing.size + 1)
-        out.add(ic)
-        out.addAll(existing)
-        return out
+        // okhttp2's networkInterceptors() returns the live mutable list (add in place);
+        // okhttp3's is immutable, so fall back to a new prepended list.
+        return try {
+            @Suppress("UNCHECKED_CAST")
+            (existing as MutableList<Any?>).add(0, ic)
+            existing
+        } catch (t: Throwable) {
+            val out = ArrayList<Any?>(existing.size + 1)
+            out.add(ic)
+            out.addAll(existing)
+            out
+        }
     }
 
-    private fun ensureInterceptor(): Any? {
-        interceptor?.let { return it }
-        if (failed) return null
+    private fun ensureInterceptor(ifaceName: String): Any? {
+        interceptors[ifaceName]?.let { return it }
+        if (failed.contains(ifaceName)) return null
         synchronized(this) {
-            interceptor?.let { return it }
-            try {
+            interceptors[ifaceName]?.let { return it }
+            return try {
                 val loader = SqueezeHooks.appClassLoader ?: Thread.currentThread().contextClassLoader
-                val interceptorCls = Class.forName("okhttp3.Interceptor", false, loader)
+                val interceptorCls = Class.forName(ifaceName, false, loader)
                 val proxy = Proxy.newProxyInstance(loader, arrayOf(interceptorCls), Handler())
-                interceptor = proxy
-                Log.i(TAG, "okhttp3 capture interceptor installed")
-                return proxy
+                interceptors[ifaceName] = proxy
+                Log.i(TAG, "$ifaceName capture interceptor installed")
+                proxy
             } catch (t: Throwable) {
-                failed = true
-                Log.e(TAG, "okhttp3 interceptor build failed: $t")
-                return null
+                failed.add(ifaceName)
+                Log.e(TAG, "$ifaceName interceptor build failed: $t")
+                null
             }
         }
     }
@@ -66,7 +77,7 @@ object OkHttpHook {
             }
         }
 
-        // Mirrors AOSP's OkHttp3Interceptor: track the request up-front (best-effort),
+        // Mirrors AOSP's OkHttp{3,2}Interceptor: track the request up-front (best-effort),
         // run proceed(), and on failure record the error and RETHROW the real exception
         // so okhttp handles it normally (a cancel/IO error must not crash the app).
         private fun intercept(chain: Any): Any {
@@ -96,7 +107,7 @@ object OkHttpHook {
             }
         }
 
-        /** Records the request (method/url/headers) and returns the tracker, so the
+        /** Records the request (method/url/headers/body) and returns the tracker, so the
          *  transaction is emitted even if the call later fails/cancels. */
         private fun startTracker(request: Any): SqueezeTracker {
             val reqCls = request.javaClass
@@ -104,7 +115,33 @@ object OkHttpHook {
             val tracker = SqueezeTracker(url)
             (reqCls.getMethod("method").invoke(request) as? String)?.let { tracker.setMethod(it) }
             tracker.setRequestHeaders(headers(reqCls.getMethod("headers").invoke(request)))
+            captureRequestBody(request, tracker)
             return tracker
+        }
+
+        /** Capture the request body by writing it into a fresh okio Buffer — exactly what
+         *  AOSP does (write the RequestBody to a sink). We only do this for a known,
+         *  bounded length and never for one-shot/duplex bodies, so we can't consume a
+         *  body the app still needs to send. */
+        private fun captureRequestBody(request: Any, tracker: SqueezeTracker) {
+            try {
+                val body = request.javaClass.getMethod("body").invoke(request) ?: return
+                if (boolMethod(body, "isDuplex") || boolMethod(body, "isOneShot")) return
+                val len = longMethod(body, "contentLength")
+                if (len !in 1..BODY_PEEK) return   // skip empty / unknown / oversized
+                val writeTo = body.javaClass.methods.firstOrNull {
+                    it.name == "writeTo" && it.parameterTypes.size == 1
+                } ?: return
+                // The single param is okio.BufferedSink; the concrete Buffer that implements
+                // it lives next to it (okio.Buffer, or okhttp2's repackaged equivalent).
+                val sinkType = writeTo.parameterTypes[0]
+                val bufferCls = Class.forName(sinkType.name.replace("BufferedSink", "Buffer"),
+                                              false, sinkType.classLoader)
+                val buffer = bufferCls.getConstructor().newInstance()
+                writeTo.invoke(body, buffer)
+                val bytes = bufferCls.getMethod("readByteArray").invoke(buffer) as ByteArray
+                tracker.appendRequestBody(bytes, 0, bytes.size)
+            } catch (t: Throwable) { /* request body is best-effort */ }
         }
 
         private fun recordResponse(tracker: SqueezeTracker, response: Any) {
@@ -116,7 +153,8 @@ object OkHttpHook {
             // peekBody(n) does source.request(n), which BLOCKS until n bytes arrive or
             // the stream ends. On a streaming response (SSE/gRPC/long-poll) that would
             // stall the app from receiving its own body, so skip the eager peek there
-            // and bound it by Content-Length when known.
+            // and bound it by Content-Length when known. (okhttp2 has no peekBody, so the
+            // getMethod below throws and the body is simply skipped — that's fine.)
             if (!isStreaming(respHeaders)) {
                 try {
                     val len = contentLength(respHeaders)
@@ -132,6 +170,14 @@ object OkHttpHook {
 
             tracker.report()
         }
+
+        private fun boolMethod(obj: Any, name: String): Boolean = try {
+            obj.javaClass.getMethod(name).invoke(obj) as? Boolean ?: false
+        } catch (t: Throwable) { false }
+
+        private fun longMethod(obj: Any, name: String): Long = try {
+            (obj.javaClass.getMethod(name).invoke(obj) as? Long) ?: -1L
+        } catch (t: Throwable) { -1L }
 
         @Suppress("UNCHECKED_CAST")
         private fun headers(headers: Any?): Map<String, List<String>>? {

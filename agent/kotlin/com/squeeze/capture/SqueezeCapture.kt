@@ -2,6 +2,7 @@ package com.squeeze.capture
 
 import android.util.Log
 import com.squeeze.agent.SqueezeExitHandler
+import java.net.HttpURLConnection
 import javax.net.ssl.HttpsURLConnection
 
 /**
@@ -19,13 +20,20 @@ class SqueezeCapture : SqueezeExitHandler {
 
     override fun onExit(methodSignature: String?, returnObject: Any?): Any? {
         try {
-            if (returnObject is TrackedHttpsURLConnection) return returnObject
+            if (returnObject is TrackedHttpsURLConnection || returnObject is TrackedHttpURLConnection) return returnObject
+            // HttpsURLConnection is a subclass of HttpURLConnection, so check it first.
             if (returnObject is HttpsURLConnection) {
                 return TrackedHttpsURLConnection(returnObject, SqueezeTracker(returnObject.url.toString()))
             }
-            // okhttp3.OkHttpClient.networkInterceptors() → inject our interceptor
+            if (returnObject is HttpURLConnection) {   // cleartext http://
+                return TrackedHttpURLConnection(returnObject, SqueezeTracker(returnObject.url.toString()))
+            }
+            // OkHttpClient.networkInterceptors() → inject our interceptor. The method
+            // signature carries the declaring class, so route okhttp2 vs okhttp3.
             if (returnObject is List<*> && methodSignature?.contains("networkInterceptors") == true) {
-                return OkHttpHook.inject(returnObject)
+                val iface = if (methodSignature.contains("squareup")) "com.squareup.okhttp.Interceptor"
+                            else "okhttp3.Interceptor"
+                return OkHttpHook.inject(returnObject, iface)
             }
         } catch (t: Throwable) {
             Log.e(TAG, "onExit wrap error", t)

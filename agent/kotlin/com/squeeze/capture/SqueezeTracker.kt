@@ -94,17 +94,27 @@ class SqueezeTracker(private val url: String) {
         return try { String(data, Charsets.UTF_8) } catch (e: Exception) { "<${data.size} bytes>" }
     }
 
+    /** App-centric call stack: drop our agent, okhttp/okio, reflection and proxy frames
+     *  so the stack starts at the app code that issued the request (like AOSP slices the
+     *  okhttp frames off). */
     private fun captureStack(): List<String> {
         val st = Thread.currentThread().stackTrace
         val out = ArrayList<String>()
-        var i = 4
-        while (i < st.size && out.size < 24) {
-            val c = st[i].className
-            if (!c.startsWith("com.squeeze")) out.add(st[i].toString())
-            i++
+        for (e in st) {
+            if (isInfraFrame(e.className)) continue
+            out.add(e.toString())
+            if (out.size >= 24) break
         }
         return out
     }
 
-    companion object { private const val BODY_CAP = 256 * 1024 }
+    private fun isInfraFrame(c: String): Boolean =
+        c.startsWith("com.squeeze") ||
+        c.startsWith("okhttp3.") || c.startsWith("okhttp.") || c.startsWith("com.squareup.okhttp") ||
+        c.startsWith("okio.") ||
+        c.startsWith("java.lang.reflect.") || c.startsWith("jdk.internal.") ||
+        c.startsWith("dalvik.system.") || c.contains("\$Proxy") ||
+        c == "java.lang.Thread"
+
+    companion object { private const val BODY_CAP = 1024 * 1024 }
 }

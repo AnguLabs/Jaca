@@ -75,6 +75,10 @@ jint AttachAgent(JavaVM* vm, char* options) {
   // this is where the bulk of modern app traffic (incl. ktor-over-OkHttp) flows.
   squeeze::RegisterExitHookByName(jvmti, jni, "Lokhttp3/OkHttpClient;",
                                   "networkInterceptors", "()Ljava/util/List;");
+  // OkHttp2 (com.squareup.okhttp) for older apps/libraries — same hook, the capture
+  // routes by the declaring class in the method signature.
+  squeeze::RegisterExitHookByName(jvmti, jni, "Lcom/squareup/okhttp/OkHttpClient;",
+                                  "networkInterceptors", "()Ljava/util/List;");
 
   // Our dex is on the bootstrap loader, so FindClass (agent context → bootstrap)
   // resolves it directly.
