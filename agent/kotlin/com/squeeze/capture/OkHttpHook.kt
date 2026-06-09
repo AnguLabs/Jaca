@@ -113,12 +113,22 @@ object OkHttpHook {
             val respHeaders = headers(respCls.getMethod("headers").invoke(response))
             tracker.onResponse(code, respHeaders)
 
-            try {
-                val peek = respCls.getMethod("peekBody", java.lang.Long.TYPE).invoke(response, BODY_PEEK)
-                var bytes = peek.javaClass.getMethod("bytes").invoke(peek) as ByteArray
-                if (isGzip(respHeaders)) bytes = gunzip(bytes)
-                tracker.appendResponseBody(bytes, 0, bytes.size)
-            } catch (t: Throwable) { /* body optional */ }
+            // peekBody(n) does source.request(n), which BLOCKS until n bytes arrive or
+            // the stream ends. On a streaming response (SSE/gRPC/long-poll) that would
+            // stall the app from receiving its own body, so skip the eager peek there
+            // and bound it by Content-Length when known.
+            if (!isStreaming(respHeaders)) {
+                try {
+                    val len = contentLength(respHeaders)
+                    if (len != 0L) {
+                        val peekN = if (len in 1..BODY_PEEK) len else BODY_PEEK
+                        val peek = respCls.getMethod("peekBody", java.lang.Long.TYPE).invoke(response, peekN)
+                        var bytes = peek.javaClass.getMethod("bytes").invoke(peek) as ByteArray
+                        if (isGzip(respHeaders)) bytes = gunzip(bytes)
+                        tracker.appendResponseBody(bytes, 0, bytes.size)
+                    }
+                } catch (t: Throwable) { /* body optional */ }
+            }
 
             tracker.report()
         }
@@ -135,6 +145,21 @@ object OkHttpHook {
             val v = headers?.entries?.firstOrNull { it.key.equals("Content-Encoding", true) }?.value
             return v?.any { it.contains("gzip", true) } == true
         }
+
+        /** Content types that never end (or shouldn't be eagerly buffered) — peeking
+         *  these would block the app's own read. */
+        private fun isStreaming(headers: Map<String, List<String>>?): Boolean {
+            val ct = header(headers, "Content-Type")?.lowercase() ?: return false
+            return ct.startsWith("text/event-stream") ||
+                ct.startsWith("application/grpc") ||
+                ct.contains("x-mixed-replace")
+        }
+
+        private fun contentLength(headers: Map<String, List<String>>?): Long =
+            header(headers, "Content-Length")?.toLongOrNull() ?: -1L
+
+        private fun header(headers: Map<String, List<String>>?, name: String): String? =
+            headers?.entries?.firstOrNull { it.key.equals(name, true) }?.value?.firstOrNull()
 
         private fun gunzip(data: ByteArray): ByteArray = try {
             GZIPInputStream(data.inputStream()).readBytes()
