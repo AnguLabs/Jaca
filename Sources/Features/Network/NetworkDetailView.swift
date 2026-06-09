@@ -88,8 +88,15 @@ struct NetworkDetailView: View {
 
     private func headerSection(_ title: String, _ headers: [HeaderPair]) -> some View {
         VStack(alignment: .leading, spacing: LemonadeTheme.spaces.spacing100) {
-            LemonadeUi.Text(title.uppercased(), textStyle: LemonadeTypography.shared.bodyXSmallOverline,
-                            color: LemonadeTheme.colors.content.contentTertiary)
+            HStack(spacing: LemonadeTheme.spaces.spacing200) {
+                LemonadeUi.Text(title.uppercased(), textStyle: LemonadeTypography.shared.bodyXSmallOverline,
+                                color: LemonadeTheme.colors.content.contentTertiary)
+                Spacer(minLength: 0)
+                if !headers.isEmpty {
+                    LemonadeUi.IconButton(icon: .copy, contentDescription: "Copy \(title)",
+                                          onClick: { copyHeaders(headers) }, size: .small)
+                }
+            }
             if headers.isEmpty {
                 LemonadeUi.Text("—", textStyle: LemonadeTypography.shared.bodySmallRegular,
                                 color: LemonadeTheme.colors.content.contentTertiary)
@@ -110,6 +117,12 @@ struct NetworkDetailView: View {
         }
         .padding(.bottom, LemonadeTheme.spaces.spacing300)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func copyHeaders(_ headers: [HeaderPair]) {
+        let text = headers.map { "\($0.name): \($0.value)" }.joined(separator: "\n")
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 
     @ViewBuilder
