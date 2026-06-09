@@ -11,6 +11,7 @@ struct SettingsView: View {
     @AppStorage("adbPath") private var adbPath = ""
     @AppStorage("retentionDays") private var retentionDays = 7
     @AppStorage("colorScheme") private var colorScheme = "dark"
+    @State private var exclusions: [LogExcludeRule] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: LemonadeTheme.spaces.spacing500) {
@@ -62,6 +63,48 @@ struct SettingsView: View {
                 .frame(maxWidth: 280)
             }
 
+            section("Excluded log messages") {
+                LemonadeUi.Text(
+                    "Lines matching any rule are hidden in every log tab.",
+                    textStyle: LemonadeTypography.shared.bodyXSmallRegular,
+                    color: LemonadeTheme.colors.content.contentTertiary
+                )
+                ScrollView {
+                    VStack(spacing: LemonadeTheme.spaces.spacing100) {
+                        ForEach($exclusions) { $rule in
+                            HStack(spacing: LemonadeTheme.spaces.spacing200) {
+                                Picker("", selection: $rule.mode) {
+                                    ForEach(LogExcludeRule.Mode.allCases, id: \.self) { mode in
+                                        Text(mode.label).tag(mode)
+                                    }
+                                }
+                                .labelsHidden()
+                                .frame(width: 130)
+                                TextField("value", text: $rule.value)
+                                    .textFieldStyle(.roundedBorder)
+                                    .font(.system(size: 12, design: .monospaced))
+                                Button { exclusions.removeAll { $0.id == rule.id } } label: {
+                                    Image(systemName: "trash")
+                                        .foregroundStyle(LemonadeTheme.colors.content.contentCritical)
+                                }
+                                .buttonStyle(.plain)
+                                .help("Remove rule")
+                            }
+                        }
+                        if exclusions.isEmpty {
+                            LemonadeUi.Text("No rules — nothing is excluded.",
+                                            textStyle: LemonadeTypography.shared.bodyXSmallRegular,
+                                            color: LemonadeTheme.colors.content.contentTertiary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }
+                .frame(maxHeight: 130)
+                LemonadeUi.Button(label: "Add rule",
+                                  onClick: { exclusions.append(LogExcludeRule(value: "", mode: .prefix)) },
+                                  variant: .neutral, type: .subtle, size: .small)
+            }
+
             Spacer()
             HStack {
                 Spacer()
@@ -72,8 +115,10 @@ struct SettingsView: View {
             }
         }
         .padding(LemonadeTheme.spaces.spacing600)
-        .frame(width: 560, height: 460)
+        .frame(width: 560, height: 620)
         .background(LemonadeTheme.colors.background.bgDefault)
+        .onAppear { exclusions = LogExclusionStore.shared.rules }
+        .onChange(of: exclusions) { _, new in LogExclusionStore.shared.update(new) }
     }
 
     private var currentADBPlaceholder: String {

@@ -48,6 +48,12 @@ final class AppModel {
         }
         if !uiTestMode { pendingRestores = Self.loadPersistedTabs() }
         buildProviders()
+        // Push global message-exclusion edits to every open log tab, live.
+        LogExclusionStore.shared.onChange = { [weak self] in
+            guard let self else { return }
+            let rules = LogExclusionStore.shared.rules
+            for case let session as LogSession in self.sessions { session.applyExclusions(rules) }
+        }
         let store = history
         let cutoff = Date().addingTimeInterval(-retention)
         Task { await store?.prune(olderThan: cutoff) }
@@ -176,6 +182,8 @@ final class AppModel {
     func startSession(for device: Device, filter: LogFilter = LogFilter(),
                       name: String? = nil, autoStart: Bool = true) -> LogSession? {
         guard makeLogSource(for: device) != nil else { return nil }   // device has a usable source
+        var filter = filter
+        filter.exclusions = LogExclusionStore.shared.rules            // global hidden-message rules
         let store = history
         // adbURL is only used by the Android pid/clear helpers; a placeholder is
         // fine for iOS sessions (they never call those paths).

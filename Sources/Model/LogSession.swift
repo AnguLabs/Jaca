@@ -276,6 +276,14 @@ final class LogSession: WorkspaceTab {
     func setQuery(_ text: String) { mutateFilter { $0.query = text } }
     func setHideSystemLogs(_ on: Bool) { mutateFilter { $0.hideSystemLogs = on } }
 
+    /// Applies the global message-exclusion rules and re-filters (no persist callback —
+    /// the rules live in `LogExclusionStore`, not the per-tab descriptor).
+    func applyExclusions(_ rules: [LogExcludeRule]) {
+        filter.exclusions = rules
+        compiledRegex = filter.compiledRegex()
+        recomputeVisible()
+    }
+
     /// Sets the package filter: stores the label and (re)starts PID polling so the
     /// filter survives the app being killed/relaunched (PIDs change).
     func setPackage(_ package: String) {
