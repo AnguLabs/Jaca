@@ -412,11 +412,14 @@ private struct LogListView: View {
     @State private var anchor: UInt64?
     @State private var scrollMonitor: Any?
     @State private var pausedCount = 0      // visible.count when the user paused follow
+    @State private var frozen: [LogLine]?   // snapshot while paused, so streaming doesn't shift the view
 
     // Only render the most recent slice so the ForEach never diffs 100k rows; the
     // full buffer is still kept for filtering/selection/export.
     private let renderCap = 2_000
-    private var displayed: ArraySlice<LogLine> { session.visible.suffix(renderCap) }
+    // While following, show the live tail window; while paused (scrolled up), show a
+    // frozen snapshot so incoming lines don't slide the window and jump the scroll.
+    private var displayed: [LogLine] { frozen ?? Array(session.visible.suffix(renderCap)) }
 
     private var selectedLines: [LogLine] { session.visible.filter { selection.contains($0.seq) } }
 
@@ -465,8 +468,13 @@ private struct LogListView: View {
                     if isActive, session.followTail { proxy.scrollTo(bottomID, anchor: .bottom) }
                 }
                 .onChange(of: session.followTail) { _, follow in
-                    if follow { proxy.scrollTo(bottomID, anchor: .bottom) }
-                    else { pausedCount = session.visible.count }
+                    if follow {
+                        frozen = nil                                   // resume live tail
+                        proxy.scrollTo(bottomID, anchor: .bottom)
+                    } else {
+                        pausedCount = session.visible.count
+                        frozen = Array(session.visible.suffix(renderCap))  // freeze what's shown
+                    }
                 }
                 .onPreferenceChange(BottomAnchorKey.self) { minY in
                     // Resume following only when the user returns to the bottom; the
