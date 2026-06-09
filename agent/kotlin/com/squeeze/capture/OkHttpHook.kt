@@ -66,22 +66,48 @@ object OkHttpHook {
             }
         }
 
+        // Mirrors AOSP's OkHttp3Interceptor: track the request up-front (best-effort),
+        // run proceed(), and on failure record the error and RETHROW the real exception
+        // so okhttp handles it normally (a cancel/IO error must not crash the app).
         private fun intercept(chain: Any): Any {
             val chainCls = chain.javaClass
-            val request = chainCls.getMethod("request").invoke(chain)
-            // proceed() MUST run and its result MUST be returned, whatever else fails.
-            val response = chainCls.getMethod("proceed", request.javaClass).invoke(chain, request)
-            try { record(request, response) } catch (t: Throwable) { /* never break the call */ }
+            val request = invokeUnwrapped { chainCls.getMethod("request").invoke(chain) }
+            val tracker = try { startTracker(request) } catch (t: Throwable) { null }
+
+            val response: Any
+            try {
+                response = invokeUnwrapped { chainCls.getMethod("proceed", request.javaClass).invoke(chain, request) }
+            } catch (e: Throwable) {
+                try { tracker?.setError(e.toString()); tracker?.report() } catch (ignored: Throwable) {}
+                throw e
+            }
+
+            try { tracker?.let { recordResponse(it, response) } } catch (t: Throwable) { /* never break the call */ }
             return response
         }
 
-        private fun record(request: Any, response: Any) {
+        /** Runs a reflective call, rethrowing the real exception instead of the
+         *  InvocationTargetException wrapper that Method.invoke would otherwise leak. */
+        private inline fun invokeUnwrapped(block: () -> Any?): Any {
+            try {
+                return block()!!
+            } catch (e: java.lang.reflect.InvocationTargetException) {
+                throw e.targetException ?: e
+            }
+        }
+
+        /** Records the request (method/url/headers) and returns the tracker, so the
+         *  transaction is emitted even if the call later fails/cancels. */
+        private fun startTracker(request: Any): SqueezeTracker {
             val reqCls = request.javaClass
             val url = reqCls.getMethod("url").invoke(request).toString()
             val tracker = SqueezeTracker(url)
             (reqCls.getMethod("method").invoke(request) as? String)?.let { tracker.setMethod(it) }
             tracker.setRequestHeaders(headers(reqCls.getMethod("headers").invoke(request)))
+            return tracker
+        }
 
+        private fun recordResponse(tracker: SqueezeTracker, response: Any) {
             val respCls = response.javaClass
             val code = respCls.getMethod("code").invoke(response) as Int
             val respHeaders = headers(respCls.getMethod("headers").invoke(response))

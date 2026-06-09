@@ -43,14 +43,20 @@ private final class StatusBox: @unchecked Sendable {
 final class LiveAgentCaptureTests: XCTestCase {
     func testAgentCapturesLive() async throws {
         let adb = try XCTUnwrap(AndroidToolchain.adbURL(), "adb not found")
-        let serial = "emulator-5554"
         let pkg = "com.teya.ac.dev"
-
-        let devices = try? await CommandRunner.run(adb, ["devices"])
-        try XCTSkipUnless(devices?.stdout.contains(serial) == true, "no emulator")
         try XCTSkipUnless(AgentArtifacts.isAvailable, "agent artifacts not built (run agent/build*.sh)")
-        let debuggable = await AgentController.isDebuggable(adbURL: adb, serial: serial, package: pkg)
-        try XCTSkipUnless(debuggable, "test app not present/debuggable")
+
+        // Pick whichever attached device actually has the debuggable test app, so the
+        // test isn't pinned to one emulator serial.
+        let listing = (try? await CommandRunner.run(adb, ["devices"]))?.stdout ?? ""
+        let serials = listing.split(separator: "\n").dropFirst()
+            .compactMap { $0.split(whereSeparator: { $0 == "\t" || $0 == " " }).first.map(String.init) }
+            .filter { !$0.isEmpty }
+        var picked: String?
+        for s in serials where await AgentController.isDebuggable(adbURL: adb, serial: s, package: pkg) {
+            picked = s; break
+        }
+        let serial = try XCTUnwrap(picked, "test app not present/debuggable on any device")
 
         // Fresh process so we attach to a stable, known pid (no pid churn).
         let act = "\(pkg)/com.teya.ac.TeyaActivity"
