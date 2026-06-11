@@ -60,10 +60,13 @@ final class LogSession: WorkspaceTab {
     /// opposed to an append. The virtualized list uses it to choose a full reload vs
     /// a cheap row-count update.
     private(set) var listEpoch = 0
-    /// Crashes (FATAL EXCEPTION / native fatal) detected among the filtered lines.
-    private(set) var crashCount = 0
-    private(set) var lastCrashSeq: UInt64?
-    /// Set to a line seq to request the list scroll to it (e.g. jump to last crash).
+    /// Seqs of detected crashes (FATAL EXCEPTION / native fatal), oldest→newest.
+    private(set) var crashSeqs: [UInt64] = []
+    /// Which crash the up/down navigation is currently on (nil = none selected yet).
+    private(set) var crashCursor: Int?
+    var crashCount: Int { crashSeqs.count }
+    var lastCrashSeq: UInt64? { crashSeqs.last }
+    /// Set to a line seq to request the list scroll to it (crash navigation).
     var scrollTarget: UInt64?
     var followTail = true
     var statusMessage: String?
@@ -175,11 +178,27 @@ final class LogSession: WorkspaceTab {
         pending.append(m)
     }
 
-    /// Pauses follow and scrolls the list to the most recent crash.
-    func jumpToLastCrash() {
-        guard let seq = lastCrashSeq else { return }
+    /// Navigate to the next crash (downward / newer). With nothing selected yet it
+    /// jumps to the first; it wraps to the top after the last.
+    func nextCrash() { moveCrash(forward: true) }
+    /// Navigate to the previous crash (upward / older). With nothing selected it jumps
+    /// to the last; it wraps to the bottom before the first.
+    func previousCrash() { moveCrash(forward: false) }
+
+    private func moveCrash(forward: Bool) {
+        guard let target = Self.nextCrashIndex(cursor: crashCursor, count: crashSeqs.count, forward: forward)
+        else { return }
+        crashCursor = target
         followTail = false
-        scrollTarget = seq
+        scrollTarget = crashSeqs[target]
+    }
+
+    /// Cycling crash index: nil + forward → first, nil + back → last; otherwise step
+    /// and wrap. Returns nil when there are no crashes.
+    nonisolated static func nextCrashIndex(cursor: Int?, count: Int, forward: Bool) -> Int? {
+        guard count > 0 else { return nil }
+        if let c = cursor { return forward ? (c + 1) % count : (c - 1 + count) % count }
+        return forward ? 0 : count - 1
     }
 
     func stop() {
@@ -257,8 +276,8 @@ final class LogSession: WorkspaceTab {
         visible.removeAll(keepingCapacity: true)
         totalCount = 0
         droppedCount = 0
-        crashCount = 0
-        lastCrashSeq = nil
+        crashSeqs.removeAll()
+        crashCursor = nil
         listEpoch &+= 1
     }
 
@@ -374,8 +393,7 @@ final class LogSession: WorkspaceTab {
         for line in batch where filter.matches(line, regex: compiledRegex) {
             visible.append(line)
             if CrashDetector.isCrash(line) {
-                crashCount += 1
-                lastCrashSeq = line.seq
+                crashSeqs.append(line.seq)
                 injectMarker("💥 \(CrashDetector.label(line))", critical: true)
             }
         }

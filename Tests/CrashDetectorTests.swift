@@ -23,6 +23,29 @@ final class CrashDetectorTests: XCTestCase {
         XCTAssertTrue(CrashDetector.label(line(tag: "AndroidRuntime", "FATAL EXCEPTION: main")).contains("FATAL EXCEPTION"))
         XCTAssertEqual(CrashDetector.label(line(tag: "libc", "Fatal signal 11")), "native crash")
     }
+
+    // MARK: - Crash navigation (cycling)
+
+    func testCrashNavStartsAtFirstOrLastWhenUnselected() {
+        XCTAssertEqual(LogSession.nextCrashIndex(cursor: nil, count: 3, forward: true), 0)   // ▼ → first
+        XCTAssertEqual(LogSession.nextCrashIndex(cursor: nil, count: 3, forward: false), 2)  // ▲ → last
+    }
+
+    func testCrashNavCycles() {
+        // ▼ steps forward and wraps past the last back to the first
+        XCTAssertEqual(LogSession.nextCrashIndex(cursor: 0, count: 3, forward: true), 1)
+        XCTAssertEqual(LogSession.nextCrashIndex(cursor: 1, count: 3, forward: true), 2)
+        XCTAssertEqual(LogSession.nextCrashIndex(cursor: 2, count: 3, forward: true), 0)
+        // ▲ steps backward and wraps before the first to the last
+        XCTAssertEqual(LogSession.nextCrashIndex(cursor: 2, count: 3, forward: false), 1)
+        XCTAssertEqual(LogSession.nextCrashIndex(cursor: 0, count: 3, forward: false), 2)
+    }
+
+    func testCrashNavEmptyAndSingle() {
+        XCTAssertNil(LogSession.nextCrashIndex(cursor: nil, count: 0, forward: true))
+        XCTAssertEqual(LogSession.nextCrashIndex(cursor: 0, count: 1, forward: true), 0)   // single → stays
+        XCTAssertEqual(LogSession.nextCrashIndex(cursor: 0, count: 1, forward: false), 0)
+    }
 }
 
 /// Live: inject a fake crash line via `adb log` and confirm the counter + marker.

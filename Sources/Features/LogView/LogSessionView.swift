@@ -133,24 +133,42 @@ struct LogSessionView: View {
         .background(LemonadeTheme.colors.background.bgElevated)
     }
 
-    /// Red, clickable crash counter — jumps to the most recent crash.
+    /// Red crash counter with up/down navigation. ▲ goes to the previous (older) crash,
+    /// ▼ to the next (newer); both cycle, and with nothing selected ▼ starts at the
+    /// first and ▲ at the last.
     private var crashBadge: some View {
-        Button(action: { session.jumpToLastCrash() }) {
-            HStack(spacing: 5) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 10, weight: .bold))
-                Text("\(session.crashCount) crash\(session.crashCount == 1 ? "" : "es")")
-                    .font(.system(size: 11, weight: .semibold))
-            }
-            .foregroundStyle(LemonadeTheme.colors.content.contentCritical)
-            .padding(.horizontal, 9)
-            .frame(height: 30)
-            .background(Capsule().fill(LemonadeTheme.colors.content.contentCritical.opacity(0.14)))
-            .overlay(Capsule().strokeBorder(LemonadeTheme.colors.content.contentCritical.opacity(0.4), lineWidth: 1))
+        HStack(spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 10, weight: .bold))
+            Text(crashLabel)
+                .font(.system(size: 11, weight: .semibold))
+                .monospacedDigit()
+            crashArrow("chevron.up", help: "Previous crash") { session.previousCrash() }
+            crashArrow("chevron.down", help: "Next crash") { session.nextCrash() }
+        }
+        .foregroundStyle(LemonadeTheme.colors.content.contentCritical)
+        .padding(.horizontal, 9)
+        .frame(height: 30)
+        .background(Capsule().fill(LemonadeTheme.colors.content.contentCritical.opacity(0.14)))
+        .overlay(Capsule().strokeBorder(LemonadeTheme.colors.content.contentCritical.opacity(0.4), lineWidth: 1))
+        .accessibilityIdentifier("crashBadge")
+    }
+
+    /// "3 crashes" before you start navigating, then "2/3" once you're on one.
+    private var crashLabel: String {
+        if let c = session.crashCursor { return "\(c + 1)/\(session.crashCount)" }
+        return "\(session.crashCount) crash\(session.crashCount == 1 ? "" : "es")"
+    }
+
+    private func crashArrow(_ icon: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .bold))
+                .frame(width: 18, height: 22)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("Jump to the most recent crash")
-        .accessibilityIdentifier("crashBadge")
+        .help(help)
     }
 
     private var clearMenu: some View {
