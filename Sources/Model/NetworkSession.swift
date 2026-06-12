@@ -20,7 +20,9 @@ final class NetworkSession: WorkspaceTab {
     private(set) var isRunning = false
     private(set) var isConnecting = false
     private(set) var transactions: [NetworkTransaction] = []
-    var selectedID: UUID?
+    var selectedID: UUID? {
+        didSet { if let id = selectedID, id != oldValue { ensureBodies(for: id) } }
+    }
     var filterText = ""
     /// Time window selected on the timeline; nil = all time.
     var selectedTimeRange: ClosedRange<Date>?
@@ -45,6 +47,11 @@ final class NetworkSession: WorkspaceTab {
     private var proxy: ProxyServer?
     private var agent: AgentController?
     private var indexByID: [UUID: Int] = [:]
+    private let bodyCache: NetworkBodyCache?
+    /// Full request/response bodies stay in memory for the most recent N transactions;
+    /// older ones spill to the on-disk cache (metadata stays, so the list and timeline
+    /// still render) and load back on demand when opened.
+    private let bodiesInMemory = 1_000
 
     var subtitle: String {
         var parts = [device.displayModel, captureMode.label]
@@ -76,11 +83,13 @@ final class NetworkSession: WorkspaceTab {
         return transactions[idx]
     }
 
-    init(device: Device, ca: CertificateAuthority, adbURL: URL?, displayName: String? = nil) {
+    init(device: Device, ca: CertificateAuthority, adbURL: URL?, displayName: String? = nil,
+         bodyCache: NetworkBodyCache? = nil) {
         self.device = device
         self.ca = ca
         self.adbURL = adbURL
         self.displayName = displayName ?? "Network · \(device.displayModel)"
+        self.bodyCache = bodyCache
     }
 
     /// Explicitly begin device-wide MITM proxy capture. On Android this configures
@@ -277,12 +286,57 @@ final class NetworkSession: WorkspaceTab {
         selectedTimeRange = nil   // reset the timeline window too
     }
 
-    private func upsert(_ txn: NetworkTransaction) {
+    func upsert(_ txn: NetworkTransaction) {   // internal: capture pipeline + tests
         if let idx = indexByID[txn.id] {
             transactions[idx] = txn
         } else {
             indexByID[txn.id] = transactions.count
             transactions.append(txn)
+            // Nothing is dropped — spill the body of whichever transaction just fell
+            // out of the in-memory window to disk (its metadata stays for the list).
+            if transactions.count > bodiesInMemory {
+                evictBodies(at: transactions.count - bodiesInMemory - 1)
+            }
+        }
+    }
+
+    /// Persists an older transaction's bodies to the disk cache, then clears them from
+    /// memory (the list/timeline only need metadata; the detail view reloads on open).
+    private func evictBodies(at index: Int) {
+        guard let cache = bodyCache,
+              index >= 0, index < transactions.count, !transactions[index].bodiesEvicted else { return }
+        let txn = transactions[index]
+        guard txn.requestBody != nil || txn.responseBody != nil else {
+            transactions[index].bodiesEvicted = true; return
+        }
+        let id = txn.id, req = txn.requestBody, resp = txn.responseBody
+        Task {
+            await cache.save(id, req: req, resp: resp)
+            await MainActor.run { [weak self] in self?.stripBodies(id) }
+        }
+    }
+
+    private func stripBodies(_ id: UUID) {
+        guard let idx = indexByID[id] else { return }
+        transactions[idx].requestBody = nil
+        transactions[idx].responseBody = nil
+        transactions[idx].bodiesEvicted = true
+    }
+
+    /// Loads an evicted transaction's bodies back from disk (when it's selected). The
+    /// detail view re-renders once they arrive.
+    func ensureBodies(for id: UUID) {
+        guard let idx = indexByID[id], transactions[idx].bodiesEvicted,
+              transactions[idx].requestBody == nil, transactions[idx].responseBody == nil,
+              let cache = bodyCache else { return }
+        Task {
+            let bodies = await cache.load(id)
+            await MainActor.run { [weak self] in
+                guard let self, let i = self.indexByID[id] else { return }
+                self.transactions[i].requestBody = bodies.req
+                self.transactions[i].responseBody = bodies.resp
+                self.transactions[i].bodiesEvicted = false
+            }
         }
     }
 

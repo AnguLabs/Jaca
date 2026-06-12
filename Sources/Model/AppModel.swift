@@ -225,6 +225,9 @@ final class AppModel {
     }
 
     private var ca: CertificateAuthority?
+    /// Shared on-disk cache for older network-transaction bodies (keeps RAM flat on
+    /// long-running capture sessions).
+    private let bodyCache = NetworkBodyCache()
 
     @discardableResult
     func startNetworkSession(for device: Device, name: String? = nil, autoStart: Bool = true) -> NetworkSession? {
@@ -235,7 +238,8 @@ final class AppModel {
             ca = made
             authority = made
         }
-        let session = NetworkSession(device: device, ca: authority, adbURL: adbURL, displayName: name)
+        let session = NetworkSession(device: device, ca: authority, adbURL: adbURL,
+                                     displayName: name, bodyCache: bodyCache)
         session.onStateChanged = { [weak self] in self?.persistTabs() }
         sessions.append(session)
         selectedSessionID = session.id

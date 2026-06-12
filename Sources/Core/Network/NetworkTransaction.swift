@@ -34,6 +34,10 @@ struct NetworkTransaction: Identifiable, Sendable, Hashable {
     /// Initiating call stack — only the in-process agent can provide this; nil for proxy capture.
     var callStack: [String]? = nil
 
+    /// True once this (older) transaction's bodies have been spilled to the on-disk
+    /// cache and cleared from memory; the detail view loads them back on demand.
+    var bodiesEvicted = false
+
     init(id: UUID = UUID(), method: String, url: String, host: String, scheme: String,
          requestHeaders: [HeaderPair] = [], requestBody: Data? = nil, startedAt: Date = Date()) {
         self.id = id
