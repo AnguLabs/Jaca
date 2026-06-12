@@ -26,6 +26,9 @@ struct RootView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { model.persistTabs() }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .openWorktrees)) { note in
+            if let folder = note.object as? URL { model.openWorktreesTab(folder: folder) }
+        }
     }
 
     @ViewBuilder
