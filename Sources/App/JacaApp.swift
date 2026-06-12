@@ -31,6 +31,16 @@ struct JacaApp: App {
         }
         .defaultSize(width: 1180, height: 760)
         .windowToolbarStyle(.unified(showsTitle: true))
+        .commands {
+            CommandGroup(after: .newItem) {
+                Button("Open Worktrees…") {
+                    if let folder = WorktreesOpen.pickFolder() {
+                        NotificationCenter.default.post(name: .openWorktrees, object: folder)
+                    }
+                }
+                .keyboardShortcut("o", modifiers: [.command, .shift])
+            }
+        }
     }
 
     private var preferredScheme: ColorScheme? {

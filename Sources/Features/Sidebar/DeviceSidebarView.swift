@@ -17,6 +17,13 @@ struct DeviceSidebarView: View {
                     color: LemonadeTheme.colors.content.contentPrimary
                 )
                 Spacer()
+                Button(action: openWorktrees) {
+                    Image(systemName: "folder.badge.plus")
+                        .foregroundStyle(LemonadeTheme.colors.content.contentSecondary)
+                }
+                .buttonStyle(.plain)
+                .help("Open Worktrees…")
+                .accessibilityIdentifier("worktreesButton")
                 LemonadeUi.IconButton(
                     icon: .clockArrowUp, contentDescription: "History",
                     onClick: { showHistory = true }, size: .small
@@ -73,6 +80,10 @@ struct DeviceSidebarView: View {
         .sheet(isPresented: $showSettings) {
             SettingsView(model: model)
         }
+    }
+
+    private func openWorktrees() {
+        if let folder = WorktreesOpen.pickFolder() { model.openWorktreesTab(folder: folder) }
     }
 
     private var platforms: [DevicePlatform] {
