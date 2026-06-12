@@ -61,6 +61,8 @@ struct RootView: View {
             LogSessionView(session: log, isActive: isActive)
         } else if let net = session as? NetworkSession {
             NetworkSessionView(session: net)
+        } else if let wt = session as? WorktreesTab {
+            WorktreesView(tab: wt)
         }
     }
 }

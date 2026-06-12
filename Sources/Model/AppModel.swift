@@ -216,6 +216,13 @@ final class AppModel {
         return session
     }
 
+    /// Opens a folder-bound worktrees tab and selects it.
+    func openWorktreesTab(folder: URL) {
+        let t = WorktreesTab(folder: folder)
+        sessions.append(t)
+        selectedSessionID = t.id
+    }
+
     private var ca: CertificateAuthority?
 
     @discardableResult
