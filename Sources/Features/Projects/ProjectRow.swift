@@ -161,8 +161,7 @@ struct ProjectCheckoutRow: View {
     let model: ProjectsModel
 
     @State private var hovering = false
-    @State private var confirmingClear = false
-    @State private var confirmingDelete = false
+    @State private var showingActions = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -213,7 +212,7 @@ struct ProjectCheckoutRow: View {
                 .frame(minWidth: 60, alignment: .trailing)
                 .animation(.easeInOut, value: checkout.dropped)
 
-            actions
+            configButton
         }
         .padding(.vertical, 7)
         .padding(.trailing, 12)
@@ -222,34 +221,26 @@ struct ProjectCheckoutRow: View {
         .opacity(checkout.removing ? 0 : 1)
         .animation(.easeInOut(duration: 0.28), value: checkout.removing)
         .onHover { hovering = $0 }
+        .sheet(isPresented: $showingActions) {
+            CheckoutActionsSheet(project: project, checkout: checkout, model: model)
+        }
     }
 
-    private var actions: some View {
-        HStack(spacing: 6) {
-            LemonadeUi.Button(
-                label: checkout.cleaning ? "Cleaning…" : (confirmingClear ? "Confirm?" : "Clean"),
-                onClick: { handleClearTap() },
-                leadingIcon: .trash,
-                variant: .neutral,
-                type: confirmingClear ? .solid : .subtle,
-                size: .xSmall,
-                enabled: !checkout.cleaning,
-                loading: checkout.cleaning
+    /// A single gear button that opens the actions sheet (Clean / Delete with descriptions).
+    private var configButton: some View {
+        Button(action: { showingActions = true }) {
+            LemonadeUi.Icon(
+                icon: .gear,
+                contentDescription: "Configure",
+                size: .small,
+                tint: checkout.cleaning
+                    ? LemonadeTheme.colors.content.contentTertiary
+                    : LemonadeTheme.colors.content.contentSecondary
             )
-            .fixedSize()
-
-            if !checkout.isMain {
-                LemonadeUi.Button(
-                    label: confirmingDelete ? "Confirm?" : "Delete",
-                    onClick: { handleDeleteTap() },
-                    leadingIcon: .trash,
-                    variant: .critical,
-                    type: confirmingDelete ? .solid : .subtle,
-                    size: .xSmall
-                )
-                .fixedSize()
-            }
         }
+        .buttonStyle(.plain)
+        .disabled(checkout.cleaning)
+        .help("Cache & worktree actions")
     }
 
     // MARK: - Tags
@@ -282,33 +273,5 @@ struct ProjectCheckoutRow: View {
     private var sizeText: String {
         if checkout.cleaning { return "cleaning…" }
         return checkout.sizeComputed ? formatSize(checkout.sizeMB) : "—"
-    }
-
-    // MARK: - Two-click confirms
-
-    private func handleClearTap() {
-        if confirmingClear {
-            confirmingClear = false
-            model.clearCache(project: project.id, checkout: checkout.id)
-        } else {
-            confirmingClear = true
-            Task { @MainActor in
-                try? await Task.sleep(for: .seconds(3))
-                confirmingClear = false
-            }
-        }
-    }
-
-    private func handleDeleteTap() {
-        if confirmingDelete {
-            confirmingDelete = false
-            model.deleteWorktree(project: project.id, checkout: checkout.id)
-        } else {
-            confirmingDelete = true
-            Task { @MainActor in
-                try? await Task.sleep(for: .seconds(3))
-                confirmingDelete = false
-            }
-        }
     }
 }
