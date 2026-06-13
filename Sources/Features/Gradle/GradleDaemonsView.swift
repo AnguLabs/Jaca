@@ -47,21 +47,11 @@ struct GradleDaemonsView: View {
                     color: LemonadeTheme.colors.content.contentSecondary
                 )
             }
-            ForEach(model.cacheEntries) { entry in
-                HStack {
-                    LemonadeUi.Text(
-                        entry.version,
-                        textStyle: LemonadeTypography.shared.bodySmallMedium,
-                        color: LemonadeTheme.colors.content.contentPrimary,
-                        maxLines: 1
-                    )
-                    Spacer()
-                    Text(formatSize(entry.sizeMB))
-                        .font(.system(size: 12, weight: .medium, design: .monospaced))
-                        .monospacedDigit()
-                        .foregroundStyle(LemonadeTheme.colors.content.contentSecondary)
+            // Versions side by side (wraps to new lines when there are many).
+            FlowLayout(spacing: 8, lineSpacing: 8) {
+                ForEach(model.cacheEntries) { entry in
+                    GradleCacheCard(entry: entry, model: model)
                 }
-                .padding(.vertical, 1)
             }
         }
         .padding(12)
@@ -104,6 +94,54 @@ struct GradleDaemonsView: View {
             .padding(.vertical, 6)
         }
         .frame(maxHeight: .infinity)
+    }
+}
+
+/// A compact card for one Gradle version's cache: version, size, and a 2-click-confirm Delete.
+private struct GradleCacheCard: View {
+    let entry: GradleCacheEntry
+    let model: GradleDaemonsModel
+    @State private var confirming = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            LemonadeUi.Text(
+                entry.version,
+                textStyle: LemonadeTypography.shared.bodySmallSemiBold,
+                color: LemonadeTheme.colors.content.contentPrimary
+            )
+            Text(formatSize(entry.sizeMB))
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .monospacedDigit()
+                .foregroundStyle(LemonadeTheme.colors.content.contentSecondary)
+            LemonadeUi.Button(
+                label: confirming ? "Confirm?" : "Delete",
+                onClick: { handleTap() },
+                leadingIcon: .trash,
+                variant: .critical,
+                type: confirming ? .solid : .subtle,
+                size: .xSmall
+            )
+            .fixedSize()
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(LemonadeTheme.colors.background.bgDefault)
+        )
+    }
+
+    private func handleTap() {
+        if confirming {
+            confirming = false
+            model.deleteCache(entry.version)
+        } else {
+            confirming = true
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(3))
+                confirming = false
+            }
+        }
     }
 }
 

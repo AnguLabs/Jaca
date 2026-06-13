@@ -70,6 +70,14 @@ struct GradleDaemonService: Sendable {
         return entries.sorted { $0.sizeMB > $1.sizeMB }
     }
 
+    /// Deletes `~/.gradle/caches/<version>`. Returns true on success.
+    func deleteCache(version: String) async -> Bool {
+        let dir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".gradle/caches/\(version)")
+        do { try FileManager.default.removeItem(at: dir); return true }
+        catch { return false }
+    }
+
     private func duKB(_ path: String) async -> Int {
         guard let r = try? await CommandRunner.run(URL(fileURLWithPath: "/usr/bin/du"), ["-sk", path]) else { return 0 }
         let first = r.stdout.split(whereSeparator: { $0 == "\t" || $0 == " " || $0 == "\n" }).first
