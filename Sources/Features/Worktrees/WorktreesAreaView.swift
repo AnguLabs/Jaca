@@ -86,6 +86,7 @@ struct WorktreesAreaView: View {
                 type: .solid,
                 size: .medium
             )
+            .fixedSize()   // hug the label instead of stretching full-width
             .padding(.top, LemonadeTheme.spaces.spacing200)
         }
         .padding(LemonadeTheme.spaces.spacing800)

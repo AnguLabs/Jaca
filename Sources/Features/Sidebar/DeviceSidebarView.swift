@@ -14,7 +14,9 @@ struct DeviceSidebarView: View {
                 LemonadeUi.Text(
                     "Devices",
                     textStyle: LemonadeTypography.shared.headingXSmall,
-                    color: LemonadeTheme.colors.content.contentPrimary
+                    color: model.mode == .devices
+                        ? LemonadeTheme.colors.content.contentPrimary
+                        : LemonadeTheme.colors.content.contentSecondary
                 )
                 Spacer()
                 LemonadeUi.IconButton(
@@ -30,7 +32,14 @@ struct DeviceSidebarView: View {
                 .help("Settings")
                 .accessibilityIdentifier("settingsButton")
             }
-            .padding(.top, LemonadeTheme.spaces.spacing200)
+            .padding(.horizontal, LemonadeTheme.spaces.spacing200)
+            .padding(.vertical, LemonadeTheme.spaces.spacing150)
+            .background(
+                RoundedRectangle(cornerRadius: LemonadeTheme.radius.radius150)
+                    .fill(model.mode == .devices ? LemonadeTheme.colors.interaction.bgSubtleInteractive : .clear)
+            )
+            .contentShape(Rectangle())
+            .onTapGesture { model.mode = .devices }
 
             if model.adbURL == nil {
                 adbMissingNotice
