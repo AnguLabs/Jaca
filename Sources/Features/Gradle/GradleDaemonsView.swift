@@ -26,7 +26,9 @@ struct GradleDaemonsView: View {
 
     @ViewBuilder private var content: some View {
         VStack(spacing: 0) {
-            if !model.cacheEntries.isEmpty { cacheSection }
+            // The cache lives on disk regardless of running daemons, so it always shows
+            // (with a "Calculating…" state while `du` runs on first open).
+            if model.cacheLoading || !model.cacheEntries.isEmpty { cacheSection }
             daemonsSection
         }
     }
@@ -42,15 +44,27 @@ struct GradleDaemonsView: View {
                 )
                 Spacer()
                 LemonadeUi.Text(
-                    "\(formatSize(model.cacheTotalMB)) total",
+                    model.cacheEntries.isEmpty ? "Calculating…" : "\(formatSize(model.cacheTotalMB)) total",
                     textStyle: LemonadeTypography.shared.bodyXSmallRegular,
                     color: LemonadeTheme.colors.content.contentSecondary
                 )
             }
-            // Versions side by side (wraps to new lines when there are many).
-            FlowLayout(spacing: 8, lineSpacing: 8) {
-                ForEach(model.cacheEntries) { entry in
-                    GradleCacheCard(entry: entry, model: model)
+            if model.cacheEntries.isEmpty && model.cacheLoading {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    LemonadeUi.Text(
+                        "Measuring cache size…",
+                        textStyle: LemonadeTypography.shared.bodySmallRegular,
+                        color: LemonadeTheme.colors.content.contentSecondary
+                    )
+                }
+                .padding(.vertical, 4)
+            } else {
+                // Versions side by side (wraps to new lines when there are many).
+                FlowLayout(spacing: 8, lineSpacing: 8) {
+                    ForEach(model.cacheEntries) { entry in
+                        GradleCacheCard(entry: entry, model: model)
+                    }
                 }
             }
         }
@@ -64,22 +78,32 @@ struct GradleDaemonsView: View {
     }
 
     @ViewBuilder private var daemonsSection: some View {
-        if model.daemons.isEmpty {
-            emptyState
-        } else {
-            readyState
+        VStack(alignment: .leading, spacing: 6) {
+            LemonadeUi.Text(
+                "DAEMONS",
+                textStyle: LemonadeTypography.shared.bodyXSmallOverline,
+                color: LemonadeTheme.colors.content.contentTertiary
+            )
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
+
+            if model.daemons.isEmpty {
+                emptyState
+            } else {
+                readyState
+            }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var emptyState: some View {
         LemonadeUi.Text(
             "No Gradle daemons running",
             textStyle: LemonadeTypography.shared.bodyMediumRegular,
-            textAlign: .center,
             color: LemonadeTheme.colors.content.contentSecondary
         )
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(24)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
         .accessibilityIdentifier("gradleEmptyState")
     }
 
