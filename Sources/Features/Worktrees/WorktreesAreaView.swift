@@ -44,7 +44,7 @@ struct WorktreesAreaView: View {
     /// affordance is always reachable once a folder has been chosen.
     @ViewBuilder private func folderHeaderWrapped<Content: View>(@ViewBuilder _ inner: () -> Content) -> some View {
         VStack(spacing: 0) {
-            FolderBar(model: model, onChangeFolder: changeFolder)
+            FolderBar(model: model)
             inner()
         }
     }
@@ -125,7 +125,7 @@ struct WorktreesAreaView: View {
 
     private var readyState: some View {
         VStack(spacing: 0) {
-            FolderBar(model: model, onChangeFolder: changeFolder)
+            FolderBar(model: model)
             SectionLabel(model: model)
 
             ScrollView {
