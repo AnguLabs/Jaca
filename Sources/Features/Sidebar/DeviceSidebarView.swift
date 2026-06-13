@@ -33,7 +33,7 @@ struct DeviceSidebarView: View {
                 .accessibilityIdentifier("settingsButton")
             }
             .padding(.horizontal, LemonadeTheme.spaces.spacing200)
-            .padding(.vertical, LemonadeTheme.spaces.spacing150)
+            .padding(.vertical, LemonadeTheme.spaces.spacing100)
             .background(
                 RoundedRectangle(cornerRadius: LemonadeTheme.radius.radius150)
                     .fill(model.mode == .devices ? LemonadeTheme.colors.interaction.bgSubtleInteractive : .clear)
