@@ -40,6 +40,7 @@ struct RootView: View {
             // navigates the main area to the worktrees view when tapped. The Devices
             // header + device list stay below, unchanged.
             WorktreesSidebarHeader(model: model)
+            GradleSidebarHeader(model: model)
             Divider()
             DeviceSidebarView(model: model)
         }
@@ -52,6 +53,8 @@ struct RootView: View {
     private var detail: some View {
         if model.mode == .worktrees {
             WorktreesAreaView(model: model.worktrees)
+        } else if model.mode == .gradle {
+            GradleDaemonsView(model: model.gradle)
         } else {
             devicesDetail
         }
