@@ -7,8 +7,13 @@ import Lemonade
 /// are handled in `ProxyCleanup`; a hard SIGKILL is covered by the sidebar
 /// "Revert" affordance.
 final class JacaAppDelegate: NSObject, NSApplicationDelegate {
-    /// Keep Jaca running (and its menu-bar icon visible) after the window is closed —
-    /// it lives in the menu bar; quit explicitly from there or with ⌘Q.
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // Live in the menu bar only — no Dock icon (like the original Grove). The
+        // MenuBarExtra stays put; the window is opened on demand from its menu.
+        NSApp.setActivationPolicy(.accessory)
+    }
+
+    /// Keep Jaca running (and its menu-bar icon visible) after the window is closed.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
     }
@@ -53,6 +58,9 @@ struct JacaApp: App {
         } label: {
             Image("MenuBarIcon")
                 .renderingMode(.original)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 18, height: 18)
         }
     }
 
