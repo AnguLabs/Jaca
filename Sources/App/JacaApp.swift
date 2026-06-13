@@ -60,7 +60,7 @@ struct JacaApp: App {
                 .renderingMode(.original)
                 .resizable()
                 .scaledToFit()
-                .frame(width: 15, height: 15)
+                .frame(width: 14, height: 14)
         }
     }
 
