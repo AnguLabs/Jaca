@@ -86,7 +86,14 @@ struct GradleDaemonRow: View {
             .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: 6) {
-                LemonadeUi.Tag(label: daemon.version, voice: .neutral)
+                LemonadeUi.Tag(label: daemon.isBusy ? "BUSY" : "IDLE",
+                               voice: daemon.isBusy ? .positive : .neutral)
+                if let jdk = daemon.jdk {
+                    LemonadeUi.Tag(label: "JDK \(jdk)", voice: .neutral)
+                }
+                if let heap = daemon.maxHeap {
+                    LemonadeUi.Tag(label: heap, voice: .neutral)
+                }
                 LemonadeUi.Tag(label: ramText, voice: .neutral)
             }
 

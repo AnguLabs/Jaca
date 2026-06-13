@@ -28,7 +28,9 @@ struct GradleDaemonService: Sendable {
                 version: parseVersion(from: command),
                 uptime: friendlyUptime(String(parts[1])),
                 cpu: Double(parts[2]) ?? 0,
-                memoryMB: (Int(parts[3]) ?? 0) / 1024   // rss is reported in KB
+                memoryMB: (Int(parts[3]) ?? 0) / 1024,  // rss is reported in KB
+                jdk: firstGroup(#"(\d+)(?:\.\d+)*\.jdk"#, command),     // …/zulu-21.jdk/… → "21"
+                maxHeap: firstGroup(#"-Xmx(\S+)"#, command)            // -Xmx12g → "12g"
             )
             daemons.append(daemon)
         }
@@ -49,6 +51,15 @@ struct GradleDaemonService: Sendable {
     }
 
     // MARK: - Parsing
+
+    /// First capture group of `pattern` in `s`, or nil.
+    private func firstGroup(_ pattern: String, _ s: String) -> String? {
+        guard let re = try? NSRegularExpression(pattern: pattern),
+              let m = re.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)),
+              m.numberOfRanges > 1,
+              let r = Range(m.range(at: 1), in: s) else { return nil }
+        return String(s[r])
+    }
 
     private func parseVersion(from command: String) -> String {
         guard let regex = Self.versionRegex else { return "?" }

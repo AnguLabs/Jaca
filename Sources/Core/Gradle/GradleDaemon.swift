@@ -8,5 +8,10 @@ struct GradleDaemon: Identifiable, Hashable {
     var uptime: String        // friendly, e.g. "2h 14m"
     var cpu: Double           // percent
     var memoryMB: Int
+    var jdk: String?          // major JDK version, e.g. "21" (nil if unknown)
+    var maxHeap: String?      // JVM -Xmx value, e.g. "12g" (nil if unset)
     var removing: Bool = false
+
+    /// Heuristic: a daemon burning CPU is mid-build; near-idle daemons sit ~0%.
+    var isBusy: Bool { cpu > 20 }
 }
