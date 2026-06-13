@@ -17,6 +17,10 @@ final class NetworkSession: WorkspaceTab {
     /// snapshot is saved immediately rather than only on quit.
     var onStateChanged: (() -> Void)?
 
+    /// Shared per-device state (capabilities + installed-app list), set by AppModel.
+    /// Reused across all tabs for this device — see `DeviceContext`.
+    var deviceContext: DeviceContext?
+
     private(set) var isRunning = false
     private(set) var isConnecting = false
     private(set) var transactions: [NetworkTransaction] = []
@@ -29,6 +33,17 @@ final class NetworkSession: WorkspaceTab {
     var statusMessage: String?
     private(set) var boundPort: Int = 0
     private(set) var proxyConfigured = false
+
+    /// The live CA-install flow shown in `CAInstallSheet`, created by
+    /// `prepareCAInstall()`. Observing it drives the step-by-step progress UI.
+    private(set) var caInstaller: AndroidCACertInstaller?
+
+    /// Ground truth that the CA is trusted: flips true once a real HTTPS request is
+    /// decrypted through the proxy. Until then a proxy tab can't be sure it's set up.
+    private(set) var caReady = false
+    /// Set when proxy capture starts but the CA hasn't been confirmed — the view
+    /// surfaces the setup dialog (with a migrate-to-Agent option). One-shot per start.
+    var proxyNeedsSetup = false
 
     /// How this session captures: in-process agent (debuggable apps) or proxy.
     private(set) var captureMode: CaptureMode = .proxy
@@ -111,6 +126,25 @@ final class NetworkSession: WorkspaceTab {
         beginConnecting()
     }
 
+    /// Restores the chosen capture mode from persistence WITHOUT starting — a
+    /// relaunched tab comes back pre-configured (proxy/agent + target), so the
+    /// chooser is skipped and the user just presses play.
+    func restoreMode(_ mode: CaptureMode, package: String?) {
+        captureMode = mode
+        targetPackage = (mode == .agent) ? package : nil
+        hasSelectedMode = true
+    }
+
+    /// Stops capture and returns the tab to the mode chooser — the "switch to Agent
+    /// mode" escape hatch from a proxy that isn't working (e.g. the device won't
+    /// trust the CA). The chooser exposes the in-process-agent app picker.
+    func reopenModeChooser() {
+        if isRunning { stop() }
+        hasSelectedMode = false
+        captureMode = .agent
+        proxyNeedsSetup = false
+    }
+
     /// Restart whichever mode was last chosen — the toolbar play button after a stop.
     func resume() {
         guard hasSelectedMode else { return }
@@ -188,6 +222,13 @@ final class NetworkSession: WorkspaceTab {
             boundPort = server.boundPort
             configureDeviceProxy()
             statusMessage = "proxy on \(hostAddress):\(boundPort) — install the CA & trust it"
+            // Until we see decrypted HTTPS, the device may not trust the CA yet —
+            // prompt the setup/install flow (the view picks this up). Suppressed in
+            // UI tests, which drive their own flows.
+            if device.platform == .android, !caReady,
+               ProcessInfo.processInfo.environment["JACA_UITEST"] != "1" {
+                proxyNeedsSetup = true
+            }
         } catch {
             isRunning = false
             statusMessage = "Failed to start proxy: \(error.localizedDescription)"
@@ -212,6 +253,7 @@ final class NetworkSession: WorkspaceTab {
     func stop() {
         guard isRunning else { return }
         isRunning = false
+        proxyNeedsSetup = false
         if captureMode == .proxy {
             unconfigureDeviceProxy()
             proxy?.stop(); proxy = nil
@@ -287,6 +329,13 @@ final class NetworkSession: WorkspaceTab {
     }
 
     func upsert(_ txn: NetworkTransaction) {   // internal: capture pipeline + tests
+        // First successfully MITM'd HTTPS request is ground-truth that the CA is
+        // trusted — confirms the install and clears the "needs setup" prompt.
+        if txn.scheme == "https", txn.error == nil {
+            caReady = true
+            proxyNeedsSetup = false
+            caInstaller?.noteInterceptionConfirmed()
+        }
         if let idx = indexByID[txn.id] {
             transactions[idx] = txn
         } else {
@@ -376,5 +425,27 @@ final class NetworkSession: WorkspaceTab {
                     : "Failed to push CA certificate."
             }
         }
+    }
+
+    // MARK: - Automatic CA install
+
+    /// Probes the device and builds a fresh `AndroidCACertInstaller` for the
+    /// install sheet. Call before presenting `CAInstallSheet`; the sheet starts it.
+    func prepareCAInstall() async {
+        guard device.platform == .android, let adbURL else { return }
+        let caURL = ca.storageDirectory.appendingPathComponent("rootCA.pem")
+        // Reuse the per-device probe when available; otherwise probe now.
+        let caps: AndroidCapabilities
+        if let cached = deviceContext?.capabilities { caps = cached }
+        else { caps = await AndroidCapabilityProbe.probe(adbURL: adbURL, serial: device.id) }
+        caInstaller = AndroidCACertInstaller(adbURL: adbURL, serial: device.id,
+                                             caPEM: caURL, capabilities: caps)
+    }
+
+    /// Cancels an in-flight install and tears everything down: the installer
+    /// removes pushed files / unmounts, and we clear any proxy we set.
+    func cancelCAInstall() {
+        caInstaller?.cancel()
+        if proxyConfigured { unconfigureDeviceProxy() }
     }
 }

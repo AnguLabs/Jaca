@@ -45,6 +45,11 @@ final class AppModel {
     private var discoveryTasks: [Task<Void, Never>] = []
     private var devicesByPlatform: [DevicePlatform: [Device]] = [:]
 
+    /// Per-device shared state (capabilities + installed-app polling), one per
+    /// `Device.id`, reused by every tab for that device. Created with the first
+    /// tab and torn down when the last tab for a device closes.
+    private var deviceContexts: [String: DeviceContext] = [:]
+
     /// Tabs persisted from a previous launch, restored as their devices appear.
     private var pendingRestores: [TabDescriptor] = []
     private var isRestoring = false
@@ -150,7 +155,11 @@ final class AppModel {
                 if !descriptor.packageLabel.isEmpty { session?.setPackage(descriptor.packageLabel) }
             case .network:
                 let session = startNetworkSession(for: device, name: descriptor.displayName, autoStart: false)
-                if !descriptor.packageLabel.isEmpty { session?.targetPackage = descriptor.packageLabel }
+                // Pre-configure the chosen mode so the tab restores ready-to-run:
+                // the user just presses play (no re-picking from the chooser).
+                let pkg = descriptor.packageLabel.isEmpty ? nil : descriptor.packageLabel
+                let mode: CaptureMode = (descriptor.captureMode == "agent") ? .agent : .proxy
+                session?.restoreMode(mode, package: pkg)
             }
         }
         isRestoring = false
@@ -181,7 +190,8 @@ final class AppModel {
         if let net = tab as? NetworkSession {
             return TabDescriptor(kind: .network, platform: net.device.platform, deviceID: net.device.id,
                                  displayName: net.displayName, minLevel: 0, query: "",
-                                 isRegex: false, packageLabel: net.targetPackage ?? "")
+                                 isRegex: false, packageLabel: net.targetPackage ?? "",
+                                 captureMode: net.captureMode == .agent ? "agent" : "proxy")
         }
         return nil
     }
@@ -190,6 +200,25 @@ final class AppModel {
         guard let data = UserDefaults.standard.data(forKey: tabsKey),
               let descriptors = try? JSONDecoder().decode([TabDescriptor].self, from: data) else { return [] }
         return descriptors
+    }
+
+    // MARK: - Per-device shared context
+
+    /// Vends the shared `DeviceContext` for `device`, creating + starting it on
+    /// first use. Reused across all tabs targeting the same device.
+    private func context(for device: Device) -> DeviceContext {
+        if let existing = deviceContexts[device.id] { return existing }
+        let ctx = DeviceContext(device: device, adbURL: adbURL)
+        deviceContexts[device.id] = ctx
+        ctx.start()
+        return ctx
+    }
+
+    /// Tears down a device's context once no remaining tab targets it.
+    private func releaseContextIfUnused(_ deviceID: String) {
+        let stillUsed = sessions.contains { ($0 as? LogSession)?.device.id == deviceID
+            || ($0 as? NetworkSession)?.device.id == deviceID }
+        if !stillUsed, let ctx = deviceContexts.removeValue(forKey: deviceID) { ctx.stop() }
     }
 
     // MARK: - Sessions
@@ -223,6 +252,7 @@ final class AppModel {
             }
         )
         let id = session.id
+        session.deviceContext = context(for: device)
         session.onStateChanged = { [weak self] in self?.persistTabs() }
         // Record history on each (re)start, whether auto-started or started later.
         session.onStarted = { [weak session] in
@@ -258,6 +288,7 @@ final class AppModel {
         }
         let session = NetworkSession(device: device, ca: authority, adbURL: adbURL,
                                      displayName: name, bodyCache: bodyCache)
+        session.deviceContext = context(for: device)
         session.onStateChanged = { [weak self] in self?.persistTabs() }
         sessions.append(session)
         selectedSessionID = session.id
@@ -310,7 +341,10 @@ final class AppModel {
             let store = history
             Task { await store?.endSession(id: id) }
         }
+        let deviceID = (sessions[index] as? LogSession)?.device.id
+            ?? (sessions[index] as? NetworkSession)?.device.id
         sessions.remove(at: index)
+        if let deviceID { releaseContextIfUnused(deviceID) }
         if selectedSessionID == id {
             selectedSessionID = sessions[safe: index]?.id ?? sessions.last?.id
         }
@@ -350,6 +384,9 @@ struct TabDescriptor: Codable {
     var query: String
     var isRegex: Bool
     var packageLabel: String
+    /// Network tabs only: "proxy" or "agent". Optional so tabs persisted before
+    /// this field still decode (defaults to proxy on restore).
+    var captureMode: String?
 
     func matches(_ other: TabDescriptor) -> Bool {
         kind == other.kind && deviceID == other.deviceID && displayName == other.displayName

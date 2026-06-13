@@ -39,4 +39,23 @@ final class NetworkConnectTests: XCTestCase {
         XCTAssertEqual(restored.first?.packageLabel, "com.teya.ac.dev")
         XCTAssertEqual(restored.first?.kind, .network)
     }
+
+    func testCaptureModePersistsInDescriptorRoundTrip() throws {
+        // The chosen capture mode must survive so a relaunched tab restores ready.
+        let agent = TabDescriptor(kind: .network, platform: .android, deviceID: "dev1",
+                                  displayName: "Net", minLevel: 0, query: "",
+                                  isRegex: false, packageLabel: "com.teya.ac.dev", captureMode: "agent")
+        let data = try JSONEncoder().encode([agent])
+        XCTAssertEqual(try JSONDecoder().decode([TabDescriptor].self, from: data).first?.captureMode, "agent")
+    }
+
+    func testDescriptorDecodesLegacyDataWithoutCaptureMode() throws {
+        // Tabs persisted before captureMode existed must still decode (→ nil ⇒ proxy).
+        let legacy = """
+        [{"kind":"network","platform":"android","deviceID":"d","displayName":"N",
+          "minLevel":0,"query":"","isRegex":false,"packageLabel":""}]
+        """
+        let restored = try JSONDecoder().decode([TabDescriptor].self, from: Data(legacy.utf8))
+        XCTAssertNil(restored.first?.captureMode)
+    }
 }
