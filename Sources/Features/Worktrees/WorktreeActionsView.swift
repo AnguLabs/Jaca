@@ -3,11 +3,11 @@ import Lemonade
 
 /// The expanded action drawer revealed beneath a worktree row. Shows a compact meta line
 /// (cache size) and two actions: Clear cache (always) and Delete. Both use a two-click
-/// inline confirm. Wired straight into `WorktreesTab`. Authored against semantic Lemonade
+/// inline confirm. Wired straight into `WorktreesModel`. Authored against semantic Lemonade
 /// tokens.
 struct WorktreeActionsView: View {
     let w: Worktree
-    let tab: WorktreesTab
+    let model: WorktreesModel
     @State private var confirmingDelete = false
     @State private var confirmingClear = false
 
@@ -72,7 +72,7 @@ struct WorktreeActionsView: View {
     private func handleDeleteTap() {
         if confirmingDelete {
             confirmingDelete = false
-            tab.deleteWorktree(w.id)
+            model.deleteWorktree(w.id)
         } else {
             confirmingDelete = true
             Task { @MainActor in
@@ -86,7 +86,7 @@ struct WorktreeActionsView: View {
     private func handleClearTap() {
         if confirmingClear {
             confirmingClear = false
-            tab.clearCache(w.id)
+            model.clearCache(w.id)
         } else {
             confirmingClear = true
             Task { @MainActor in

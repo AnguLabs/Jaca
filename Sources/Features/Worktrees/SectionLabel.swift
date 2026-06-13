@@ -5,7 +5,7 @@ import Lemonade
 /// the trailing edge. Authored against semantic Lemonade tokens so it adapts to the
 /// app's color scheme.
 struct SectionLabel: View {
-    let tab: WorktreesTab
+    let model: WorktreesModel
 
     var body: some View {
         HStack(spacing: 0) {
@@ -18,7 +18,7 @@ struct SectionLabel: View {
             Spacer()
 
             LemonadeUi.Text(
-                "\(tab.orphanCount) orphaned",
+                "\(model.orphanCount) orphaned",
                 textStyle: LemonadeTypography.shared.bodyXSmallRegular,
                 color: LemonadeTheme.colors.content.contentSecondary
             )

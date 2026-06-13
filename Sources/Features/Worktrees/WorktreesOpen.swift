@@ -1,8 +1,8 @@
 import AppKit
 import Foundation
 
-/// Entry points for opening a Worktrees tab. Shared by the sidebar button and the
-/// File-menu command so both present the same picker.
+/// Folder-picker entry point for the Worktrees area. The area's "Choose folder…" /
+/// "Change" affordances call `pickFolder()` directly.
 enum WorktreesOpen {
     /// Shows a directory picker; returns the chosen folder or nil.
     @MainActor static func pickFolder() -> URL? {
@@ -17,7 +17,7 @@ enum WorktreesOpen {
 }
 
 extension Notification.Name {
-    /// Posted (object: chosen folder `URL`) when the File-menu command picks a
-    /// folder. `RootView` observes it because the menu can't reach `AppModel`.
+    /// Posted by the ⌘⇧O menu command to switch to the Worktrees mode. `RootView`
+    /// observes it because the menu can't reach `AppModel`.
     static let openWorktrees = Notification.Name("jaca.openWorktrees")
 }

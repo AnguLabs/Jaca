@@ -1,6 +1,9 @@
 import Foundation
 import Observation
 
+/// The two top-level areas of the app.
+enum WorkspaceMode: String { case devices, worktrees }
+
 /// Root app state: the merged live device list and the ordered set of log
 /// sessions (tabs). Providers are pluggable, so iOS slots in by appending another
 /// `DeviceProvider` and a matching `LogSource` in `startSession`.
@@ -10,6 +13,12 @@ final class AppModel {
     private(set) var devices: [Device] = []
     private(set) var sessions: [any WorkspaceTab] = []
     var selectedSessionID: UUID?
+
+    /// Top-level area the app is showing: the device/session view or the worktrees area.
+    var mode: WorkspaceMode = .devices
+
+    /// The single, persisted worktrees area state.
+    let worktrees = WorktreesModel()
 
     /// Resolved adb path; nil means the toolchain wasn't found (surface in UI).
     private(set) var adbURL: URL?
@@ -214,13 +223,6 @@ final class AppModel {
         if autoStart { session.start() }
         persistTabs()
         return session
-    }
-
-    /// Opens a folder-bound worktrees tab and selects it.
-    func openWorktreesTab(folder: URL) {
-        let t = WorktreesTab(folder: folder)
-        sessions.append(t)
-        selectedSessionID = t.id
     }
 
     private var ca: CertificateAuthority?

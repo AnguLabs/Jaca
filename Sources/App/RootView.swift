@@ -10,7 +10,7 @@ struct RootView: View {
 
     var body: some View {
         NavigationSplitView {
-            DeviceSidebarView(model: model)
+            sidebar
                 .navigationSplitViewColumnWidth(min: 240, ideal: 280, max: 360)
         } detail: {
             detail
@@ -26,13 +26,52 @@ struct RootView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { model.persistTabs() }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .openWorktrees)) { note in
-            if let folder = note.object as? URL { model.openWorktreesTab(folder: folder) }
+        .onReceive(NotificationCenter.default.publisher(for: .openWorktrees)) { _ in
+            model.mode = .worktrees
+        }
+    }
+
+    // MARK: - Sidebar
+
+    @ViewBuilder
+    private var sidebar: some View {
+        VStack(spacing: 0) {
+            Picker("", selection: modeBinding) {
+                Text("Devices").tag(WorkspaceMode.devices)
+                Text("Worktrees").tag(WorkspaceMode.worktrees)
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .padding(8)
+
+            Divider()
+
+            if model.mode == .devices {
+                DeviceSidebarView(model: model)
+            } else {
+                WorktreesSidebar(model: model.worktrees)
+            }
+        }
+        .background(LemonadeTheme.colors.background.bgElevated)
+    }
+
+    private var modeBinding: Binding<WorkspaceMode> {
+        Binding(get: { model.mode }, set: { model.mode = $0 })
+    }
+
+    // MARK: - Detail
+
+    @ViewBuilder
+    private var detail: some View {
+        if model.mode == .worktrees {
+            WorktreesAreaView(model: model.worktrees)
+        } else {
+            devicesDetail
         }
     }
 
     @ViewBuilder
-    private var detail: some View {
+    private var devicesDetail: some View {
         if model.sessions.isEmpty {
             EmptySessionView()
         } else {
@@ -64,8 +103,6 @@ struct RootView: View {
             LogSessionView(session: log, isActive: isActive)
         } else if let net = session as? NetworkSession {
             NetworkSessionView(session: net)
-        } else if let wt = session as? WorktreesTab {
-            WorktreesView(tab: wt)
         }
     }
 }
