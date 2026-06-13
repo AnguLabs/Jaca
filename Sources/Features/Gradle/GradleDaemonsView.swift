@@ -107,8 +107,9 @@ struct GradleDaemonRow: View {
                 leadingIcon: .circleX,
                 variant: .critical,
                 type: confirmingKill ? .solid : .subtle,
-                size: .small
+                size: .xSmall
             )
+            .fixedSize()
         }
         .padding(.vertical, 9)
         .padding(.horizontal, 10)
