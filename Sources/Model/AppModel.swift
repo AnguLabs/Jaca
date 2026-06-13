@@ -1,8 +1,8 @@
 import Foundation
 import Observation
 
-/// The two top-level areas of the app.
-enum WorkspaceMode: String { case devices, worktrees }
+/// The top-level areas of the app.
+enum WorkspaceMode: String { case devices, worktrees, gradle }
 
 /// Root app state: the merged live device list and the ordered set of log
 /// sessions (tabs). Providers are pluggable, so iOS slots in by appending another
@@ -19,6 +19,9 @@ final class AppModel {
 
     /// The single, persisted worktrees area state.
     let worktrees = WorktreesModel()
+
+    /// The Gradle daemons area state (lists/kills running Gradle daemons).
+    let gradle = GradleDaemonsModel()
 
     /// Resolved adb path; nil means the toolchain wasn't found (surface in UI).
     private(set) var adbURL: URL?
