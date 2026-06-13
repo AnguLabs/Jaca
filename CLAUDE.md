@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Jaca is a non-sandboxed SwiftUI macOS app (developer tools): device log streaming, network capture (in-process Android agent + MITM proxy), and local maintenance areas (git worktrees, Gradle daemons, Xcode DerivedData, Claude projects). See `README.md` for the product/network-capture deep dive.
+Jaca is a non-sandboxed SwiftUI macOS app (developer tools): device log streaming, network capture (in-process Android agent + MITM proxy), and local maintenance areas (Projects — auto-detected Claude projects + their worktrees + user-added folders, with per-checkout cache cleanup; Gradle daemons; Xcode DerivedData). See `README.md` for the product/network-capture deep dive.
 
 ## Build, run, test
 
@@ -45,7 +45,7 @@ Three layers, enforced by directory:
 
 ### The top-level "area" pattern
 
-The left sidebar switches the main pane between **areas** via `AppModel.mode: WorkspaceMode` (`devices`, `claudeProjects`, `worktrees`, `gradle`, `xcode`). Adding an area means touching a consistent set of files — read one existing area end-to-end (e.g. ClaudeProjects or Xcode) before adding one:
+The left sidebar switches the main pane between **areas** via `AppModel.mode: WorkspaceMode` (`devices`, `projects`, `gradle`, `xcode`). Adding an area means touching a consistent set of files — read one existing area end-to-end (e.g. Projects or Xcode) before adding one:
 
 1. A case in `enum WorkspaceMode` (in `AppModel.swift`) + a model instance `let foo = FooModel()` on `AppModel`.
 2. A `Core/<Area>/` service (does the filesystem/process/git work, off the main actor).
@@ -58,18 +58,19 @@ Long-running work (logcat, the proxy) accumulates off the main thread and flushe
 ## Conventions
 
 - **Design system:** build UI from Lemonade — `LemonadeUi.*` components, `LemonadeTheme.colors.*` / `LemonadeTypography.shared.*` semantic tokens, `GroveIcon(glyph:)`. Don't hardcode colors/fonts; match the tokens used in neighboring views.
-- **Testability:** factor pure logic out of services/models into free functions/enums and unit-test those (e.g. `WorktreePorcelainParser`, `ClaudeProjectGrouping`, `LogcatParser`) rather than testing through the UI.
+- **Testability:** factor pure logic out of services/models into free functions/enums and unit-test those (e.g. `WorktreePorcelainParser`, `ProjectsGrouping`, `LogcatParser`) rather than testing through the UI.
 - **Non-sandboxed by design** so the app can `Process`-spawn `adb`/`xcrun`/`git` — don't add the App Sandbox entitlement.
 
 ## Reactive-first & caching (IMPORTANT)
 
 Areas must feel **instant**. A screen that has shown data before must **never flash empty** while it recomputes — opening it, switching away and back, or relaunching the app should all render immediately from the last known result. This is a first-class requirement, not a nice-to-have.
 
-The pattern (reference implementation: `ClaudeProjectsModel` + `ClaudeProjectsCache`):
+The pattern (reference implementation: `ProjectsModel` + `ProjectsCache`):
 
-1. **Persist the last result to disk** (`Codable` → `~/Library/Caches/Jaca/…`) on every successful scan.
+1. **Persist the last result to disk** (`Codable` → `~/Library/Caches/Jaca/…`), including expensive derived data like `du` sizes, on every successful scan.
 2. **Load the cache synchronously in the model's `init`**, so the first frame already has data.
-3. **Refresh in the background** while the cached data stays on screen; surface a non-destructive "Refreshing…" affordance and block interaction only if a stale-vs-fresh mismatch would be confusing.
-4. **Gate auto-refresh on a staleness TTL** (don't rescan on every `onAppear`) so re-entering a screen within a session is free; keep an explicit refresh control for force-refresh.
+3. **Block only the cold first scan** (no cache to show); afterwards refresh in the **background** while the cached data stays interactive, behind a subtle "Refreshing…" indicator.
+4. **Gate auto-refresh on a staleness TTL** (don't rescan on every `onAppear`) so re-entering a screen within a session is free; keep an explicit refresh control, and where it helps, a `FolderWatcher` to refresh automatically when the underlying directories change.
+5. **Compute slow per-item work (e.g. `du`) in the background**, patching rows as results land, so a list with many items stays responsive instead of blocking.
 
 When adding or revisiting an area whose data comes from the filesystem/processes (Gradle daemons and Xcode DerivedData currently rescan on appear), prefer this cache-first, background-refresh shape over scan-on-open.
