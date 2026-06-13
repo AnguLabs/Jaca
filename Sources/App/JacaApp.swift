@@ -2,24 +2,94 @@ import SwiftUI
 import AppKit
 import Lemonade
 
-/// Reverts any device proxy Jaca configured when the app quits normally
-/// (`applicationWillTerminate` fires on Cmd-Q / the Quit menu). Catchable signals
-/// are handled in `ProxyCleanup`; a hard SIGKILL is covered by the sidebar
-/// "Revert" affordance.
-final class JacaAppDelegate: NSObject, NSApplicationDelegate {
+/// Owns the menu-bar status item. Left-click opens/focuses the window; right-click (or
+/// control-click) shows a menu (Open / Quit). The app lives in the menu bar only (no Dock
+/// icon) and stays running when the window is closed — closing just hides the window so a
+/// left-click can bring it right back.
+final class JacaAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+    private var statusItem: NSStatusItem?
+    private weak var mainWindow: NSWindow?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Live in the menu bar only — no Dock icon (like the original Grove). The
-        // MenuBarExtra stays put; the window is opened on demand from its menu.
-        NSApp.setActivationPolicy(.accessory)
+        NSApp.setActivationPolicy(.accessory)   // menu-bar only, no Dock icon
+        installStatusItem()
+        adoptMainWindow()
     }
 
-    /// Keep Jaca running (and its menu-bar icon visible) after the window is closed.
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        false
-    }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     func applicationWillTerminate(_ notification: Notification) {
         ProxyCleanup.revertAll()
+    }
+
+    // MARK: - Status item
+
+    private func installStatusItem() {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        if let button = item.button {
+            let icon = (NSImage(named: "MenuBarIcon")?.copy() as? NSImage)
+            icon?.size = NSSize(width: 18, height: 18)
+            icon?.isTemplate = false
+            button.image = icon
+            button.toolTip = "Jaca"
+            button.target = self
+            button.action = #selector(statusItemClicked)
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        }
+        statusItem = item
+    }
+
+    @objc private func statusItemClicked() {
+        let event = NSApp.currentEvent
+        let isRight = event?.type == .rightMouseUp || event?.modifierFlags.contains(.control) == true
+        if isRight {
+            showMenu()
+        } else {
+            openWindow()
+        }
+    }
+
+    private func showMenu() {
+        let menu = NSMenu()
+        let open = NSMenuItem(title: "Open Jaca", action: #selector(openWindow), keyEquivalent: "")
+        open.target = self
+        menu.addItem(open)
+        menu.addItem(.separator())
+        let quit = NSMenuItem(title: "Quit Jaca", action: #selector(quit), keyEquivalent: "q")
+        quit.target = self
+        menu.addItem(quit)
+
+        // Attach transiently so this click pops the menu, then detach so the next
+        // left-click runs the action instead of opening the menu.
+        statusItem?.menu = menu
+        statusItem?.button?.performClick(nil)
+        statusItem?.menu = nil
+    }
+
+    @objc private func openWindow() {
+        NSApp.activate(ignoringOtherApps: true)
+        mainWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    @objc private func quit() { NSApp.terminate(nil) }
+
+    // MARK: - Keep the window alive (hide on close)
+
+    /// Grab the WindowGroup's window once it exists, become its delegate so the red
+    /// close button hides it (kept alive) instead of destroying it.
+    private func adoptMainWindow() {
+        if let window = NSApp.windows.first(where: { $0.canBecomeMain && !($0 is NSPanel) }) {
+            mainWindow = window
+            window.isReleasedWhenClosed = false
+            window.delegate = self
+        } else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.adoptMainWindow() }
+        }
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        sender.orderOut(nil)   // hide instead of close, so left-click can bring it back
+        return false
     }
 }
 
@@ -50,22 +120,6 @@ struct JacaApp: App {
                 .keyboardShortcut("o", modifiers: [.command, .shift])
             }
         }
-
-        // Always-present menu-bar icon (stays even when the window is closed, since the
-        // app no longer terminates on last-window-close). Opens/focuses the main window.
-        MenuBarExtra {
-            MenuBarMenu()
-        } label: {
-            menuBarLabel
-        }
-    }
-
-    /// MenuBarExtra renders the label image at the NSImage's point size, so we set it
-    /// explicitly (the `.frame`/asset-pixel size doesn't control it).
-    private var menuBarLabel: some View {
-        let image = (NSImage(named: "MenuBarIcon")?.copy() as? NSImage) ?? NSImage()
-        image.size = NSSize(width: 18, height: 18)
-        return Image(nsImage: image).renderingMode(.original)
     }
 
     private var preferredScheme: ColorScheme? {
@@ -74,27 +128,5 @@ struct JacaApp: App {
         case "dark": return .dark
         default: return nil
         }
-    }
-}
-
-/// Contents of the menu-bar dropdown.
-private struct MenuBarMenu: View {
-    @Environment(\.openWindow) private var openWindow
-
-    var body: some View {
-        Button("Open Jaca") {
-            NSApp.activate(ignoringOtherApps: true)
-            if let window = NSApp.windows.first(where: { $0.canBecomeMain && !($0 is NSPanel) }) {
-                window.makeKeyAndOrderFront(nil)
-            } else {
-                openWindow(id: "main")
-            }
-        }
-        .keyboardShortcut("j", modifiers: [.command, .shift])
-
-        Divider()
-
-        Button("Quit Jaca") { NSApp.terminate(nil) }
-            .keyboardShortcut("q")
     }
 }
