@@ -107,32 +107,32 @@ struct UpdateService: Sendable {
 
     // MARK: - Build
 
-    /// Regenerates the project, builds it, and echoes the resolved app bundle path.
-    /// Runs through a login shell so Homebrew's `xcodegen` is on PATH (GUI apps don't
-    /// inherit it). Build output is sent to stderr so stdout is just the app path.
+    /// Path the canonical installer (`scripts/all.sh --install`) copies the app to.
+    private static let installedAppPath = "/Applications/Jaca.app"
+
+    /// Reuses the repo's canonical installer — builds Release and copies it to
+    /// `/Applications/Jaca.app` — so an in-app update lands exactly like a manual
+    /// `./scripts/all.sh --install`. Skips the slow Android agent build when its
+    /// artifacts already exist, and builds it only when missing (best-effort —
+    /// `all.sh` continues if the Android toolchain isn't installed). Runs through a
+    /// login shell so Homebrew's `xcodegen` is on PATH (GUI apps don't inherit it).
     private func buildAndResolveAppPath(_ repo: String) async throws -> String {
         let script = """
         set -e
         cd \(shellQuote(repo))
         export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
-        xcodegen generate 1>&2
-        xcodebuild -project Jaca.xcodeproj -scheme Jaca -configuration Debug \
-          -destination 'platform=macOS' \
-          CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=YES \
-          build 1>&2
-        xcodebuild -project Jaca.xcodeproj -scheme Jaca -configuration Debug \
-          -destination 'platform=macOS' -showBuildSettings 2>/dev/null \
-          | awk '/ BUILT_PRODUCTS_DIR =/{d=$3} / FULL_PRODUCT_NAME =/{n=$3} END{print d"/"n}'
+        AGENT_FLAG=""
+        if [ -n "$(ls -A agent/out 2>/dev/null)" ]; then AGENT_FLAG="--no-agent"; fi
+        ./scripts/all.sh --install --no-run $AGENT_FLAG 1>&2
         """
         let result = try await CommandRunner.run(URL(fileURLWithPath: "/bin/zsh"), ["-lc", script])
         guard result.exitCode == 0 else {
             throw UpdateError.build(result.stderr.trimmed.isEmpty ? result.stdout.trimmed : tail(result.stderr))
         }
-        let path = result.stdout.trimmed
-        guard !path.isEmpty, FileManager.default.fileExists(atPath: path) else {
-            throw UpdateError.build("Could not resolve the built app path")
+        guard FileManager.default.fileExists(atPath: Self.installedAppPath) else {
+            throw UpdateError.build("Installer did not produce \(Self.installedAppPath)")
         }
-        return path
+        return Self.installedAppPath
     }
 
     // MARK: - Helpers
