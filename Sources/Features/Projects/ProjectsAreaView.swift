@@ -1,0 +1,146 @@
+import SwiftUI
+import Lemonade
+
+/// The main-pane content for the Projects area: every project Claude Code has run in
+/// (plus any folders the user added), each expandable to its checkouts (main + worktrees)
+/// with per-checkout cache cleanup and worktree removal.
+///
+/// First cold scan (no cache) shows a blocking loader; afterwards cached results render
+/// immediately and refreshes run in the background behind a subtle "Refreshing…" pill.
+struct ProjectsAreaView: View {
+    let model: ProjectsModel
+
+    var body: some View {
+        content
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(LemonadeTheme.colors.background.bgDefault)
+            .overlay(alignment: .bottom) {
+                if let toast = model.toast {
+                    ProjectsToastView(toast: toast)
+                        .padding(.bottom, 16)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .allowsHitTesting(false)
+                }
+            }
+            .animation(.easeOut(duration: 0.2), value: model.toast)
+            .onAppear { if model.shouldAutoRefresh { model.refresh() } }
+            .accessibilityIdentifier("projectsArea")
+    }
+
+    @ViewBuilder private var content: some View {
+        if model.isFirstLoad {
+            firstLoadState
+        } else if model.hasNoData {
+            emptyState
+        } else {
+            VStack(spacing: 0) {
+                header
+                listSection
+            }
+        }
+    }
+
+    /// "PROJECTS" overline + counts, with an inline "Refreshing…" pill during background scans.
+    private var header: some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                LemonadeUi.Text(
+                    "PROJECTS",
+                    textStyle: LemonadeTypography.shared.bodyXSmallOverline,
+                    color: LemonadeTheme.colors.content.contentTertiary
+                )
+                LemonadeUi.Text(
+                    "\(model.totalProjects) projects · \(model.totalWorktrees) worktrees",
+                    textStyle: LemonadeTypography.shared.bodyXSmallRegular,
+                    color: LemonadeTheme.colors.content.contentSecondary
+                )
+            }
+            Spacer()
+            if model.isRefreshing {
+                HStack(spacing: 6) {
+                    LemonadeUi.Spinner()
+                    LemonadeUi.Text(
+                        "Refreshing…",
+                        textStyle: LemonadeTypography.shared.bodyXSmallRegular,
+                        color: LemonadeTheme.colors.content.contentSecondary
+                    )
+                }
+                .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.15), value: model.isRefreshing)
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(LemonadeTheme.colors.background.bgNeutralSubtle)
+        )
+        .padding(.horizontal, 8)
+        .padding(.top, 8)
+    }
+
+    private var listSection: some View {
+        ScrollView {
+            VStack(spacing: 1) {
+                ForEach(model.projects) { project in
+                    ProjectRow(
+                        project: project,
+                        isExpanded: model.isExpanded(project.id),
+                        model: model,
+                        onToggle: {
+                            withAnimation(.easeInOut(duration: 0.2)) { model.toggle(project.id) }
+                        }
+                    )
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+        }
+        .frame(maxHeight: .infinity)
+    }
+
+    private var firstLoadState: some View {
+        VStack(spacing: 12) {
+            LemonadeUi.Spinner()
+            LemonadeUi.Text(
+                "Scanning ~/.claude/projects…",
+                textStyle: LemonadeTypography.shared.bodyMediumRegular,
+                color: LemonadeTheme.colors.content.contentSecondary
+            )
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityIdentifier("projectsFirstLoad")
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: LemonadeTheme.spaces.spacing300) {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(LemonadeTheme.colors.background.bgBrandSubtle)
+                .frame(width: 64, height: 64)
+                .overlay(GroveIcon(glyph: .folder, size: 32, tint: LemonadeTheme.colors.content.contentBrand))
+            LemonadeUi.Text(
+                "No projects found",
+                textStyle: LemonadeTypography.shared.headingSmall,
+                color: LemonadeTheme.colors.content.contentPrimary
+            )
+            LemonadeUi.Text(
+                "Projects Claude Code has run in appear here automatically. You can also add any folder.",
+                textStyle: LemonadeTypography.shared.bodyMediumRegular,
+                textAlign: .center,
+                color: LemonadeTheme.colors.content.contentSecondary
+            )
+            LemonadeUi.Button(
+                label: "Add folder…",
+                onClick: { model.addFolder() },
+                leadingIcon: .plus,
+                variant: .primary,
+                type: .solid,
+                size: .medium
+            )
+            .fixedSize()
+            .padding(.top, LemonadeTheme.spaces.spacing200)
+        }
+        .padding(LemonadeTheme.spaces.spacing800)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityIdentifier("projectsEmptyState")
+    }
+}
