@@ -64,7 +64,7 @@ struct JacaApp: App {
     /// explicitly (the `.frame`/asset-pixel size doesn't control it).
     private var menuBarLabel: some View {
         let image = (NSImage(named: "MenuBarIcon")?.copy() as? NSImage) ?? NSImage()
-        image.size = NSSize(width: 16, height: 16)
+        image.size = NSSize(width: 18, height: 18)
         return Image(nsImage: image).renderingMode(.original)
     }
 
