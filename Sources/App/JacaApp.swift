@@ -56,11 +56,10 @@ struct JacaApp: App {
         MenuBarExtra {
             MenuBarMenu()
         } label: {
+            // Size is controlled by the transparent padding baked into the asset — the
+            // menu bar fits the whole image to its height, so the visible jackfruit is smaller.
             Image("MenuBarIcon")
                 .renderingMode(.original)
-                .resizable()
-                .scaledToFit()
-                .frame(width: 14, height: 14)
         }
     }
 
