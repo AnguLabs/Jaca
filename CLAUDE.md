@@ -58,6 +58,7 @@ Long-running work (logcat, the proxy) accumulates off the main thread and flushe
 ## Conventions
 
 - **Design system:** build UI from Lemonade — `LemonadeUi.*` components, `LemonadeTheme.colors.*` / `LemonadeTypography.shared.*` semantic tokens, `GroveIcon(glyph:)`. Don't hardcode colors/fonts; match the tokens used in neighboring views.
+- **Animate state changes:** the app aims for a polished, fluid feel — every meaningful UI state change should animate, not snap. Expand/collapse, list inserts/removes, tag/size updates, refresh indicators, hover affordances, and view-mode switches should use `withAnimation`/`.animation(_:value:)` and `.transition(...)`. Follow the established style: short `.easeInOut` (~0.15–0.3s), rows fade+slide on insert/remove (e.g. `.opacity` while `removing`, green flash on a freed size), chevrons rotate on expand. When adding UI, add the matching animation by default — keep it subtle and consistent with neighboring views rather than flashy.
 - **Testability:** factor pure logic out of services/models into free functions/enums and unit-test those (e.g. `WorktreePorcelainParser`, `ProjectsGrouping`, `LogcatParser`) rather than testing through the UI.
 - **Non-sandboxed by design** so the app can `Process`-spawn `adb`/`xcrun`/`git` — don't add the App Sandbox entitlement.
 
