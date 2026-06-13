@@ -56,11 +56,16 @@ struct JacaApp: App {
         MenuBarExtra {
             MenuBarMenu()
         } label: {
-            // Size is controlled by the transparent padding baked into the asset — the
-            // menu bar fits the whole image to its height, so the visible jackfruit is smaller.
-            Image("MenuBarIcon")
-                .renderingMode(.original)
+            menuBarLabel
         }
+    }
+
+    /// MenuBarExtra renders the label image at the NSImage's point size, so we set it
+    /// explicitly (the `.frame`/asset-pixel size doesn't control it).
+    private var menuBarLabel: some View {
+        let image = (NSImage(named: "MenuBarIcon")?.copy() as? NSImage) ?? NSImage()
+        image.size = NSSize(width: 16, height: 16)
+        return Image(nsImage: image).renderingMode(.original)
     }
 
     private var preferredScheme: ColorScheme? {
