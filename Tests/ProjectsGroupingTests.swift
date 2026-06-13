@@ -72,6 +72,44 @@ final class ProjectsGroupingTests: XCTestCase {
         XCTAssertTrue(sorted[0].checkouts.first?.isMain == true)  // main reordered to front
     }
 
+    // MARK: - Tree nesting
+
+    func test_tree_nestsSubProjectsUnderContainer() {
+        let workspace = project("/ws", git: false)
+        let teya = project("/ws/teya", git: true)
+        let jaca = project("/ws/jaca", git: true)
+        let outside = project("/other/repo", git: true)
+
+        let roots = ProjectsGrouping.tree([teya, workspace, jaca, outside])
+        // Two roots: the container and the unrelated repo.
+        XCTAssertEqual(Set(roots.map(\.id)), ["/ws", "/other/repo"])
+        let ws = try! XCTUnwrap(roots.first { $0.id == "/ws" })
+        XCTAssertEqual(Set(ws.children.map(\.id)), ["/ws/teya", "/ws/jaca"])
+        XCTAssertTrue(ws.hasChildren)
+        // The unrelated repo is a childless root.
+        let other = try! XCTUnwrap(roots.first { $0.id == "/other/repo" })
+        XCTAssertFalse(other.hasChildren)
+    }
+
+    func test_tree_withoutContainment_isFlatLikeList() {
+        let a = project("/ws/teya", git: true)
+        let b = project("/ws/jaca", git: true)   // siblings, no project at /ws
+        let tree = ProjectsGrouping.tree([a, b])
+        XCTAssertEqual(tree.count, 2)
+        XCTAssertTrue(tree.allSatisfy { !$0.hasChildren })
+        XCTAssertEqual(Set(tree.map(\.id)), Set(ProjectsGrouping.flat([a, b]).map(\.id)))
+    }
+
+    func test_tree_nestsByNearestAncestor() {
+        let root = project("/ws", git: false)
+        let group = project("/ws/group", git: false)
+        let leaf = project("/ws/group/app", git: true)
+        let roots = ProjectsGrouping.tree([leaf, root, group])
+        let ws = try! XCTUnwrap(roots.first { $0.id == "/ws" })
+        XCTAssertEqual(ws.children.map(\.id), ["/ws/group"])           // group under ws
+        XCTAssertEqual(ws.children.first?.children.map(\.id), ["/ws/group/app"])  // app under group, not ws
+    }
+
     // MARK: - cwd extraction
 
     func test_extractCwd_findsFirstCwdAcrossLines() {
@@ -117,6 +155,11 @@ final class ProjectsGroupingTests: XCTestCase {
     }
 
     // MARK: - Helpers
+
+    private func project(_ path: String, git: Bool, last: Date? = nil) -> Project {
+        Project(path: path, exists: true, isGitRepo: git, source: .claude,
+                sessionCount: 1, lastActive: last, checkouts: [])
+    }
 
     private func checkout(_ path: String, isMain: Bool, exists: Bool = true,
                           claudeLast: Date? = nil) -> ProjectCheckout {

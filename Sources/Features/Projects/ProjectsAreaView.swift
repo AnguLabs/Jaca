@@ -40,7 +40,8 @@ struct ProjectsAreaView: View {
         }
     }
 
-    /// "PROJECTS" overline + counts, with an inline "Refreshing…" pill during background scans.
+    /// "PROJECTS" overline + counts, the LIST/TREE toggle, and an inline "Refreshing…"
+    /// pill during background scans.
     private var header: some View {
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
@@ -67,6 +68,7 @@ struct ProjectsAreaView: View {
                 }
                 .transition(.opacity)
             }
+            viewModePicker
         }
         .animation(.easeInOut(duration: 0.15), value: model.isRefreshing)
         .padding(12)
@@ -78,16 +80,29 @@ struct ProjectsAreaView: View {
         .padding(.top, 8)
     }
 
+    private var viewModePicker: some View {
+        Picker("", selection: Binding(
+            get: { model.viewMode },
+            set: { newValue in withAnimation(.easeInOut(duration: 0.18)) { model.viewMode = newValue } }
+        )) {
+            Text("Tree").tag(ProjectsViewMode.tree)
+            Text("List").tag(ProjectsViewMode.list)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .fixedSize()
+        .accessibilityIdentifier("projectsViewModePicker")
+    }
+
     private var listSection: some View {
         ScrollView {
             VStack(spacing: 1) {
-                ForEach(model.projects) { project in
-                    ProjectRow(
-                        project: project,
-                        isExpanded: model.isExpanded(project.id),
+                ForEach(model.nodes) { node in
+                    ProjectNodeView(
+                        node: node,
                         model: model,
-                        onToggle: {
-                            withAnimation(.easeInOut(duration: 0.2)) { model.toggle(project.id) }
+                        onToggle: { id in
+                            withAnimation(.easeInOut(duration: 0.2)) { model.toggle(id) }
                         }
                     )
                 }

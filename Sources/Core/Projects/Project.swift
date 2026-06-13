@@ -87,6 +87,17 @@ struct ProjectCheckout: Identifiable, Equatable, Codable {
     var displayPath: String { (path as NSString).abbreviatingWithTildeInPath }
 }
 
+/// A node in the TREE view: a project plus any detected sub-projects nested under it by
+/// path containment — e.g. a workspace folder that itself has Claude sessions and
+/// contains project folders that do too. In LIST view every node is childless (flat).
+struct ProjectNode: Identifiable, Equatable {
+    let project: Project
+    let children: [ProjectNode]
+
+    var id: String { project.id }
+    var hasChildren: Bool { !children.isEmpty }
+}
+
 // MARK: - Relative-age formatting (UI)
 
 private let projectRelativeFormatter: RelativeDateTimeFormatter = {

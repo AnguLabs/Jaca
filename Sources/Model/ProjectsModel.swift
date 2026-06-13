@@ -5,6 +5,10 @@ import AppKit
 /// A transient toast shown over the Projects area.
 struct ProjectsToast: Equatable { var message: String; var systemFallback: String }
 
+/// How the Projects list is laid out: a flat list, or a tree that nests detected
+/// sub-projects under their container folder.
+enum ProjectsViewMode: String, CaseIterable { case tree, list }
+
 /// State for the unified Projects area — the merge of the old Worktrees and Claude
 /// Projects areas. It auto-discovers projects Claude Code has run in (and their
 /// worktrees), lets the user add arbitrary folders, and offers per-checkout disk-cache
@@ -24,6 +28,11 @@ final class ProjectsModel {
     var expanded: Set<String> = []
     var toast: ProjectsToast?
 
+    /// List vs tree layout; persisted, defaults to tree.
+    var viewMode: ProjectsViewMode {
+        didSet { UserDefaults.standard.set(viewMode.rawValue, forKey: Self.viewModeKey) }
+    }
+
     private(set) var lastRefresh: Date?
     private var userFolders: [String]
     private let scanner = ProjectsScanner()
@@ -37,9 +46,12 @@ final class ProjectsModel {
     private static let autoRefreshTTL: TimeInterval = 30
     private static let userFoldersKey = "jaca.projectFolders"
     private static let legacyWorktreeKey = "jaca.worktreesFolder"
+    private static let viewModeKey = "jaca.projectsViewMode"
 
     init() {
         userFolders = Self.loadUserFolders()
+        viewMode = UserDefaults.standard.string(forKey: Self.viewModeKey)
+            .flatMap(ProjectsViewMode.init(rawValue:)) ?? .tree
         if let cached = cache.load() { projects = cached }
         startWatching()
     }
@@ -49,6 +61,11 @@ final class ProjectsModel {
     var totalProjects: Int { projects.count }
     var totalWorktrees: Int { projects.reduce(0) { $0 + $1.worktreeCount } }
     var hasNoData: Bool { projects.isEmpty }
+
+    /// The projects laid out per the current view mode (tree nests sub-projects).
+    var nodes: [ProjectNode] {
+        viewMode == .tree ? ProjectsGrouping.tree(projects) : ProjectsGrouping.flat(projects)
+    }
     /// Block the UI with a loader only on a cold first scan (no cache to show).
     var isFirstLoad: Bool { projects.isEmpty && isRefreshing && !hasCompletedScan }
 

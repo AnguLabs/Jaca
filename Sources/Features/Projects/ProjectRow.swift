@@ -1,68 +1,43 @@
 import SwiftUI
 import Lemonade
 
-/// One project row: a folder avatar, the project name with its real path, badges
-/// (Claude / worktree count), total on-disk size, and a chevron that expands its
-/// checkouts. Hover reveals "Reveal in Finder"; user-added projects also get a "Remove
-/// from list" affordance. Tapping the row expands the checkouts.
-struct ProjectRow: View {
-    let project: Project
-    let isExpanded: Bool
+private let nodeIndent: CGFloat = 16
+
+/// A project node row (used by both LIST and TREE views). Shows the project's folder,
+/// badges (Claude / sub-project or worktree counts), total size, and a chevron. Expanding
+/// reveals nested sub-projects (TREE) and/or the project's checkouts (main + worktrees).
+/// `depth` indents nested levels. Recursive for the tree.
+struct ProjectNodeView: View {
+    let node: ProjectNode
+    var depth: Int = 0
     let model: ProjectsModel
-    let onToggle: () -> Void
+    let onToggle: (String) -> Void
 
     @State private var hovering = false
     @State private var confirmingRemove = false
 
+    private var project: Project { node.project }
+    private var isExpanded: Bool { model.isExpanded(node.id) }
+    private var hasCheckouts: Bool { !project.checkouts.isEmpty }
+    private var isExpandable: Bool { node.hasChildren || hasCheckouts }
+
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 11) {
-                avatar
-
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        LemonadeUi.Text(
-                            project.name,
-                            textStyle: LemonadeTypography.shared.bodyMediumSemiBold,
-                            color: LemonadeTheme.colors.content.contentPrimary,
-                            maxLines: 1
-                        )
-                        if project.isClaudeProject { LemonadeUi.Tag(label: "Claude", voice: .positive) }
-                        if project.hasWorktrees { LemonadeUi.Tag(label: worktreeTag, voice: .neutral) }
-                    }
-                    Text(project.displayPath)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(LemonadeTheme.colors.content.contentSecondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-
-                if hovering { hoverActions }
-
-                if project.isGitRepo, project.sizesComputed {
-                    Text(formatSize(project.totalSizeMB))
-                        .font(.system(size: 12.5, weight: .medium, design: .monospaced))
-                        .monospacedDigit()
-                        .foregroundStyle(LemonadeTheme.colors.content.contentPrimary)
-                        .frame(minWidth: 64, alignment: .trailing)
-                }
-
-                LemonadeUi.Icon(
-                    icon: .chevronRight, contentDescription: nil, size: .small,
-                    tint: LemonadeTheme.colors.content.contentTertiary
-                )
-                .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                .opacity(project.isExpandable ? 1 : 0)
-                .animation(.easeInOut(duration: 0.18), value: isExpanded)
-            }
-            .padding(.vertical, 9)
-            .padding(.horizontal, 10)
+            headerRow
+                .padding(.vertical, 9)
+                .padding(.trailing, 10)
+                .padding(.leading, 10 + CGFloat(depth) * nodeIndent)
+                .contentShape(Rectangle())
+                .onTapGesture { if isExpandable { onToggle(node.id) } }
+                .onHover { hovering = $0 }
 
             if isExpanded {
                 VStack(spacing: 1) {
+                    ForEach(node.children) { child in
+                        ProjectNodeView(node: child, depth: depth + 1, model: model, onToggle: onToggle)
+                    }
                     ForEach(project.checkouts) { checkout in
-                        ProjectCheckoutRow(project: project, checkout: checkout, model: model)
+                        ProjectCheckoutRow(project: project, checkout: checkout, depth: depth, model: model)
                     }
                 }
                 .padding(.bottom, 4)
@@ -72,18 +47,67 @@ struct ProjectRow: View {
         .clipped()
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(isExpanded ? LemonadeTheme.colors.background.bgNeutralSubtle : .clear)
+                .fill(isExpanded && hasCheckouts ? LemonadeTheme.colors.background.bgNeutralSubtle : .clear)
         )
-        .contentShape(Rectangle())
-        .onTapGesture { if project.isExpandable { onToggle() } }
-        .onHover { hovering = $0 }
+    }
+
+    private var headerRow: some View {
+        HStack(spacing: 11) {
+            avatar
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    LemonadeUi.Text(
+                        project.name,
+                        textStyle: LemonadeTypography.shared.bodyMediumSemiBold,
+                        color: LemonadeTheme.colors.content.contentPrimary,
+                        maxLines: 1
+                    )
+                    if project.isClaudeProject { LemonadeUi.Tag(label: "Claude", voice: .positive) }
+                    if node.hasChildren { LemonadeUi.Tag(label: projectsTag, voice: .neutral) }
+                    if project.hasWorktrees { LemonadeUi.Tag(label: worktreeTag, voice: .neutral) }
+                }
+                Text(project.displayPath)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(LemonadeTheme.colors.content.contentSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+
+            if hovering { hoverActions }
+
+            if project.isGitRepo, project.sizesComputed {
+                Text(formatSize(project.totalSizeMB))
+                    .font(.system(size: 12.5, weight: .medium, design: .monospaced))
+                    .monospacedDigit()
+                    .foregroundStyle(LemonadeTheme.colors.content.contentPrimary)
+                    .frame(minWidth: 64, alignment: .trailing)
+            }
+
+            LemonadeUi.Icon(
+                icon: .chevronRight, contentDescription: nil, size: .small,
+                tint: LemonadeTheme.colors.content.contentTertiary
+            )
+            .rotationEffect(.degrees(isExpanded ? 90 : 0))
+            .opacity(isExpandable ? 1 : 0)
+            .animation(.easeInOut(duration: 0.18), value: isExpanded)
+        }
     }
 
     private var avatar: some View {
         RoundedRectangle(cornerRadius: 9, style: .continuous)
-            .fill(LemonadeTheme.colors.background.bgNeutralSubtle)
+            .fill(node.hasChildren
+                  ? LemonadeTheme.colors.background.bgBrandSubtle
+                  : LemonadeTheme.colors.background.bgNeutralSubtle)
             .frame(width: 34, height: 34)
-            .overlay(GroveIcon(glyph: .folder, size: 17, tint: LemonadeTheme.colors.content.contentPrimary))
+            .overlay(GroveIcon(
+                glyph: .folder,
+                size: 17,
+                tint: node.hasChildren
+                    ? LemonadeTheme.colors.content.contentBrand
+                    : LemonadeTheme.colors.content.contentPrimary
+            ))
     }
 
     @ViewBuilder private var hoverActions: some View {
@@ -106,6 +130,9 @@ struct ProjectRow: View {
         .help("Reveal in Finder")
     }
 
+    private var projectsTag: String {
+        node.children.count == 1 ? "1 project" : "\(node.children.count) projects"
+    }
     private var worktreeTag: String {
         project.worktreeCount == 1 ? "1 worktree" : "\(project.worktreeCount) worktrees"
     }
@@ -130,6 +157,7 @@ struct ProjectRow: View {
 struct ProjectCheckoutRow: View {
     let project: Project
     let checkout: ProjectCheckout
+    var depth: Int = 0
     let model: ProjectsModel
 
     @State private var hovering = false
@@ -188,8 +216,8 @@ struct ProjectCheckoutRow: View {
             actions
         }
         .padding(.vertical, 7)
-        .padding(.leading, 10)
         .padding(.trailing, 12)
+        .padding(.leading, 10 + CGFloat(depth + 1) * nodeIndent)
         .contentShape(Rectangle())
         .opacity(checkout.removing ? 0 : 1)
         .animation(.easeInOut(duration: 0.28), value: checkout.removing)

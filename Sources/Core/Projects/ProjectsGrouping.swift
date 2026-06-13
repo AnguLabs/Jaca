@@ -43,6 +43,49 @@ enum ProjectsGrouping {
         .sorted { recency($0.effectiveLastActive, $0.name, $1.effectiveLastActive, $1.name) }
     }
 
+    /// Nests projects by path containment for the TREE view: a project becomes a child
+    /// of the project whose path is its nearest ancestor directory (e.g. every
+    /// `~/workspace/<repo>` nests under `~/workspace` when that's also a project). The
+    /// forest is sorted by recency at each level. With no containment the result is a
+    /// flat list — identical to LIST view.
+    static func tree(_ projects: [Project]) -> [ProjectNode] {
+        let paths = Set(projects.map(\.path))
+        func nearestParent(of path: String) -> String? {
+            var best: String?
+            for q in paths where q != path {
+                guard path.hasPrefix(q + "/") else { continue }   // directory-boundary prefix
+                if best == nil || q.count > best!.count { best = q }
+            }
+            return best
+        }
+
+        var childrenByParent: [String: [Project]] = [:]
+        var roots: [Project] = []
+        for p in projects {
+            if let parent = nearestParent(of: p.path) {
+                childrenByParent[parent, default: []].append(p)
+            } else {
+                roots.append(p)
+            }
+        }
+
+        func build(_ p: Project) -> ProjectNode {
+            let kids = (childrenByParent[p.path] ?? []).map(build)
+            return ProjectNode(project: p, children: sortNodes(kids))
+        }
+        return sortNodes(roots.map(build))
+    }
+
+    /// Flat (LIST view): every project as a childless node, preserving order.
+    static func flat(_ projects: [Project]) -> [ProjectNode] {
+        projects.map { ProjectNode(project: $0, children: []) }
+    }
+
+    private static func sortNodes(_ nodes: [ProjectNode]) -> [ProjectNode] {
+        nodes.sorted { recency($0.project.effectiveLastActive, $0.project.name,
+                               $1.project.effectiveLastActive, $1.project.name) }
+    }
+
     /// More-recent-first; entries with no date sink below dated ones; ties break by name.
     private static func recency(_ ad: Date?, _ an: String, _ bd: Date?, _ bn: String) -> Bool {
         switch (ad, bd) {
