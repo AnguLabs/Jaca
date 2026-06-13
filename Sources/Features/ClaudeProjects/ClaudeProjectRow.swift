@@ -157,8 +157,14 @@ struct ClaudeWorktreeRow: View {
                 .help("Reveal in Finder")
             }
 
-            if worktree.hasClaudeSessions {
+            // A worktree under `.claude/worktrees/` is Claude-created, so it's marked
+            // "Claude" even when its session history was cleaned up — in which case it
+            // also gets a muted "No project" tag.
+            if worktree.isClaudeManaged || worktree.hasClaudeSessions {
                 LemonadeUi.Tag(label: "Claude", voice: .positive)
+            }
+            if worktree.isClaudeManaged && !worktree.hasClaudeSessions {
+                LemonadeUi.Tag(label: "No project", voice: .neutral)
             }
             if let age = subtitleAge {
                 Text(age)

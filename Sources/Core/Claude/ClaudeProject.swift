@@ -56,6 +56,11 @@ struct ClaudeWorktree: Identifiable, Equatable, Codable {
         return url.lastPathComponent
     }
     var displayPath: String { (path as NSString).abbreviatingWithTildeInPath }
+
+    /// True when the worktree lives under a repo's `.claude/worktrees/` — i.e. it was
+    /// created by Claude Code's worktree feature, even if its session transcripts have
+    /// since been cleaned up (so `hasClaudeSessions` may still be false).
+    var isClaudeManaged: Bool { path.contains(ClaudeProjectGrouping.worktreeMarker) }
 }
 
 // MARK: - Relative-age formatting (UI)

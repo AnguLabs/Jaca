@@ -53,6 +53,17 @@ final class ClaudeProjectGroupingTests: XCTestCase {
         XCTAssertEqual(jaca.worktreeCount, 1)
     }
 
+    // MARK: - Claude-managed flag (drives the "Claude" / "No project" tags)
+
+    func test_isClaudeManaged_reflectsWorktreePath() {
+        let managed = ClaudeWorktree(path: "/ws/teya/.claude/worktrees/foo", exists: true,
+                                     hasClaudeSessions: false, sessionCount: 0, lastActive: nil)
+        XCTAssertTrue(managed.isClaudeManaged)        // under .claude/worktrees, even with no sessions
+        let elsewhere = ClaudeWorktree(path: "/ws/teya-wt-foo", exists: true,
+                                       hasClaudeSessions: true, sessionCount: 2, lastActive: nil)
+        XCTAssertFalse(elsewhere.isClaudeManaged)     // git worktree outside .claude/worktrees
+    }
+
     // MARK: - Active-only filtering
 
     func test_activeOnly_dropsMissingWorktreesAndEmptyMissingProjects() {
