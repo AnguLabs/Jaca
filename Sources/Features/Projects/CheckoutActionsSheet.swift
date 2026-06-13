@@ -42,7 +42,7 @@ struct CheckoutActionsSheet: View {
                     icon: .trash,
                     title: "Delete worktree",
                     description: nil,
-                    meta: nil,
+                    meta: checkout.sizeComputed ? "\(formatSize(checkout.sizeMB)) on disk" : nil,
                     button: LemonadeUi.Button(
                         label: confirmingDelete ? "Confirm delete?" : "Delete worktree",
                         onClick: { handleDelete() },
