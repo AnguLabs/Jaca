@@ -12,6 +12,7 @@ struct GradleToast: Equatable { var message: String; var systemFallback: String 
 final class GradleDaemonsModel {
     var daemons: [GradleDaemon] = []
     var cacheEntries: [GradleCacheEntry] = []
+    var cacheLoading = false
     var toast: GradleToast? = nil
 
     var cacheTotalMB: Int { cacheEntries.reduce(0) { $0 + $1.sizeMB } }
@@ -50,11 +51,15 @@ final class GradleDaemonsModel {
     }
 
     /// Per-version `~/.gradle/caches` sizes. Computed on demand (du is slow), not polled.
+    /// Independent of whether any daemon is running — the cache lives on disk regardless.
     func refreshCache() {
+        cacheLoading = true
         let service = self.service
         Task { [weak self] in
             let entries = await service.cacheSizes()
-            self?.cacheEntries = entries
+            guard let self else { return }
+            self.cacheEntries = entries
+            self.cacheLoading = false
         }
     }
 
