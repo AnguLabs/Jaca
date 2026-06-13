@@ -190,6 +190,7 @@ final class AppModel {
     @discardableResult
     func startSession(for device: Device, filter: LogFilter = LogFilter(),
                       name: String? = nil, autoStart: Bool = true) -> LogSession? {
+        mode = .devices   // opening a device session returns to the devices/sessions view
         guard makeLogSource(for: device) != nil else { return nil }   // device has a usable source
         var filter = filter
         filter.exclusions = LogExclusionStore.shared.rules            // global hidden-message rules
@@ -240,6 +241,7 @@ final class AppModel {
 
     @discardableResult
     func startNetworkSession(for device: Device, name: String? = nil, autoStart: Bool = true) -> NetworkSession? {
+        mode = .devices   // opening a session returns to the devices/sessions view
         let authority: CertificateAuthority
         if let ca { authority = ca }
         else {

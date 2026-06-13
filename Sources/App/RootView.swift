@@ -36,27 +36,14 @@ struct RootView: View {
     @ViewBuilder
     private var sidebar: some View {
         VStack(spacing: 0) {
-            Picker("", selection: modeBinding) {
-                Text("Devices").tag(WorkspaceMode.devices)
-                Text("Worktrees").tag(WorkspaceMode.worktrees)
-            }
-            .labelsHidden()
-            .pickerStyle(.segmented)
-            .padding(8)
-
+            // A "Worktrees" section header (styled like the Devices header) that
+            // navigates the main area to the worktrees view when tapped. The Devices
+            // header + device list stay below, unchanged.
+            WorktreesSidebarHeader(model: model)
             Divider()
-
-            if model.mode == .devices {
-                DeviceSidebarView(model: model)
-            } else {
-                WorktreesSidebar(model: model.worktrees)
-            }
+            DeviceSidebarView(model: model)
         }
         .background(LemonadeTheme.colors.background.bgElevated)
-    }
-
-    private var modeBinding: Binding<WorkspaceMode> {
-        Binding(get: { model.mode }, set: { model.mode = $0 })
     }
 
     // MARK: - Detail
