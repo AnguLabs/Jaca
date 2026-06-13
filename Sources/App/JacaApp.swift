@@ -55,6 +55,7 @@ final class JacaAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         open.target = self
         menu.addItem(open)
         menu.addItem(.separator())
+        addUpdateItem(to: menu)
         let quit = NSMenuItem(title: "Quit Jaca", action: #selector(quit), keyEquivalent: "q")
         quit.target = self
         menu.addItem(quit)
@@ -66,9 +67,33 @@ final class JacaAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         statusItem?.menu = nil
     }
 
+    /// Adds an "Update Jaca" item when one is available, or a disabled progress line
+    /// while an update runs. Nothing when up to date or the feature is off.
+    private func addUpdateItem(to menu: NSMenu) {
+        MainActor.assumeIsolated {
+            let update = UpdateModel.shared
+            guard update.enabled else { return }
+            if let phase = update.phase {
+                let item = NSMenuItem(title: "Updating — \(phase.label)", action: nil, keyEquivalent: "")
+                item.isEnabled = false
+                menu.addItem(item)
+                menu.addItem(.separator())
+            } else if update.updateAvailable {
+                let item = NSMenuItem(title: "Update Jaca", action: #selector(runUpdate), keyEquivalent: "")
+                item.target = self
+                menu.addItem(item)
+                menu.addItem(.separator())
+            }
+        }
+    }
+
     @objc private func openWindow() {
         NSApp.activate(ignoringOtherApps: true)
         mainWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    @objc private func runUpdate() {
+        MainActor.assumeIsolated { UpdateModel.shared.runUpdate() }
     }
 
     @objc private func quit() { NSApp.terminate(nil) }
