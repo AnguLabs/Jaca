@@ -7,37 +7,14 @@ import Lemonade
 /// are handled in `ProxyCleanup`; a hard SIGKILL is covered by the sidebar
 /// "Revert" affordance.
 final class JacaAppDelegate: NSObject, NSApplicationDelegate {
-    private var statusItem: NSStatusItem?
-
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        installMenuBarItem()
+    /// Keep Jaca running (and its menu-bar icon visible) after the window is closed —
+    /// it lives in the menu bar; quit explicitly from there or with ⌘Q.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         ProxyCleanup.revertAll()
-    }
-
-    /// A menu-bar (status) item so Jaca is reachable from the top bar like before.
-    /// Clicking it brings the main window to the front. Uses the app icon rendered as
-    /// a template (monochrome silhouette that adapts to a light/dark menu bar).
-    private func installMenuBarItem() {
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        if let button = item.button {
-            let icon = NSImage(named: "MenuBarIcon")
-            icon?.size = NSSize(width: 18, height: 18)
-            icon?.isTemplate = false   // the jackfruit art is colorful; template would flatten it
-            button.image = icon
-            button.toolTip = "Jaca"
-            button.target = self
-            button.action = #selector(focusMainWindow)
-        }
-        statusItem = item
-    }
-
-    @objc private func focusMainWindow() {
-        NSApp.activate(ignoringOtherApps: true)
-        let window = NSApp.windows.first { $0.canBecomeMain && !($0 is NSPanel) } ?? NSApp.windows.first
-        window?.makeKeyAndOrderFront(nil)
     }
 }
 
@@ -53,7 +30,7 @@ struct JacaApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: "main") {
             RootView()
                 .frame(minWidth: 900, minHeight: 560)
                 .preferredColorScheme(preferredScheme)
@@ -68,6 +45,15 @@ struct JacaApp: App {
                 .keyboardShortcut("o", modifiers: [.command, .shift])
             }
         }
+
+        // Always-present menu-bar icon (stays even when the window is closed, since the
+        // app no longer terminates on last-window-close). Opens/focuses the main window.
+        MenuBarExtra {
+            MenuBarMenu()
+        } label: {
+            Image("MenuBarIcon")
+                .renderingMode(.original)
+        }
     }
 
     private var preferredScheme: ColorScheme? {
@@ -76,5 +62,27 @@ struct JacaApp: App {
         case "dark": return .dark
         default: return nil
         }
+    }
+}
+
+/// Contents of the menu-bar dropdown.
+private struct MenuBarMenu: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("Open Jaca") {
+            NSApp.activate(ignoringOtherApps: true)
+            if let window = NSApp.windows.first(where: { $0.canBecomeMain && !($0 is NSPanel) }) {
+                window.makeKeyAndOrderFront(nil)
+            } else {
+                openWindow(id: "main")
+            }
+        }
+        .keyboardShortcut("j", modifiers: [.command, .shift])
+
+        Divider()
+
+        Button("Quit Jaca") { NSApp.terminate(nil) }
+            .keyboardShortcut("q")
     }
 }
