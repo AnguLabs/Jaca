@@ -20,11 +20,60 @@ struct GradleDaemonsView: View {
                 }
             }
             .animation(.easeOut(duration: 0.2), value: model.toast)
-            .onAppear { model.startPolling() }
+            .onAppear { model.startPolling(); model.refreshCache() }
             .onDisappear { model.stopPolling() }
     }
 
     @ViewBuilder private var content: some View {
+        VStack(spacing: 0) {
+            if !model.cacheEntries.isEmpty { cacheSection }
+            daemonsSection
+        }
+    }
+
+    /// Size of `~/.gradle/caches` broken down per Gradle version, shown above the daemon list.
+    private var cacheSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                LemonadeUi.Text(
+                    "GRADLE CACHE",
+                    textStyle: LemonadeTypography.shared.bodyXSmallOverline,
+                    color: LemonadeTheme.colors.content.contentTertiary
+                )
+                Spacer()
+                LemonadeUi.Text(
+                    "\(formatSize(model.cacheTotalMB)) total",
+                    textStyle: LemonadeTypography.shared.bodyXSmallRegular,
+                    color: LemonadeTheme.colors.content.contentSecondary
+                )
+            }
+            ForEach(model.cacheEntries) { entry in
+                HStack {
+                    LemonadeUi.Text(
+                        entry.version,
+                        textStyle: LemonadeTypography.shared.bodySmallMedium,
+                        color: LemonadeTheme.colors.content.contentPrimary,
+                        maxLines: 1
+                    )
+                    Spacer()
+                    Text(formatSize(entry.sizeMB))
+                        .font(.system(size: 12, weight: .medium, design: .monospaced))
+                        .monospacedDigit()
+                        .foregroundStyle(LemonadeTheme.colors.content.contentSecondary)
+                }
+                .padding(.vertical, 1)
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(LemonadeTheme.colors.background.bgNeutralSubtle)
+        )
+        .padding(.horizontal, 8)
+        .padding(.top, 8)
+    }
+
+    @ViewBuilder private var daemonsSection: some View {
         if model.daemons.isEmpty {
             emptyState
         } else {

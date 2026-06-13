@@ -15,3 +15,10 @@ struct GradleDaemon: Identifiable, Hashable {
     /// Heuristic: a daemon burning CPU is mid-build; near-idle daemons sit ~0%.
     var isBusy: Bool { cpu > 20 }
 }
+
+/// A per-version slice of `~/.gradle/caches` (e.g. "9.4.1" → 1.2 GB).
+struct GradleCacheEntry: Identifiable, Hashable {
+    var id: String { version }
+    let version: String
+    let sizeMB: Int
+}

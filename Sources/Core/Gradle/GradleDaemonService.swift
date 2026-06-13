@@ -50,6 +50,32 @@ struct GradleDaemonService: Sendable {
         return false
     }
 
+    /// Per-version sizes of `~/.gradle/caches/<version>` (the version-specific build caches),
+    /// largest first. (`du` can be slow on big caches, so this is computed on demand, not polled.)
+    func cacheSizes() async -> [GradleCacheEntry] {
+        let caches = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".gradle/caches")
+        guard let dirs = try? FileManager.default.contentsOfDirectory(
+            at: caches, includingPropertiesForKeys: [.isDirectoryKey]
+        ) else { return [] }
+
+        var entries: [GradleCacheEntry] = []
+        for dir in dirs {
+            let name = dir.lastPathComponent
+            // Only version-named dirs (e.g. "9.4.1", "8.10") — skip modules-2/transforms-*/etc.
+            guard name.range(of: #"^\d+\.\d+"#, options: .regularExpression) != nil else { continue }
+            let kb = await duKB(dir.path)
+            entries.append(GradleCacheEntry(version: name, sizeMB: kb / 1024))
+        }
+        return entries.sorted { $0.sizeMB > $1.sizeMB }
+    }
+
+    private func duKB(_ path: String) async -> Int {
+        guard let r = try? await CommandRunner.run(URL(fileURLWithPath: "/usr/bin/du"), ["-sk", path]) else { return 0 }
+        let first = r.stdout.split(whereSeparator: { $0 == "\t" || $0 == " " || $0 == "\n" }).first
+        return Int(first ?? "") ?? 0
+    }
+
     // MARK: - Parsing
 
     /// First capture group of `pattern` in `s`, or nil.
