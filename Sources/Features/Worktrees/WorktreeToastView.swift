@@ -3,8 +3,8 @@ import Lemonade
 
 /// Renders a transient worktrees toast using the Lemonade DS toast component.
 ///
-/// `WorktreesTab` owns the `WorktreesToast` lifecycle (it auto-clears after ~2.6s),
-/// so this view is purely presentational. It maps the tab's `systemFallback`
+/// `WorktreesModel` owns the `WorktreesToast` lifecycle (it auto-clears after ~2.6s),
+/// so this view is purely presentational. It maps the model's `systemFallback`
 /// glyph string onto a `LemonadeIcon` and renders a neutral toast.
 struct WorktreeToastView: View {
     let toast: WorktreesToast

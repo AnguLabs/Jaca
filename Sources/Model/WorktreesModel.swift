@@ -1,24 +1,22 @@
 import Foundation
 import Observation
 
-/// Phase of a worktrees tab's scan lifecycle.
+/// Phase of the worktrees scan lifecycle.
 enum WorktreesPhase { case empty, scanning, ready }
 
 /// A transient toast shown over the worktrees view.
 struct WorktreesToast: Equatable { var message: String; var systemFallback: String }
 
-/// One worktrees tab: bound to a single folder (a git repo with worktrees), it
-/// lists the worktrees under it, computes their disk usage, and offers cache
-/// clearing + worktree removal. Folder-bound rather than device-bound, so its
-/// `device` is a synthetic placeholder that's never persisted or used.
+/// The worktrees area's state: a single, persisted folder (a git repo with worktrees)
+/// whose worktrees it lists, computes disk usage for, and offers cache clearing +
+/// worktree removal. The folder is optional — nil means no folder is selected yet
+/// (the area shows an empty "choose a folder" state).
 @Observable
 @MainActor
-final class WorktreesTab: WorkspaceTab {
-    let id = UUID()
-    let folder: URL
-    var displayName: String
+final class WorktreesModel {
+    /// The currently selected worktrees folder, or nil for the empty state.
+    var folder: URL?
 
-    // Ported scan state.
     var phase: WorktreesPhase = .empty
     var trees: [Worktree] = []
     var openId: String? = nil
@@ -30,30 +28,32 @@ final class WorktreesTab: WorkspaceTab {
     private let cleaner = CacheCleaner()
     private var watcher: FolderWatcher?
 
-    // MARK: WorkspaceTab
+    private static let folderKey = "jaca.worktreesFolder"
 
-    var subtitle: String { displayFolderPath }
     var isRunning: Bool { isScanning || trees.contains { $0.cleaning } }
 
-    /// A worktrees tab is folder-bound, not device-bound. This synthetic device is
-    /// never persisted (see `descriptor(for:)`) nor used for streaming.
-    let device = Device(id: "worktrees", platform: .android, model: "Worktrees", state: .unknown)
+    init() {
+        if let restored = UserDefaults.standard.url(forKey: Self.folderKey) {
+            folder = restored
+            startWatching(restored)
+            scan()
+        }
+    }
 
-    func stop() { watcher?.cancel() }
-
-    init(folder: URL) {
-        self.folder = folder
-        self.displayName = folder.lastPathComponent
-        startWatching(folder)
+    /// Selects (and persists) a new worktrees folder, restarts the watcher, and rescans.
+    func selectFolder(_ url: URL) {
+        folder = url
+        UserDefaults.standard.set(url, forKey: Self.folderKey)
+        startWatching(url)
         scan()
     }
 
     // MARK: derived
 
-    /// The folder is immutable per tab; `selectedFolder` mirrors the source model's API.
-    var selectedFolder: URL { folder }
-
-    var displayFolderPath: String { (folder.path as NSString).abbreviatingWithTildeInPath }
+    var displayFolderPath: String {
+        guard let folder else { return "—" }
+        return (folder.path as NSString).abbreviatingWithTildeInPath
+    }
 
     var total: Int { trees.reduce(0) { $0 + $1.sizeMB } }
     var orphanCount: Int { trees.filter(\.orphan).count }
@@ -74,9 +74,8 @@ final class WorktreesTab: WorkspaceTab {
     /// Re-list worktrees when the view appears; only do a full scan if the set changed
     /// (avoids re-`du`-ing every worktree on every open).
     func refreshOnOpen() {
-        guard phase == .ready else { return }
+        guard phase == .ready, let folder else { return }
         let git = self.git
-        let folder = self.folder
         Task { [weak self] in
             guard let self, let list = try? await git.listWorktrees(in: folder) else { return }
             if Set(list.map(\.id)) != Set(self.trees.map(\.id)) {
@@ -97,7 +96,7 @@ final class WorktreesTab: WorkspaceTab {
     ///   result toast; when false (watcher / on-open refresh) updates the list in place, preserving
     ///   the open row and already-computed sizes so the UI doesn't flicker.
     func scan(announce: Bool = true) {
-        let folder = self.folder
+        guard let folder else { phase = .empty; return }
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDir), isDir.boolValue else {
             phase = .empty
@@ -198,9 +197,8 @@ final class WorktreesTab: WorkspaceTab {
     /// On success the row fades out and drops from the list; on failure git's message is shown
     /// (e.g. the main working tree can't be removed) and the row stays.
     func deleteWorktree(_ id: String) {
-        guard let w = trees.first(where: { $0.id == id }) else { return }
+        guard let w = trees.first(where: { $0.id == id }), let repo = folder else { return }
         let path = URL(fileURLWithPath: w.id)
-        let repo = self.folder
         let git = self.git
         Task { [weak self] in
             guard let self else { return }

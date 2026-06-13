@@ -8,7 +8,7 @@ import Lemonade
 struct WorktreeRow: View {
     let w: Worktree
     let isOpen: Bool
-    let tab: WorktreesTab
+    let model: WorktreesModel
     let onToggle: () -> Void
 
     var body: some View {
@@ -59,7 +59,7 @@ struct WorktreeRow: View {
             .padding(.horizontal, 10)
 
             if isOpen {
-                WorktreeActionsView(w: w, tab: tab)
+                WorktreeActionsView(w: w, model: model)
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }

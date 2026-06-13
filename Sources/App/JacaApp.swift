@@ -33,10 +33,8 @@ struct JacaApp: App {
         .windowToolbarStyle(.unified(showsTitle: true))
         .commands {
             CommandGroup(after: .newItem) {
-                Button("Open Worktrees…") {
-                    if let folder = WorktreesOpen.pickFolder() {
-                        NotificationCenter.default.post(name: .openWorktrees, object: folder)
-                    }
+                Button("Worktrees") {
+                    NotificationCenter.default.post(name: .openWorktrees, object: nil)
                 }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
             }
