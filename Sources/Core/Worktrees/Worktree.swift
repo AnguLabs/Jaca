@@ -1,6 +1,6 @@
 import Foundation
 
-enum OrphanKind: Hashable { case deleted, detached }
+enum OrphanKind: Hashable, Codable { case deleted, detached }
 
 struct Worktree: Identifiable, Hashable {
     let id: String

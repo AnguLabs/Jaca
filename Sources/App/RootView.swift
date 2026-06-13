@@ -26,8 +26,8 @@ struct RootView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { model.persistTabs() }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .openWorktrees)) { _ in
-            model.mode = .worktrees
+        .onReceive(NotificationCenter.default.publisher(for: .openProjects)) { _ in
+            model.mode = .projects
         }
     }
 
@@ -36,10 +36,9 @@ struct RootView: View {
     @ViewBuilder
     private var sidebar: some View {
         VStack(spacing: 0) {
-            // A "Worktrees" section header (styled like the Devices header) that
-            // navigates the main area to the worktrees view when tapped. The Devices
-            // header + device list stay below, unchanged.
-            WorktreesSidebarHeader(model: model)
+            // Section headers (styled like the Devices header) that navigate the main
+            // area when tapped. The Devices header + device list stay below, unchanged.
+            ProjectsSidebarHeader(model: model)
             GradleSidebarHeader(model: model)
             XcodeSidebarHeader(model: model)
             Divider()
@@ -52,8 +51,8 @@ struct RootView: View {
 
     @ViewBuilder
     private var detail: some View {
-        if model.mode == .worktrees {
-            WorktreesAreaView(model: model.worktrees)
+        if model.mode == .projects {
+            ProjectsAreaView(model: model.projects)
         } else if model.mode == .gradle {
             GradleDaemonsView(model: model.gradle)
         } else if model.mode == .xcode {

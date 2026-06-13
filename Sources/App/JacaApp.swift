@@ -114,8 +114,8 @@ struct JacaApp: App {
         .windowToolbarStyle(.unified(showsTitle: true))
         .commands {
             CommandGroup(after: .newItem) {
-                Button("Worktrees") {
-                    NotificationCenter.default.post(name: .openWorktrees, object: nil)
+                Button("Projects") {
+                    NotificationCenter.default.post(name: .openProjects, object: nil)
                 }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
             }

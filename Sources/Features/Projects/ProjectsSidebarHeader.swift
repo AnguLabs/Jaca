@@ -1,31 +1,39 @@
 import SwiftUI
 import Lemonade
 
-/// Sidebar section header for Worktrees, styled to match the "Devices" header
-/// (title + trailing icon). Tapping it navigates the main area to the worktrees
-/// view; the folder+ icon picks/changes the worktrees folder. Highlights when active.
-struct WorktreesSidebarHeader: View {
+/// Sidebar section header for Projects, styled to match the other area headers. Tapping
+/// it navigates to the Projects area; the `+` adds a project folder and the refresh icon
+/// rescans. Highlights when active.
+struct ProjectsSidebarHeader: View {
     @Bindable var model: AppModel
 
-    private var active: Bool { model.mode == .worktrees }
+    private var active: Bool { model.mode == .projects }
 
     var body: some View {
-        HStack {
+        HStack(spacing: 6) {
             LemonadeUi.Text(
-                "Worktrees",
+                "Projects",
                 textStyle: LemonadeTypography.shared.headingXSmall,
                 color: active
                     ? LemonadeTheme.colors.content.contentPrimary
                     : LemonadeTheme.colors.content.contentSecondary
             )
             Spacer()
-            Button(action: pickFolder) {
+            Button(action: { model.projects.addFolder() }) {
                 Image(systemName: "folder.badge.plus")
                     .foregroundStyle(LemonadeTheme.colors.content.contentSecondary)
             }
             .buttonStyle(.plain)
-            .help("Choose worktrees folder")
-            .accessibilityIdentifier("worktreesFolderButton")
+            .help("Add a project folder")
+            .accessibilityIdentifier("projectsAddFolderButton")
+
+            Button(action: { model.projects.refresh() }) {
+                Image(systemName: "arrow.clockwise")
+                    .foregroundStyle(LemonadeTheme.colors.content.contentSecondary)
+            }
+            .buttonStyle(.plain)
+            .help("Rescan projects")
+            .accessibilityIdentifier("projectsRefreshButton")
         }
         .padding(.horizontal, LemonadeTheme.spaces.spacing200)
         .padding(.vertical, LemonadeTheme.spaces.spacing100)
@@ -34,16 +42,9 @@ struct WorktreesSidebarHeader: View {
                 .fill(active ? LemonadeTheme.colors.interaction.bgSubtleInteractive : .clear)
         )
         .contentShape(Rectangle())
-        .onTapGesture { model.mode = .worktrees }
+        .onTapGesture { model.mode = .projects }
         .padding(.horizontal, LemonadeTheme.spaces.spacing300)
         .padding(.top, LemonadeTheme.spaces.spacing300)
-        .accessibilityIdentifier("worktreesHeader")
-    }
-
-    private func pickFolder() {
-        if let url = WorktreesOpen.pickFolder() {
-            model.worktrees.selectFolder(url)
-            model.mode = .worktrees
-        }
+        .accessibilityIdentifier("projectsHeader")
     }
 }
