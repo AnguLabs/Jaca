@@ -41,7 +41,7 @@ struct CheckoutActionsSheet: View {
                 actionCard(
                     icon: .trash,
                     title: "Delete worktree",
-                    description: "Removes this worktree with `git worktree remove --force` and deletes its folder from disk. Any uncommitted changes inside it are lost. The branch itself is not deleted.",
+                    description: nil,
                     meta: nil,
                     button: LemonadeUi.Button(
                         label: confirmingDelete ? "Confirm delete?" : "Delete worktree",
@@ -111,7 +111,7 @@ struct CheckoutActionsSheet: View {
 
     // MARK: - Action card
 
-    private func actionCard(icon: LemonadeIcon, title: String, description: String,
+    private func actionCard(icon: LemonadeIcon, title: String, description: String?,
                             meta: String?, button: some View) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
@@ -123,11 +123,15 @@ struct CheckoutActionsSheet: View {
                     color: LemonadeTheme.colors.content.contentPrimary
                 )
             }
-            LemonadeUi.Text(
-                description,
-                textStyle: LemonadeTypography.shared.bodySmallRegular,
-                color: LemonadeTheme.colors.content.contentSecondary
-            )
+            if let description {
+                // Plain Text + fixedSize so the full description wraps instead of
+                // truncating at a couple of lines.
+                Text(description)
+                    .font(.system(size: 12))
+                    .foregroundStyle(LemonadeTheme.colors.content.contentSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
             if let meta {
                 Text(meta)
                     .font(.system(size: 11, design: .monospaced))
