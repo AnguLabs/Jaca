@@ -2,7 +2,7 @@ import Foundation
 import Observation
 
 /// The top-level areas of the app.
-enum WorkspaceMode: String { case devices, worktrees, gradle, xcode }
+enum WorkspaceMode: String { case devices, claudeProjects, worktrees, gradle, xcode }
 
 /// Root app state: the merged live device list and the ordered set of log
 /// sessions (tabs). Providers are pluggable, so iOS slots in by appending another
@@ -16,6 +16,9 @@ final class AppModel {
 
     /// Top-level area the app is showing: the device/session view or the worktrees area.
     var mode: WorkspaceMode = .devices
+
+    /// The Claude Projects area state (lists projects under ~/.claude and their worktrees).
+    let claudeProjects = ClaudeProjectsModel()
 
     /// The single, persisted worktrees area state.
     let worktrees = WorktreesModel()
