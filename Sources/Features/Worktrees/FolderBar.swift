@@ -7,8 +7,6 @@ import Lemonade
 /// Lemonade tokens.
 struct FolderBar: View {
     let model: WorktreesModel
-    /// Invoked when the user taps the change-folder affordance.
-    let onChangeFolder: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
@@ -37,15 +35,6 @@ struct FolderBar: View {
                 )
             }
             .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-
-            LemonadeUi.Button(
-                label: "Change",
-                onClick: onChangeFolder,
-                leadingIcon: .plus,
-                variant: .neutral,
-                type: .subtle,
-                size: .small
-            )
         }
         .padding(.vertical, 8)
         .padding(.horizontal, 10)
