@@ -41,6 +41,7 @@ struct RootView: View {
             // header + device list stay below, unchanged.
             WorktreesSidebarHeader(model: model)
             GradleSidebarHeader(model: model)
+            XcodeSidebarHeader(model: model)
             Divider()
             DeviceSidebarView(model: model)
         }
@@ -55,6 +56,8 @@ struct RootView: View {
             WorktreesAreaView(model: model.worktrees)
         } else if model.mode == .gradle {
             GradleDaemonsView(model: model.gradle)
+        } else if model.mode == .xcode {
+            XcodeAreaView(model: model.xcode)
         } else {
             devicesDetail
         }
