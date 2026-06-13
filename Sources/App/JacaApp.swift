@@ -7,8 +7,37 @@ import Lemonade
 /// are handled in `ProxyCleanup`; a hard SIGKILL is covered by the sidebar
 /// "Revert" affordance.
 final class JacaAppDelegate: NSObject, NSApplicationDelegate {
+    private var statusItem: NSStatusItem?
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        installMenuBarItem()
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         ProxyCleanup.revertAll()
+    }
+
+    /// A menu-bar (status) item so Jaca is reachable from the top bar like before.
+    /// Clicking it brings the main window to the front. Uses the app icon rendered as
+    /// a template (monochrome silhouette that adapts to a light/dark menu bar).
+    private func installMenuBarItem() {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        if let button = item.button {
+            let icon = (NSApp.applicationIconImage.copy() as? NSImage) ?? NSApp.applicationIconImage
+            icon?.size = NSSize(width: 18, height: 18)
+            icon?.isTemplate = true
+            button.image = icon
+            button.toolTip = "Jaca"
+            button.target = self
+            button.action = #selector(focusMainWindow)
+        }
+        statusItem = item
+    }
+
+    @objc private func focusMainWindow() {
+        NSApp.activate(ignoringOtherApps: true)
+        let window = NSApp.windows.first { $0.canBecomeMain && !($0 is NSPanel) } ?? NSApp.windows.first
+        window?.makeKeyAndOrderFront(nil)
     }
 }
 
