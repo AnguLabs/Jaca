@@ -7,6 +7,7 @@ import AppKit
 struct NetworkSessionView: View {
     @Bindable var session: NetworkSession
     @State private var showSetup = false
+    @State private var showCAInstall = false
     @State private var searchText = ""
 
     var body: some View {
@@ -33,17 +34,45 @@ struct NetworkSessionView: View {
         .background(LemonadeTheme.colors.background.bgDefault)
         .accessibilityIdentifier("networkSessionView")
         .onAppear { searchText = session.filterText }
-        .sheet(isPresented: $showSetup) { NetworkSetupSheet(session: session) }
+        // Proxy started but HTTPS isn't decrypting yet → guide the user to set up
+        // the CA (or switch to Agent). One-shot: cleared once consumed.
+        .onChange(of: session.proxyNeedsSetup) { _, needs in
+            if needs { showSetup = true; session.proxyNeedsSetup = false }
+        }
+        .sheet(isPresented: $showSetup) {
+            NetworkSetupSheet(
+                session: session,
+                onInstallCA: { showSetup = false; openCAInstall() },
+                onSwitchToAgent: { showSetup = false; session.reopenModeChooser() }
+            )
+        }
+        .sheet(isPresented: $showCAInstall) {
+            if let installer = session.caInstaller {
+                CAInstallSheet(installer: installer, onCancel: { session.cancelCAInstall() })
+            }
+        }
+    }
+
+    /// Probes the device, builds the installer, then presents the blocking sheet
+    /// (which starts it on appear).
+    private func openCAInstall() {
+        Task {
+            await session.prepareCAInstall()
+            if session.caInstaller != nil { showCAInstall = true }
+        }
     }
 
     private var divider: some View {
         Rectangle().fill(LemonadeTheme.colors.border.borderNeutralLow).frame(height: 1)
     }
 
-    /// A fresh/stopped tab with no captured traffic shows the capture-mode chooser
-    /// instead of auto-starting — proxy mode must be picked deliberately because it
-    /// reconfigures the device.
-    private var showCaptureChooser: Bool { !session.isRunning && session.transactions.isEmpty }
+    /// A fresh/stopped tab with no captured traffic and no chosen mode shows the
+    /// capture-mode chooser instead of auto-starting — proxy mode must be picked
+    /// deliberately because it reconfigures the device. Once a mode is chosen (incl.
+    /// restored from a previous launch) the tab is ready and the user just presses play.
+    private var showCaptureChooser: Bool {
+        !session.hasSelectedMode && !session.isRunning && session.transactions.isEmpty
+    }
 
     private var captureChooser: some View {
         VStack(spacing: LemonadeTheme.spaces.spacing300) {
@@ -78,6 +107,19 @@ struct NetworkSessionView: View {
                                     color: LemonadeTheme.colors.content.contentTertiary)
                         .frame(maxWidth: 420)
 
+                    if session.isAndroid {
+                        LemonadeUi.Button(label: "Install CA automatically", onClick: { openCAInstall() },
+                                          leadingIcon: .smartphone, variant: .neutral, type: .subtle, size: .small)
+                            .fixedSize()
+                        if let hint = rootHint {
+                            LemonadeUi.Text(hint,
+                                            textStyle: LemonadeTypography.shared.bodyXSmallRegular,
+                                            textAlign: .center,
+                                            color: LemonadeTheme.colors.content.contentTertiary)
+                                .frame(maxWidth: 420)
+                        }
+                    }
+
                     if session.agentAvailable {
                         LemonadeUi.Text("— or —",
                                         textStyle: LemonadeTypography.shared.bodyXSmallOverline,
@@ -105,6 +147,22 @@ struct NetworkSessionView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(LemonadeTheme.colors.background.bgDefault)
         .accessibilityIdentifier("networkCaptureChooser")
+    }
+
+    /// Surfaces the device's root status so the user knows whether the CA installs
+    /// automatically or needs a tap on the device.
+    private var rootHint: String? {
+        guard session.isAndroid, let caps = session.deviceContext?.capabilities else { return nil }
+        switch caps.root {
+        case .rooted:
+            return "Rooted / emulator — the CA installs into the system trust store automatically."
+        case .notRooted:
+            return caps.hasScreenLock
+                ? "Not rooted — you'll confirm one certificate prompt on the device."
+                : "Not rooted — set a screen lock on the device first (Android requires one for CA certs)."
+        case .unknown:
+            return nil
+        }
     }
 
     private var proxyCaption: String {
@@ -286,8 +344,17 @@ private struct NetworkAppPicker: View {
     @State private var loaded = false
     @State private var query = ""
 
+    /// Prefer the shared per-device list (polled once per device); fall back to
+    /// this tab's own one-shot load when no context is wired (e.g. in tests).
+    private var appList: [AppEntry] { session.deviceContext?.apps ?? apps }
+    private var debugSet: Set<String> { session.deviceContext?.debuggable ?? debuggable }
+    private var isLoading: Bool {
+        if let ctx = session.deviceContext { return !ctx.appsLoaded }
+        return loading
+    }
+
     var body: some View {
-        Button(action: { show = true; if !loaded { load() } }) {
+        Button(action: { show = true; onOpen() }) {
             HStack(spacing: 5) {
                 Image(systemName: "ladybug").font(.system(size: 11, weight: .semibold))
                 Text(buttonLabel).font(.system(size: 11, weight: .medium)).lineLimit(1)
@@ -312,11 +379,11 @@ private struct NetworkAppPicker: View {
     }
 
     private var sorted: [AppEntry] {
-        let f = query.isEmpty ? apps : apps.filter {
+        let f = query.isEmpty ? appList : appList.filter {
             $0.id.localizedCaseInsensitiveContains(query) || ($0.name ?? "").localizedCaseInsensitiveContains(query)
         }
         return f.sorted { a, b in
-            let da = debuggable.contains(a.id), db = debuggable.contains(b.id)
+            let da = debugSet.contains(a.id), db = debugSet.contains(b.id)
             if da != db { return da }                        // debuggable first
             if a.isUserApp != b.isUserApp { return a.isUserApp }
             return a.display.localizedCaseInsensitiveCompare(b.display) == .orderedAscending
@@ -334,12 +401,12 @@ private struct NetworkAppPicker: View {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     row(title: "Whole device (proxy)", subtitle: "capture all apps via MITM proxy",
                         debug: false, selected: session.targetPackage == nil) { select(nil) }
-                    if loading && apps.isEmpty {
+                    if isLoading && appList.isEmpty {
                         ProgressView().padding(LemonadeTheme.spaces.spacing400).frame(maxWidth: .infinity)
                     }
                     ForEach(sorted) { app in
                         row(title: app.display, subtitle: app.name != nil ? app.id : nil,
-                            debug: debuggable.contains(app.id),
+                            debug: debugSet.contains(app.id),
                             selected: session.targetPackage == app.id) { select(app.id) }
                     }
                 }
@@ -378,6 +445,13 @@ private struct NetworkAppPicker: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("netAppRow")
+    }
+
+    /// On open: nudge the shared per-device list to refresh, or do a one-shot
+    /// load if there's no context.
+    private func onOpen() {
+        if let ctx = session.deviceContext { ctx.refreshApps() }
+        else if !loaded { load() }
     }
 
     private func load() {
