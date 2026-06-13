@@ -23,9 +23,9 @@ final class JacaAppDelegate: NSObject, NSApplicationDelegate {
     private func installMenuBarItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = item.button {
-            let icon = (NSApp.applicationIconImage.copy() as? NSImage) ?? NSApp.applicationIconImage
+            let icon = NSImage(named: "MenuBarIcon")
             icon?.size = NSSize(width: 18, height: 18)
-            icon?.isTemplate = true
+            icon?.isTemplate = false   // the jackfruit art is colorful; template would flatten it
             button.image = icon
             button.toolTip = "Jaca"
             button.target = self
