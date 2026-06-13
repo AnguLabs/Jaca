@@ -12,6 +12,7 @@ final class UpdateModel {
 
     private(set) var status: UpdateStatus = .unknown
     private(set) var phase: UpdatePhase? = nil
+    private(set) var isChecking = false
     let enabled: Bool
 
     var updateAvailable: Bool {
@@ -47,13 +48,16 @@ final class UpdateModel {
         }
     }
 
-    /// Re-runs detection (skipped while an update is in flight).
+    /// Re-runs detection (skipped while an update is in flight or already checking).
     func check() {
-        guard enabled, let info, phase == nil else { return }
+        guard enabled, let info, phase == nil, !isChecking else { return }
+        isChecking = true
         let service = service
         Task { [weak self] in
             let result = await service.status(info)
-            self?.status = result
+            guard let self else { return }
+            self.status = result
+            self.isChecking = false
         }
     }
 

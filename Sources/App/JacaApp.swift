@@ -73,17 +73,22 @@ final class JacaAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         MainActor.assumeIsolated {
             let update = UpdateModel.shared
             guard update.enabled else { return }
+            let item: NSMenuItem
             if let phase = update.phase {
-                let item = NSMenuItem(title: "Updating — \(phase.label)", action: nil, keyEquivalent: "")
+                item = NSMenuItem(title: "Updating — \(phase.label)", action: nil, keyEquivalent: "")
                 item.isEnabled = false
-                menu.addItem(item)
-                menu.addItem(.separator())
             } else if update.updateAvailable {
-                let item = NSMenuItem(title: "Update Jaca", action: #selector(runUpdate), keyEquivalent: "")
+                item = NSMenuItem(title: "Update Jaca", action: #selector(runUpdate), keyEquivalent: "")
                 item.target = self
-                menu.addItem(item)
-                menu.addItem(.separator())
+            } else if update.isChecking {
+                item = NSMenuItem(title: "Checking for updates…", action: nil, keyEquivalent: "")
+                item.isEnabled = false
+            } else {
+                item = NSMenuItem(title: "Check for Updates", action: #selector(checkUpdate), keyEquivalent: "")
+                item.target = self
             }
+            menu.addItem(item)
+            menu.addItem(.separator())
         }
     }
 
@@ -94,6 +99,10 @@ final class JacaAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @objc private func runUpdate() {
         MainActor.assumeIsolated { UpdateModel.shared.runUpdate() }
+    }
+
+    @objc private func checkUpdate() {
+        MainActor.assumeIsolated { UpdateModel.shared.check() }
     }
 
     @objc private func quit() { NSApp.terminate(nil) }

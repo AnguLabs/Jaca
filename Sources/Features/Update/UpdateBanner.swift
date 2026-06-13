@@ -15,11 +15,52 @@ struct UpdateBanner: View {
                     progressRow(phase)
                 } else if case let .available(behind, subject) = update.status {
                     availableRow(behind: behind, subject: subject)
+                } else {
+                    idleRow
                 }
             }
         }
         .animation(.easeOut(duration: 0.2), value: update.phase)
         .animation(.easeOut(duration: 0.2), value: update.updateAvailable)
+        .animation(.easeOut(duration: 0.2), value: update.isChecking)
+    }
+
+    // MARK: - Idle (up to date / checking)
+
+    private var idleRow: some View {
+        HStack(spacing: 8) {
+            if update.isChecking {
+                ProgressView().controlSize(.small)
+            } else {
+                LemonadeUi.Icon(
+                    icon: .circleCheck, contentDescription: nil, size: .small,
+                    tint: LemonadeTheme.colors.content.contentPositive
+                )
+            }
+            LemonadeUi.Text(
+                update.isChecking ? "Checking for updates…" : "Up to date",
+                textStyle: LemonadeTypography.shared.bodySmallRegular,
+                color: LemonadeTheme.colors.content.contentSecondary,
+                maxLines: 1
+            )
+            Spacer(minLength: 0)
+            if !update.isChecking {
+                Button(action: { update.check() }) {
+                    LemonadeUi.Icon(
+                        icon: .arrowRotateCw, contentDescription: nil, size: .small,
+                        tint: LemonadeTheme.colors.content.contentSecondary
+                    )
+                }
+                .buttonStyle(.plain)
+                .help("Check for updates")
+                .accessibilityIdentifier("updateCheckButton")
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(card)
+        .padding(.horizontal, 8)
+        .padding(.bottom, 8)
     }
 
     // MARK: - Available
