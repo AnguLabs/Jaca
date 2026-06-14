@@ -12,6 +12,8 @@ class Session(
     @JvmField val remoteIp: Int,
 ) {
     @Volatile @JvmField var attributed: Boolean = false
+    /// Owning app package, resolved at attribution — sent to the desktop proxy as X-Jaca-App.
+    @Volatile @JvmField var packageName: String? = null
 }
 
 /// Source-port -> Session map. The forwarder records the original destination here
