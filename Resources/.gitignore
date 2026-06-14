@@ -1,0 +1,3 @@
+# The Jaca mobile APK is a build artifact copied in before the desktop build
+# (it powers the one-step "Install Jaca mobile" action). Don't commit the binary.
+*.apk

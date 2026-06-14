@@ -45,6 +45,8 @@ targets:
     deploymentTarget: "14.0"
     sources:
       - path: Sources
+      - path: Resources
+        buildPhase: resources
     dependencies:
       - package: Lemonade
       - package: swift-nio

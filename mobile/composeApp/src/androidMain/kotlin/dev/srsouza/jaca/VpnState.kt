@@ -1,9 +1,24 @@
 package dev.srsouza.jaca
 
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
 
-/// Process-wide capture state the VpnService updates and the UI observes.
+/// Process-wide capture state the VpnService writes and the UI observes. The service and
+/// Activity run in the same process, so a singleton [StateFlow] is the simplest bridge.
 object VpnState {
-    val active = MutableStateFlow(false)
-    val packets = MutableStateFlow(0L)
+    val state = MutableStateFlow(CaptureState())
+
+    /// Begin a fresh session (clears the previous run's packets/flows).
+    fun start() { state.value = CaptureState(active = true) }
+
+    /// Mark capture stopped but keep the collected flows on screen.
+    fun stop() { state.update { it.copy(active = false) } }
+
+    fun setPackets(count: Long) { state.update { it.copy(packetCount = count) } }
+
+    fun addFlow(flow: CapturedFlow) { state.update { it.copy(flows = it.flows.withFlow(flow)) } }
+
+    fun setServerAddress(address: String?) { state.update { it.copy(serverAddress = address) } }
+
+    fun setDesktopConnected(connected: Boolean) { state.update { it.copy(desktopConnected = connected) } }
 }

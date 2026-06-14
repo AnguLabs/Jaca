@@ -23,9 +23,10 @@ kotlin {
         commonMain.dependencies {
             implementation(compose.runtime)
             implementation(compose.foundation)
-            implementation(compose.material3)
             implementation(compose.ui)
             implementation(compose.components.resources)
+            implementation(libs.kotlinx.coroutines.core)
+            implementation(libs.lemonade.ui)   // Lemonade design system (KMP)
         }
         androidMain.dependencies {
             implementation(libs.androidx.activity.compose)
