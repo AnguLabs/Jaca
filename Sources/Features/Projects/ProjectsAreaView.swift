@@ -24,6 +24,18 @@ struct ProjectsAreaView: View {
             }
             .animation(.easeOut(duration: 0.2), value: model.toast)
             .onAppear { if model.shouldAutoRefresh { model.refresh() } }
+            .sheet(isPresented: Binding(
+                get: { model.showingHerdrConfig },
+                set: { model.showingHerdrConfig = $0 }
+            )) {
+                HerdrConfigSheet(model: model)
+            }
+            .sheet(isPresented: Binding(
+                get: { model.showingHerdrLaunch },
+                set: { model.showingHerdrLaunch = $0 }
+            )) {
+                HerdrLaunchSheet(model: model)
+            }
             .accessibilityIdentifier("projectsArea")
     }
 
@@ -68,6 +80,7 @@ struct ProjectsAreaView: View {
                 }
                 .transition(.opacity)
             }
+            if model.herdrInstalled { herdrSettingsButton }
             viewModePicker
         }
         .animation(.easeInOut(duration: 0.15), value: model.isRefreshing)
@@ -78,6 +91,18 @@ struct ProjectsAreaView: View {
         )
         .padding(.horizontal, 8)
         .padding(.top, 8)
+    }
+
+    /// Opens the app-wide Herdr config (the Claude command Herdr runs).
+    private var herdrSettingsButton: some View {
+        Button(action: { model.openHerdrSettings() }) {
+            LemonadeUi.Icon(
+                icon: .gear, contentDescription: "Herdr settings", size: .small,
+                tint: LemonadeTheme.colors.content.contentSecondary
+            )
+        }
+        .buttonStyle(.plain)
+        .help("Herdr settings — configure the Claude command")
     }
 
     private var viewModePicker: some View {

@@ -75,7 +75,20 @@ struct ProjectNodeView: View {
             }
             .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
 
-            if hovering { hoverActions }
+            if hovering, project.source == .user { removeButton }
+
+            if model.herdrInstalled, project.isClaudeProject, let herdrIcon = model.herdrIcon {
+                OpenInAppButton(icon: herdrIcon, help: "Open in Herdr (new worktree)", iconCornerRadius: 4) {
+                    model.openInHerdr(
+                        projectRoot: project.url, projectName: project.name,
+                        folder: project.url, isWorktree: false, hasGit: project.isGitRepo
+                    )
+                }
+            }
+            if let zed = model.zed {
+                OpenInAppButton(icon: zed.icon, help: "Open in \(zed.name)") { model.openInZed(project.url) }
+            }
+            OpenInAppButton(icon: model.finderIcon, help: "Open in Finder") { model.openInFinder(project.url) }
 
             if project.isGitRepo, project.sizesComputed {
                 Text(formatSize(project.totalSizeMB))
@@ -110,24 +123,18 @@ struct ProjectNodeView: View {
             ))
     }
 
-    @ViewBuilder private var hoverActions: some View {
-        if project.source == .user {
-            Button(action: { handleRemoveTap() }) {
-                Text(confirmingRemove ? "Confirm?" : "Remove")
-                    .font(.system(size: 11))
-                    .foregroundStyle(confirmingRemove
-                        ? LemonadeTheme.colors.content.contentCritical
-                        : LemonadeTheme.colors.content.contentSecondary)
-            }
-            .buttonStyle(.plain)
-            .help("Remove from list (keeps the folder on disk)")
-        }
-        Button(action: { model.reveal(project.url) }) {
-            Image(systemName: "arrow.up.forward.app")
-                .foregroundStyle(LemonadeTheme.colors.content.contentSecondary)
+    /// Shown only on hover for user-added projects: removes the project from the list
+    /// (keeps the folder on disk). Two-click confirm.
+    private var removeButton: some View {
+        Button(action: { handleRemoveTap() }) {
+            Text(confirmingRemove ? "Confirm?" : "Remove")
+                .font(.system(size: 11))
+                .foregroundStyle(confirmingRemove
+                    ? LemonadeTheme.colors.content.contentCritical
+                    : LemonadeTheme.colors.content.contentSecondary)
         }
         .buttonStyle(.plain)
-        .help("Reveal in Finder")
+        .help("Remove from list (keeps the folder on disk)")
     }
 
     private var projectsTag: String {
@@ -194,14 +201,18 @@ struct ProjectCheckoutRow: View {
             }
             .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
 
-            if hovering {
-                Button(action: { model.reveal(checkout.url) }) {
-                    Image(systemName: "arrow.up.forward.app")
-                        .foregroundStyle(LemonadeTheme.colors.content.contentSecondary)
+            if model.herdrInstalled, project.isClaudeProject, let herdrIcon = model.herdrIcon {
+                OpenInAppButton(icon: herdrIcon, help: herdrHelp, iconCornerRadius: 4) {
+                    model.openInHerdr(
+                        projectRoot: project.url, projectName: project.name,
+                        folder: checkout.url, isWorktree: !checkout.isMain, hasGit: project.isGitRepo
+                    )
                 }
-                .buttonStyle(.plain)
-                .help("Reveal in Finder")
             }
+            if let zed = model.zed {
+                OpenInAppButton(icon: zed.icon, help: "Open in \(zed.name)") { model.openInZed(checkout.url) }
+            }
+            OpenInAppButton(icon: model.finderIcon, help: "Open in Finder") { model.openInFinder(checkout.url) }
 
             Text(sizeText)
                 .font(.system(size: 12, weight: .medium, design: .monospaced))
@@ -273,5 +284,10 @@ struct ProjectCheckoutRow: View {
     private var sizeText: String {
         if checkout.cleaning { return "cleaning…" }
         return checkout.sizeComputed ? formatSize(checkout.sizeMB) : "—"
+    }
+
+    /// The main checkout starts a fresh worktree; a linked worktree opens in place.
+    private var herdrHelp: String {
+        checkout.isMain ? "Open in Herdr (new worktree)" : "Open in Herdr"
     }
 }
