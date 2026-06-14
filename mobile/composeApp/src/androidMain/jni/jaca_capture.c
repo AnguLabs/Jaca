@@ -33,6 +33,12 @@ typedef struct {
 
 static volatile int g_running = 0;
 
+// When set, TLS(443) connections are DNAT'd to the on-phone tunnel bridge (loopback),
+// which forwards them to the desktop decryption proxy. Everything else goes direct.
+static volatile int g_dnat_on = 0;
+static uint32_t g_dnat_ip = 0;     // network order (127.0.0.1)
+static volatile int g_dnat_port = 0;
+
 // Write a synthesized packet back to the app through the tun fd.
 static int cb_send_client(zdtun_t *tun, zdtun_pkt_t *pkt, const zdtun_conn_t *conn) {
     jaca_ctx_t *ctx = (jaca_ctx_t *) zdtun_userdata(tun);
@@ -67,6 +73,14 @@ static int cb_on_connection_open(zdtun_t *tun, zdtun_conn_t *conn) {
     if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
     (*env)->DeleteLocalRef(env, jsrc);
     (*env)->DeleteLocalRef(env, jdst);
+
+    // Route TLS to the desktop decryption proxy via the loopback bridge (the bridge falls
+    // back to direct if the proxy is unreachable, so connectivity is never lost).
+    if (g_dnat_on && t->ipproto == IPPROTO_TCP && ntohs(t->dst_port) == 443) {
+        zdtun_ip_t pip;
+        pip.ip4 = g_dnat_ip;
+        zdtun_conn_dnat(conn, &pip, htons((uint16_t) g_dnat_port), 4);
+    }
     return 0; // accept
 }
 
@@ -138,4 +152,16 @@ Java_dev_srsouza_jaca_JacaVpnService_nativeRun(JNIEnv *env, jobject thiz, jint t
 JNIEXPORT void JNICALL
 Java_dev_srsouza_jaca_JacaVpnService_nativeStop(JNIEnv *env, jobject thiz) {
     g_running = 0;
+}
+
+JNIEXPORT void JNICALL
+Java_dev_srsouza_jaca_JacaVpnService_nativeSetDnat(JNIEnv *env, jobject thiz, jint bridgePort) {
+    g_dnat_ip = inet_addr("127.0.0.1");
+    g_dnat_port = bridgePort;
+    g_dnat_on = 1;
+}
+
+JNIEXPORT void JNICALL
+Java_dev_srsouza_jaca_JacaVpnService_nativeClearDnat(JNIEnv *env, jobject thiz) {
+    g_dnat_on = 0;
 }

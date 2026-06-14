@@ -23,11 +23,14 @@ class JacaVpnService : VpnService() {
     private var captureThread: Thread? = null
     private var attribThread: Thread? = null
     private var bridge: DesktopBridge? = null
+    private var tunnelBridge: TunnelBridge? = null
     private var attributor: FlowAttributor? = null
     private val attribQueue = LinkedBlockingQueue<Flow>(ATTRIB_CAP)
 
     private external fun nativeRun(tunFd: Int, sdk: Int)
     private external fun nativeStop()
+    private external fun nativeSetDnat(bridgePort: Int)
+    private external fun nativeClearDnat()
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
@@ -58,8 +61,21 @@ class JacaVpnService : VpnService() {
 
         attributor = FlowAttributor(this)
 
+        // Loopback bridge that tunnels TLS to the desktop decryption proxy (or falls back to
+        // direct). Started up front; engaged only when the desktop advertises its proxy.
+        val tb = TunnelBridge()
+        val bridgePort = tb.start()
+        tunnelBridge = tb
+
         // Companion link to Jaca desktop: advertise over mDNS + stream captured flows.
-        val db = DesktopBridge(applicationContext) { connected -> VpnState.setDesktopConnected(connected) }
+        val db = DesktopBridge(applicationContext) { connected ->
+            VpnState.setDesktopConnected(connected)
+            if (!connected) { tb.clearProxy(); runCatching { nativeClearDnat() } } // back to direct
+        }
+        db.onProxy = { host, port ->
+            tb.setProxy(host, port)
+            runCatching { nativeSetDnat(bridgePort) } // route TLS(443) through the bridge
+        }
         db.start()
         bridge = db
         VpnState.setServerAddress(db.deviceIp()?.let { "$it:${db.port}" })
@@ -97,6 +113,7 @@ class JacaVpnService : VpnService() {
         runCatching { nativeStop() }
         attribThread?.interrupt(); attribThread = null
         captureThread?.interrupt(); captureThread = null
+        tunnelBridge?.stop(); tunnelBridge = null
         bridge?.stop(); bridge = null
         runCatching { tun?.close() }; tun = null   // unblocks the native tun read
         VpnState.stop()
