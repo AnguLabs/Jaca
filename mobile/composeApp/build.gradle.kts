@@ -42,6 +42,7 @@ kotlin {
 android {
     namespace = "dev.srsouza.jaca"
     compileSdk = libs.versions.android.compileSdk.get().toInt()
+    ndkVersion = "27.2.12479018"
 
     defaultConfig {
         applicationId = "dev.srsouza.jaca"
@@ -54,6 +55,18 @@ android {
         // scripts/build-mobile.sh (-PcommitHash=...); "dev" for ad-hoc local builds.
         val commitHash = (project.findProperty("commitHash") as String?) ?: "dev"
         buildConfigField("String", "COMMIT_HASH", "\"$commitHash\"")
+        ndk {
+            // arm64 covers Apple-Silicon emulators + modern devices; add others as needed.
+            abiFilters += listOf("arm64-v8a")
+        }
+    }
+
+    // Native capture engine (zdtun userspace TCP/IP stack + JNI bridge).
+    externalNativeBuild {
+        cmake {
+            path = file("src/androidMain/jni/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 
     buildFeatures {
