@@ -34,6 +34,20 @@ final class ProjectsModel {
     }
 
     private(set) var lastRefresh: Date?
+
+    /// The installed Zed editor, resolved once at init. Nil when Zed isn't installed, which
+    /// hides the per-row "Open in Zed" action entirely.
+    let zed = ExternalEditor.detect(.zed)
+
+    /// The system Finder icon, for the always-visible "Open in Finder" button. Resolved
+    /// by bundle id (Finder is always present), with a path fallback just in case.
+    let finderIcon: NSImage = {
+        let ws = NSWorkspace.shared
+        let url = ws.urlForApplication(withBundleIdentifier: "com.apple.finder")
+            ?? URL(fileURLWithPath: "/System/Library/CoreServices/Finder.app")
+        return ws.icon(forFile: url.path)
+    }()
+
     private var userFolders: [String]
     private let scanner = ProjectsScanner()
     private let cache = ProjectsCache()
@@ -270,11 +284,25 @@ final class ProjectsModel {
         }
     }
 
-    // MARK: - Reveal
+    // MARK: - Reveal & open
 
-    func reveal(_ url: URL) {
+    /// Opens the folder itself in Finder (shows its contents), rather than selecting it in
+    /// its parent.
+    func openInFinder(_ url: URL) {
         guard FileManager.default.fileExists(atPath: url.path) else { return }
-        NSWorkspace.shared.activateFileViewerSelecting([url])
+        NSWorkspace.shared.open(url)
+    }
+
+    /// Opens a project/checkout folder as a workspace in Zed. No-op (with a toast) when the
+    /// folder has gone missing; the action is only shown when `zed` is non-nil to begin with.
+    func openInZed(_ url: URL) {
+        guard let zed else { return }
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            flash("Folder no longer exists", fallback: "eraser")
+            return
+        }
+        zed.open(url)
+        flash("Opening \(url.lastPathComponent) in \(zed.name)")
     }
 
     // MARK: - Toast
