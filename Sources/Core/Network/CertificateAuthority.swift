@@ -18,9 +18,13 @@ final class CertificateAuthority: @unchecked Sendable {
     let rootCertificatePEM: String
     let storageDirectory: URL
 
-    /// Loads the CA from `directory` (default: Application Support/Jaca/ca),
-    /// generating and persisting a new one if absent.
+    /// Loads the CA from `directory` (default: Application Support/Jaca/ca), generating
+    /// and persisting a new one if absent. For the real app (default directory) the
+    /// private key lives in the macOS Keychain (encrypted, per-Mac), with a one-time
+    /// migration from any legacy on-disk key. Tests passing an explicit directory keep
+    /// the file-based key so they never touch the Keychain.
     init(directory: URL? = nil) throws {
+        let useKeychain = (directory == nil)
         let dir = directory ?? FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Jaca/ca", isDirectory: true)
@@ -29,9 +33,22 @@ final class CertificateAuthority: @unchecked Sendable {
 
         let certURL = dir.appendingPathComponent("rootCA.pem")
         let keyURL = dir.appendingPathComponent("rootCA.key.pem")
+        let keyAccount = "ca-private-key"
+
+        func loadKeyPEM() -> String? {
+            guard useKeychain else { return try? String(contentsOf: keyURL, encoding: .utf8) }
+            if let stored = KeychainStore.read(account: keyAccount) { return stored }
+            // Migrate a legacy on-disk key into the Keychain, then remove the plain file.
+            if let legacy = try? String(contentsOf: keyURL, encoding: .utf8) {
+                KeychainStore.write(account: keyAccount, value: legacy)
+                try? FileManager.default.removeItem(at: keyURL)
+                return legacy
+            }
+            return nil
+        }
 
         if let certPEM = try? String(contentsOf: certURL, encoding: .utf8),
-           let keyPEM = try? String(contentsOf: keyURL, encoding: .utf8),
+           let keyPEM = loadKeyPEM(),
            let cert = try? Certificate(pemEncoded: certPEM),
            let key = try? P256.Signing.PrivateKey(pemRepresentation: keyPEM) {
             caCertificate = cert
@@ -41,7 +58,11 @@ final class CertificateAuthority: @unchecked Sendable {
             caCertificate = cert
             caKey = key
             try cert.serializeAsPEM().pemString.write(to: certURL, atomically: true, encoding: .utf8)
-            try key.pemRepresentation.write(to: keyURL, atomically: true, encoding: .utf8)
+            if useKeychain {
+                KeychainStore.write(account: keyAccount, value: key.pemRepresentation)
+            } else {
+                try key.pemRepresentation.write(to: keyURL, atomically: true, encoding: .utf8)
+            }
         }
 
         rootCertificatePEM = try caCertificate.serializeAsPEM().pemString
