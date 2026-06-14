@@ -98,35 +98,45 @@ struct NetworkSessionView: View {
                 }
             } else {
                 VStack(spacing: LemonadeTheme.spaces.spacing200) {
-                    LemonadeUi.Button(label: "Start proxy capture", onClick: { session.startProxyCapture() },
-                                      leadingIcon: .arrowLeftRight, variant: .primary, type: .solid, size: .medium)
-                        .fixedSize()
-                    LemonadeUi.Text(proxyCaption,
-                                    textStyle: LemonadeTypography.shared.bodyXSmallRegular,
-                                    textAlign: .center,
-                                    color: LemonadeTheme.colors.content.contentTertiary)
-                        .frame(maxWidth: 420)
-
-                    if session.isAndroid {
-                        LemonadeUi.Button(label: "Install CA automatically", onClick: { openCAInstall() },
-                                          leadingIcon: .smartphone, variant: .neutral, type: .subtle, size: .small)
+                    let hasCompanion = session.availableSources.contains { $0.kind == .companion }
+                    if hasCompanion {
+                        LemonadeUi.Button(label: "Start companion capture", onClick: { session.startCompanionCapture() },
+                                          leadingIcon: .smartphone, variant: .primary, type: .solid, size: .medium)
                             .fixedSize()
-                        if let hint = rootHint {
-                            LemonadeUi.Text(hint,
-                                            textStyle: LemonadeTypography.shared.bodyXSmallRegular,
-                                            textAlign: .center,
-                                            color: LemonadeTheme.colors.content.contentTertiary)
-                                .frame(maxWidth: 420)
+                        LemonadeUi.Text("Capture the whole device through the Jaca mobile app, attributed per app.",
+                                        textStyle: LemonadeTypography.shared.bodyXSmallRegular,
+                                        textAlign: .center,
+                                        color: LemonadeTheme.colors.content.contentTertiary)
+                            .frame(maxWidth: 420)
+                        if session.isAndroid {
+                            LemonadeUi.Button(label: "Install CA automatically", onClick: { openCAInstall() },
+                                              leadingIcon: .smartphone, variant: .neutral, type: .subtle, size: .small)
+                                .fixedSize()
+                            if let hint = rootHint {
+                                LemonadeUi.Text(hint,
+                                                textStyle: LemonadeTypography.shared.bodyXSmallRegular,
+                                                textAlign: .center,
+                                                color: LemonadeTheme.colors.content.contentTertiary)
+                                    .frame(maxWidth: 420)
+                            }
                         }
+                    } else if !session.agentAvailable {
+                        LemonadeUi.Text("Install the Jaca mobile app on this device to capture its traffic, then it appears here automatically.",
+                                        textStyle: LemonadeTypography.shared.bodySmallRegular,
+                                        textAlign: .center,
+                                        color: LemonadeTheme.colors.content.contentSecondary)
+                            .frame(maxWidth: 420)
                     }
 
                     if session.agentAvailable {
-                        LemonadeUi.Text("— or —",
-                                        textStyle: LemonadeTypography.shared.bodyXSmallOverline,
-                                        color: LemonadeTheme.colors.content.contentTertiary)
-                            .padding(.top, LemonadeTheme.spaces.spacing100)
+                        if hasCompanion {
+                            LemonadeUi.Text("— or —",
+                                            textStyle: LemonadeTypography.shared.bodyXSmallOverline,
+                                            color: LemonadeTheme.colors.content.contentTertiary)
+                                .padding(.top, LemonadeTheme.spaces.spacing100)
+                        }
                         NetworkAppPicker(session: session)
-                        LemonadeUi.Text("Inspect one debuggable app in-process — no proxy or CA, and you get the call stack behind each request.",
+                        LemonadeUi.Text("Inspect one debuggable app in-process — call stacks behind each request, no CA.",
                                         textStyle: LemonadeTypography.shared.bodyXSmallRegular,
                                         textAlign: .center,
                                         color: LemonadeTheme.colors.content.contentTertiary)
@@ -163,12 +173,6 @@ struct NetworkSessionView: View {
         case .unknown:
             return nil
         }
-    }
-
-    private var proxyCaption: String {
-        session.isAndroid
-            ? "Routes the whole device through Jaca's MITM proxy. Sets the device's HTTP proxy while capturing and reverts it on stop."
-            : "Routes traffic through Jaca's MITM proxy. Point the device/simulator at it via Setup."
     }
 
     private var toolbar: some View {
@@ -298,8 +302,8 @@ struct NetworkSessionView: View {
             LemonadeUi.Text(session.isRunning ? "Waiting for traffic…" : "Capture stopped",
                             textStyle: LemonadeTypography.shared.bodySmallRegular,
                             color: LemonadeTheme.colors.content.contentSecondary)
-            if session.captureMode == .proxy {
-                LemonadeUi.Text("Open Setup to point your device at the proxy and trust the CA.",
+            if session.captureMode == .companion {
+                LemonadeUi.Text("Make sure Jaca mobile is capturing on the device and the CA is installed.",
                                 textStyle: LemonadeTypography.shared.bodyXSmallRegular,
                                 textAlign: .center,
                                 color: LemonadeTheme.colors.content.contentTertiary)
@@ -317,8 +321,6 @@ struct NetworkSessionView: View {
                                         : LemonadeTheme.colors.content.contentTertiary)
                 .frame(width: 8, height: 8)
             metric("\(session.transactions.count) requests")
-            if session.boundPort > 0 { metric("proxy \(session.hostAddress):\(session.boundPort)") }
-            if session.proxyConfigured { metric("device configured") }
             Spacer()
             metric(session.device.displayModel)
         }
@@ -400,7 +402,7 @@ private struct NetworkAppPicker: View {
             Rectangle().fill(LemonadeTheme.colors.border.borderNeutralLow).frame(height: 1)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    row(title: "Whole device (proxy)", subtitle: "capture all apps via MITM proxy",
+                    row(title: "Whole device (companion)", subtitle: "capture all apps via the Jaca mobile app",
                         debug: false, selected: session.targetPackage == nil) { select(nil) }
                     if isLoading && appList.isEmpty {
                         ProgressView().padding(LemonadeTheme.spaces.spacing400).frame(maxWidth: .infinity)

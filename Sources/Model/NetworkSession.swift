@@ -60,10 +60,6 @@ final class NetworkSession: WorkspaceTab, CaptureSink {
     /// The chosen source kind, defaulting to proxy before a choice is made.
     var captureMode: CaptureMode { currentDescriptor?.kind ?? .proxy }
 
-    /// True while the proxy source has the device's HTTP proxy configured (stranded-proxy
-    /// detection + status bar). Read-only view of the running source's state.
-    var proxyConfigured: Bool { (current as? ProxyCaptureSource)?.isProxyConfigured ?? false }
-
     /// In-process agent capture is Android-only and needs the bundled agent artifacts.
     var agentAvailable: Bool { device.platform == .android && AgentArtifacts.isAvailable }
     var isAndroid: Bool { device.platform == .android }
@@ -183,11 +179,6 @@ final class NetworkSession: WorkspaceTab, CaptureSink {
 
     // MARK: - Convenience wrappers (used by the chooser + app picker)
 
-    func startProxyCapture() {
-        guard let d = CaptureSourceRegistry.descriptor(id: "proxy") else { return }
-        select(d)
-    }
-
     func startAgentCapture(package: String) {
         guard let d = CaptureSourceRegistry.descriptor(id: "agent") else { return }
         select(d, package: package)
@@ -198,9 +189,9 @@ final class NetworkSession: WorkspaceTab, CaptureSink {
         select(d)
     }
 
-    /// Choose what to capture: a specific app (agent) or the whole device (proxy).
+    /// Choose what to capture: a specific app (agent) or the whole device (companion).
     func setTarget(_ package: String?) {
-        if let pkg = package, !pkg.isEmpty { startAgentCapture(package: pkg) } else { startProxyCapture() }
+        if let pkg = package, !pkg.isEmpty { startAgentCapture(package: pkg) } else { startCompanionCapture() }
     }
 
     // MARK: - CaptureSink (events from the running source)
