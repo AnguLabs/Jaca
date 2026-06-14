@@ -50,11 +50,24 @@ final class CompanionLink {
         }
     }
 
+    /// TLS parameters for the companion link. The phone presents a self-signed cert; we
+    /// trust it without PKI because the goal here is link confidentiality (no passive
+    /// tracing), while the CA installed on the device is what authenticates app traffic.
+    private func tlsParams() -> NWParameters {
+        let tls = NWProtocolTLS.Options()
+        sec_protocol_options_set_verify_block(
+            tls.securityProtocolOptions,
+            { _, _, complete in complete(true) },
+            queue,
+        )
+        return NWParameters(tls: tls)
+    }
+
     func connect(id: String, to endpoint: NWEndpoint) {
         queue.async {
             self.connections[id]?.cancel()
             self.buffers[id] = Data()
-            let conn = NWConnection(to: endpoint, using: .tcp)
+            let conn = NWConnection(to: endpoint, using: self.tlsParams())
             conn.stateUpdateHandler = { [weak self] state in
                 guard let self else { return }
                 switch state {

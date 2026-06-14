@@ -40,7 +40,10 @@ class DesktopBridge(
 
     fun start() {
         running = true
-        val ss = runCatching { ServerSocket(PORT) }.getOrElse { ServerSocket(0) }
+        // TLS so the desktop link is encrypted on the LAN (the phone is the TLS server,
+        // key in the AndroidKeyStore). Falls back to a fresh port if 8889 is taken.
+        val factory = CompanionTls.serverSocketFactory()
+        val ss = runCatching { factory.createServerSocket(PORT) }.getOrElse { factory.createServerSocket(0) }
         serverSocket = ss
         port = ss.localPort
         acceptThread = Thread({ acceptLoop(ss) }, "jaca-bridge-accept").apply { start() }
