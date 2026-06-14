@@ -1,7 +1,7 @@
 import Foundation
 
 /// Serializes captured transactions to HAR 1.2 (importable into Charles, browser
-/// devtools, Proxyman, etc.).
+/// devtools, and other HTTP debuggers).
 enum HARExport {
     static func data(from transactions: [NetworkTransaction]) -> Data? {
         let iso = ISO8601DateFormatter()

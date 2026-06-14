@@ -16,21 +16,73 @@ struct CAInstallSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(alignment: .leading, spacing: LemonadeTheme.spaces.spacing400) {
-            header
-            modeNotice
-            steps
-            if case .awaitingUser = installer.phase { awaitingNotice }
-            outcome
-            Spacer(minLength: 0)
-            footer
+        HStack(spacing: 0) {
+            leftColumn
+                .padding(LemonadeTheme.spaces.spacing600)
+                .frame(width: showVideo ? 500 : 540, height: 540, alignment: .topLeading)
+            if showVideo, let videoURL = TutorialVideo.url {
+                Rectangle().fill(LemonadeTheme.colors.border.borderNeutralLow).frame(width: 1)
+                TutorialVideoView(url: videoURL)
+                    .frame(width: 300)
+                    .frame(maxHeight: .infinity)
+                    .background(Color.black)
+            }
         }
-        .padding(LemonadeTheme.spaces.spacing600)
-        .frame(width: 540, height: 480)
+        .frame(width: showVideo ? 801 : 540, height: 540)
         .background(LemonadeTheme.colors.background.bgDefault)
-        .interactiveDismissDisabled(!isFinished)   // only Cancel/Done close it
+        .interactiveDismissDisabled(!isFinished && !isAwaitingUser && !isChoosingMode)
         .onAppear { installer.start() }
         .accessibilityIdentifier("caInstallSheet")
+    }
+
+    /// Show the tutorial video (full-height, right column) only for the manual path.
+    private var showVideo: Bool { installer.chosenMode == .manual && TutorialVideo.url != nil }
+
+    private var leftColumn: some View {
+        VStack(alignment: .leading, spacing: LemonadeTheme.spaces.spacing400) {
+            header
+            if isChoosingMode {
+                modeChooser
+                Spacer(minLength: 0)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: LemonadeTheme.spaces.spacing300) {
+                        if installer.rootMode { modeNotice }
+                        steps
+                        if case .awaitingUser = installer.phase { awaitingNotice }
+                        outcome
+                    }
+                }
+            }
+            footer
+        }
+    }
+
+    private var isChoosingMode: Bool { installer.phase == .choosingMode }
+
+    /// Non-rooted: the user picks Auto (Jaca taps for them) or Manual (guided).
+    private var modeChooser: some View {
+        VStack(alignment: .leading, spacing: LemonadeTheme.spaces.spacing300) {
+            LemonadeUi.Notice(
+                content: "This device isn't rooted, so the certificate must go through Android Settings. Choose how you'd like to do it.",
+                voice: .info, title: "Choose how to install")
+            VStack(alignment: .leading, spacing: LemonadeTheme.spaces.spacing100) {
+                LemonadeUi.Button(label: "Auto-install for me", onClick: { installer.chooseAuto() },
+                                  leadingIcon: .smartphone, variant: .primary, type: .solid, size: .medium)
+                    .fixedSize()
+                LemonadeUi.Text("Jaca taps through Settings automatically — you only confirm with your fingerprint or PIN.",
+                                textStyle: LemonadeTypography.shared.bodyXSmallRegular,
+                                color: LemonadeTheme.colors.content.contentTertiary)
+            }
+            VStack(alignment: .leading, spacing: LemonadeTheme.spaces.spacing100) {
+                LemonadeUi.Button(label: "Show me how (manual)", onClick: { installer.chooseManual() },
+                                  variant: .neutral, type: .subtle, size: .medium)
+                    .fixedSize()
+                LemonadeUi.Text("Jaca opens an on-device guide — a short video plus a button to the right Settings screen. You do the taps.",
+                                textStyle: LemonadeTypography.shared.bodyXSmallRegular,
+                                color: LemonadeTheme.colors.content.contentTertiary)
+            }
+        }
     }
 
     private var header: some View {
@@ -97,11 +149,23 @@ struct CAInstallSheet: View {
     }
 
     private var awaitingNotice: some View {
-        LemonadeUi.Notice(
-            content: "Confirm the certificate install on the device. Give it a name if asked and tap OK — Jaca is watching and will continue automatically.",
-            voice: .warning,
-            title: "Waiting for the device"
-        )
+        VStack(alignment: .leading, spacing: LemonadeTheme.spaces.spacing200) {
+            LemonadeUi.Notice(
+                content: "Install & trust the certificate on your device (the video shows how), then open any app — Jaca watches for the first decrypted HTTPS request and confirms automatically.",
+                voice: .warning,
+                title: "Finish on your device"
+            )
+            HStack(spacing: LemonadeTheme.spaces.spacing200) {
+                LemonadeUi.Button(label: "Open Security settings",
+                                  onClick: { Task { await installer.openSecuritySettings() } },
+                                  leadingIcon: .smartphone, variant: .neutral, type: .subtle, size: .small)
+                    .fixedSize()
+                LemonadeUi.Button(label: "Verify now",
+                                  onClick: { Task { await installer.triggerVerifyRequest() } },
+                                  variant: .primary, type: .subtle, size: .small)
+                    .fixedSize()
+            }
+        }
     }
 
     @ViewBuilder
@@ -118,14 +182,25 @@ struct CAInstallSheet: View {
     }
 
     private var footer: some View {
-        HStack {
+        HStack(spacing: LemonadeTheme.spaces.spacing200) {
             Spacer()
             if isFinished {
                 LemonadeUi.Button(label: "Done", onClick: { dismiss() },
                                   variant: .primary, type: .solid, size: .small)
+                    .fixedSize()
+            } else if isAwaitingUser {
+                // Guidance is on screen; let them close while Jaca keeps watching
+                // for trust in the background, or cancel to tear it all down.
+                LemonadeUi.Button(label: "Cancel", onClick: { onCancel(); dismiss() },
+                                  variant: .neutral, type: .subtle, size: .small)
+                    .fixedSize()
+                LemonadeUi.Button(label: "Close", onClick: { dismiss() },
+                                  variant: .primary, type: .solid, size: .small)
+                    .fixedSize()
             } else {
                 LemonadeUi.Button(label: "Cancel", onClick: { onCancel(); dismiss() },
                                   variant: .neutral, type: .subtle, size: .small)
+                    .fixedSize()
             }
         }
     }
@@ -136,5 +211,10 @@ struct CAInstallSheet: View {
         case .succeeded, .failed, .cancelled: return true
         default: return false
         }
+    }
+
+    private var isAwaitingUser: Bool {
+        if case .awaitingUser = installer.phase { return true }
+        return false
     }
 }

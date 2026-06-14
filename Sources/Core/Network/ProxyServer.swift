@@ -45,7 +45,11 @@ final class ProxyServer: @unchecked Sendable {
             }
             .childChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
 
-        channel = try bootstrap.bind(host: "127.0.0.1", port: port).wait()
+        // Bind on all interfaces, not just loopback: a physical device reaches the
+        // proxy over the LAN at this Mac's IP, so 127.0.0.1 would be unreachable and
+        // (because the device proxy is set) break all of its web traffic. Emulators
+        // still work — 10.0.2.2 maps to the host loopback, which 0.0.0.0 includes.
+        channel = try bootstrap.bind(host: "0.0.0.0", port: port).wait()
     }
 
     func stop() {
