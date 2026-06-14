@@ -12,6 +12,8 @@ final class CompanionCaptureSource: CaptureSource {
     private let hub: CompanionHub
     private let ca: CertificateAuthority
     private var proxy: ProxyServer?
+    /// Set once a MITM handshake succeeds — CA is trusted and decryption works.
+    private var decryptionConfirmed = false
 
     init(device: Device, hub: CompanionHub, ca: CertificateAuthority) {
         self.device = device
@@ -33,11 +35,24 @@ final class CompanionCaptureSource: CaptureSource {
         }
         hub.connect(id: companionID)
 
-        // 2. Decryption proxy: spin up a MITM and tell the phone to tunnel through it.
-        let server = ProxyServer(port: 0, ca: ca) { [weak sink] txn in
+        // 2. Decryption proxy: spin up a MITM and tell the phone to tunnel through it. The
+        //    handshake outcome auto-validates the CA: success = the device trusts our leaf
+        //    (decryption works); failure = CA not installed.
+        let label = device.displayModel
+        let server = ProxyServer(port: 0, ca: ca, onTransaction: { [weak sink] txn in
             if txn.host == selfIP { return }
             Task { @MainActor in sink?.capture(didReceive: txn) }
-        }
+        }, onHandshake: { [weak self, weak sink] _, ok in
+            Task { @MainActor in
+                guard let self else { return }
+                if ok {
+                    self.decryptionConfirmed = true
+                    sink?.capture(didChangeStatus: "Decrypting \(label) ✓")
+                } else if !self.decryptionConfirmed {
+                    sink?.capture(didChangeStatus: "CA not trusted on \(label) — install it to decrypt HTTPS")
+                }
+            }
+        })
         if (try? server.start()) != nil {
             proxy = server
             if let host = LANAddress.current() {

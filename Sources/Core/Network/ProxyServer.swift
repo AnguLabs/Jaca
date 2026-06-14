@@ -3,6 +3,7 @@ import NIOCore
 import NIOPosix
 import NIOHTTP1
 import NIOSSL
+import NIOTLS
 
 /// A man-in-the-middle HTTP(S) proxy. Clients point their device proxy at it;
 /// for `CONNECT` it terminates TLS with a per-host leaf cert (signed by our CA),
@@ -12,6 +13,9 @@ final class ProxyServer: @unchecked Sendable {
     let port: Int
     private let ca: CertificateAuthority
     private let onTransaction: @Sendable (NetworkTransaction) -> Void
+    /// (host, success) per MITM TLS handshake — success means the client trusted our leaf
+    /// (CA installed → decryption works); failure means it rejected it (CA not trusted).
+    private let onHandshake: (@Sendable (String, Bool) -> Void)?
     private let upstream = UpstreamClient()
     private let group = MultiThreadedEventLoopGroup(numberOfThreads: 2)
     private var channel: Channel?
@@ -20,17 +24,19 @@ final class ProxyServer: @unchecked Sendable {
     var boundPort: Int { channel?.localAddress?.port ?? port }
 
     init(port: Int, ca: CertificateAuthority,
-         onTransaction: @escaping @Sendable (NetworkTransaction) -> Void) {
+         onTransaction: @escaping @Sendable (NetworkTransaction) -> Void,
+         onHandshake: (@Sendable (String, Bool) -> Void)? = nil) {
         self.port = port
         self.ca = ca
         self.onTransaction = onTransaction
+        self.onHandshake = onHandshake
     }
 
     func start() throws {
         let bootstrap = ServerBootstrap(group: group)
             .serverChannelOption(ChannelOptions.backlog, value: 256)
             .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
-            .childChannelInitializer { [ca, upstream, onTransaction] channel in
+            .childChannelInitializer { [ca, upstream, onTransaction, onHandshake] channel in
                 channel.pipeline.addHandler(HTTPResponseEncoder(), name: "encoder").flatMap {
                     channel.pipeline.addHandler(
                         ByteToMessageHandler(HTTPRequestDecoder(leftOverBytesStrategy: .forwardBytes)),
@@ -38,7 +44,8 @@ final class ProxyServer: @unchecked Sendable {
                     )
                 }.flatMap {
                     channel.pipeline.addHandler(
-                        ProxyHandler(ca: ca, upstream: upstream, onTransaction: onTransaction, mode: .initial),
+                        ProxyHandler(ca: ca, upstream: upstream, onTransaction: onTransaction,
+                                     onHandshake: onHandshake, mode: .initial),
                         name: "proxy"
                     )
                 }
@@ -73,16 +80,19 @@ private final class ProxyHandler: ChannelInboundHandler, RemovableChannelHandler
     private let ca: CertificateAuthority
     private let upstream: UpstreamClient
     private let onTransaction: @Sendable (NetworkTransaction) -> Void
+    private let onHandshake: (@Sendable (String, Bool) -> Void)?
     private let mode: Mode
 
     private var requestHead: HTTPRequestHead?
     private var bodyBuffer = Data()
 
     init(ca: CertificateAuthority, upstream: UpstreamClient,
-         onTransaction: @escaping @Sendable (NetworkTransaction) -> Void, mode: Mode) {
+         onTransaction: @escaping @Sendable (NetworkTransaction) -> Void,
+         onHandshake: (@Sendable (String, Bool) -> Void)?, mode: Mode) {
         self.ca = ca
         self.upstream = upstream
         self.onTransaction = onTransaction
+        self.onHandshake = onHandshake
         self.mode = mode
     }
 
@@ -133,13 +143,15 @@ private final class ProxyHandler: ChannelInboundHandler, RemovableChannelHandler
         catch { channel.close(promise: nil); return }
 
         let sslHandler = NIOSSLServerHandler(context: sslContext)
-        let newProxy = ProxyHandler(ca: ca, upstream: upstream,
-                                    onTransaction: onTransaction, mode: .tls(host: host))
+        let observer = HandshakeObserver(host: host, report: onHandshake)
+        let newProxy = ProxyHandler(ca: ca, upstream: upstream, onTransaction: onTransaction,
+                                    onHandshake: onHandshake, mode: .tls(host: host))
 
         pipeline.removeHandler(name: "decoder")
             .flatMap { pipeline.removeHandler(name: "encoder") }
             .flatMap { pipeline.removeHandler(name: "proxy") }
             .flatMap { pipeline.addHandler(sslHandler, name: "ssl", position: .first) }
+            .flatMap { pipeline.addHandler(observer, name: "handshake", position: .after(sslHandler)) }
             .flatMap { pipeline.addHandler(HTTPResponseEncoder(), name: "encoder") }
             .flatMap {
                 pipeline.addHandler(
@@ -257,5 +269,38 @@ private final class ProxyHandler: ChannelInboundHandler, RemovableChannelHandler
             "te", "trailer", "upgrade", "proxy-authorization", "proxy-authenticate",
         ]
         return hop.contains(name.lowercased())
+    }
+}
+
+// MARK: - Handshake observer (CA auto-validation)
+
+/// Sits just after the MITM TLS handler. A completed handshake means the client trusted our
+/// per-host leaf (CA is installed → decryption works); an error before completion means it
+/// rejected the cert (CA not trusted). Reports the first outcome, then removes itself.
+private final class HandshakeObserver: ChannelInboundHandler, RemovableChannelHandler, @unchecked Sendable {
+    typealias InboundIn = NIOAny
+    typealias InboundOut = NIOAny
+
+    private let host: String
+    private let report: (@Sendable (String, Bool) -> Void)?
+    private var done = false
+
+    init(host: String, report: (@Sendable (String, Bool) -> Void)?) {
+        self.host = host
+        self.report = report
+    }
+
+    func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
+        if !done, let tls = event as? TLSUserEvent, case .handshakeCompleted = tls {
+            done = true
+            report?(host, true)
+            context.pipeline.removeHandler(self, promise: nil)
+        }
+        context.fireUserInboundEventTriggered(event)
+    }
+
+    func errorCaught(context: ChannelHandlerContext, error: Error) {
+        if !done { done = true; report?(host, false) } // handshake failed → CA not trusted
+        context.fireErrorCaught(error)
     }
 }
