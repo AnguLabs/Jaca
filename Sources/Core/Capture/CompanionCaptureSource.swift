@@ -22,14 +22,20 @@ final class CompanionCaptureSource: CaptureSource {
     private var companionID: String { device.companionID ?? device.id }
 
     func start(into sink: CaptureSink) {
+        // Never surface the companion's own traffic to the desktop (defence-in-depth:
+        // the phone already excludes Jaca from the VPN, so these never get captured).
+        let selfIP = LANAddress.current()
+
         // 1. Metadata stream.
         hub.subscribe(id: companionID) { [weak sink] flow in
+            if flow.host == selfIP { return }
             sink?.capture(didReceive: Self.transaction(from: flow))
         }
         hub.connect(id: companionID)
 
         // 2. Decryption proxy: spin up a MITM and tell the phone to tunnel through it.
         let server = ProxyServer(port: 0, ca: ca) { [weak sink] txn in
+            if txn.host == selfIP { return }
             Task { @MainActor in sink?.capture(didReceive: txn) }
         }
         if (try? server.start()) != nil {
