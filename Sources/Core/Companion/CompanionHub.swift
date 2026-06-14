@@ -48,6 +48,8 @@ final class CompanionHub {
 
     func subscribe(id: String, _ handler: @escaping (CompanionFlow) -> Void) { flowHandlers[id] = handler }
     func unsubscribe(id: String) { flowHandlers[id] = nil }
+    /// Send a control line to a connected device (e.g. the decryption proxy address).
+    func send(id: String, line: String) { link.send(id: id, line: line) }
 
     /// Remember a device by IP (from QR onboarding) and keep trying to reach it, so it
     /// shows up in the device list and connects automatically once its app is running.
