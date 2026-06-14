@@ -45,6 +45,16 @@ final class AppModel {
     private var discoveryTasks: [Task<Void, Never>] = []
     private var devicesByPlatform: [DevicePlatform: [Device]] = [:]
 
+    /// Companion discovery: Jaca mobile agents found over mDNS, and which are streaming.
+    /// Shared by every companion network session. Surfaced in the device list as a chip
+    /// (on an adb device) or its own entry (companion-only).
+    let companionHub = CompanionHub()
+    private var companionDevices: [CompanionDevice] = []
+    private var companionConnectedIDs: Set<String> = []
+    private let companionStore = CompanionDeviceStore()
+    /// Companion devices seen before (persisted), shown offline until rediscovered.
+    private var knownCompanions: [CompanionDeviceStore.Cached] = []
+
     /// Per-device shared state (capabilities + installed-app polling), one per
     /// `Device.id`, reused by every tab for that device. Created with the first
     /// tab and torn down when the last tab for a device closes.
@@ -67,7 +77,7 @@ final class AppModel {
         if let days = UserDefaults.standard.object(forKey: "retentionDays") as? Int, days > 0 {
             retention = TimeInterval(days) * 86_400
         }
-        if !uiTestMode { pendingRestores = Self.loadPersistedTabs() }
+        if !uiTestMode { pendingRestores = Self.loadPersistedTabs(); knownCompanions = companionStore.load() }
         buildProviders()
         // Push global message-exclusion edits to every open log tab, live.
         LogExclusionStore.shared.onChange = { [weak self] in
@@ -116,12 +126,69 @@ final class AppModel {
             }
             discoveryTasks.append(task)
         }
+        // Companion discovery (mDNS) is just another device source, merged into the list.
+        companionHub.onDevices = { [weak self] devices in
+            guard let self else { return }
+            self.companionDevices = devices
+            self.persistKnownCompanions(devices)
+            self.recomputeDevices()
+        }
+        companionHub.onConnectionChange = { [weak self] id, connected in
+            guard let self else { return }
+            if connected { self.companionConnectedIDs.insert(id) } else { self.companionConnectedIDs.remove(id) }
+            self.recomputeDevices()
+        }
+        if !uiTestMode { companionHub.startBrowsing() }
+    }
+
+    /// Match a companion advertisement ("Jaca <MODEL>") to an adb device by model name.
+    private static func companionMatches(_ comp: CompanionDevice, _ device: Device) -> Bool {
+        guard device.platform == .android, !device.isCompanion else { return false }
+        func norm(_ s: String) -> String {
+            s.replacingOccurrences(of: "Jaca", with: "").lowercased().filter { $0.isLetter || $0.isNumber }
+        }
+        let n = norm(comp.name), m = norm(device.model)
+        return !m.isEmpty && !n.isEmpty && (n.contains(m) || m.contains(n))
+    }
+
+    private func persistKnownCompanions(_ live: [CompanionDevice]) {
+        var byID = Dictionary(uniqueKeysWithValues: knownCompanions.map { ($0.id, $0) })
+        for d in live { byID[d.id] = CompanionDeviceStore.Cached(id: d.id, name: d.name) }
+        knownCompanions = Array(byID.values)
+        companionStore.save(knownCompanions)
     }
 
     private func recomputeDevices() {
-        devices = devicesByPlatform
+        var merged = devicesByPlatform
             .sorted { $0.key.rawValue < $1.key.rawValue }
             .flatMap { $0.value }
+
+        // Companion is just another device source. Annotate adb devices that also
+        // advertise companion (drives a green/red chip); surface companion-only and
+        // previously-seen-but-offline devices as their own entries.
+        var unmatched = companionDevices
+        for i in merged.indices {
+            if let idx = unmatched.firstIndex(where: { Self.companionMatches($0, merged[i]) }) {
+                let comp = unmatched.remove(at: idx)
+                merged[i].companionID = comp.id
+                merged[i].companionConnected = companionConnectedIDs.contains(comp.id)
+            }
+        }
+        let liveIDs = Set(companionDevices.map(\.id))
+        for comp in unmatched {
+            let connected = companionConnectedIDs.contains(comp.id)
+            merged.append(Device(id: comp.id, platform: .android, model: comp.name,
+                                 state: connected ? .connected : .offline,
+                                 isCompanion: true, companionID: comp.id, companionConnected: connected))
+        }
+        // Previously-seen companion devices not currently advertised: show offline.
+        for cached in knownCompanions where !liveIDs.contains(cached.id) {
+            merged.append(Device(id: cached.id, platform: .android, model: cached.name,
+                                 state: .offline, isCompanion: true, companionID: cached.id,
+                                 companionConnected: false))
+        }
+
+        devices = merged
         restorePendingTabs()
 
         if let platform = autoSessionPlatform, sessions.isEmpty,
@@ -158,8 +225,8 @@ final class AppModel {
                 // Pre-configure the chosen mode so the tab restores ready-to-run:
                 // the user just presses play (no re-picking from the chooser).
                 let pkg = descriptor.packageLabel.isEmpty ? nil : descriptor.packageLabel
-                let mode: CaptureMode = (descriptor.captureMode == "agent") ? .agent : .proxy
-                session?.restoreMode(mode, package: pkg)
+                let kind = descriptor.captureMode.flatMap { CaptureSourceRegistry.descriptor(id: $0)?.kind } ?? .proxy
+                session?.restoreMode(kind, package: pkg)
             }
         }
         isRestoring = false
@@ -191,7 +258,7 @@ final class AppModel {
             return TabDescriptor(kind: .network, platform: net.device.platform, deviceID: net.device.id,
                                  displayName: net.displayName, minLevel: 0, query: "",
                                  isRegex: false, packageLabel: net.targetPackage ?? "",
-                                 captureMode: net.captureMode == .agent ? "agent" : "proxy")
+                                 captureMode: net.currentDescriptor?.id ?? "proxy")
         }
         return nil
     }
@@ -287,9 +354,12 @@ final class AppModel {
             authority = made
         }
         let session = NetworkSession(device: device, ca: authority, adbURL: adbURL,
-                                     displayName: name, bodyCache: bodyCache)
+                                     displayName: name, bodyCache: bodyCache, companion: companionHub)
         session.deviceContext = context(for: device)
         session.onStateChanged = { [weak self] in self?.persistTabs() }
+        // Companion-only devices have no proxy/agent path — pre-select companion so the
+        // tab is ready to stream (the network inspection "just knows").
+        if device.isCompanion { session.restoreMode(.companion, package: nil) }
         sessions.append(session)
         selectedSessionID = session.id
         if autoStart { session.start() }
