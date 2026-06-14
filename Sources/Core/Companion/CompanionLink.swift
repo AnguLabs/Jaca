@@ -152,6 +152,20 @@ final class CompanionLink {
         }
     }
 
+    /// Push the desktop CA to a device so it can prompt the user to install/trust it.
+    func installCa(id: String, pem: Data, name: String) {
+        queue.async {
+            guard let connection = self.channels[id]?.connection else { return }
+            let client = Jaca_CompanionAsyncClient(channel: connection)
+            Task {
+                var cert = Jaca_CaCert()
+                cert.pem = pem
+                cert.name = name
+                _ = try? await client.installCa(cert)
+            }
+        }
+    }
+
     func disconnect(id: String) {
         queue.async {
             self.teardown(id)

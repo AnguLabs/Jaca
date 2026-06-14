@@ -54,6 +54,9 @@ final class CompanionHub {
     /// Tell a connected device where the desktop's decryption proxy is.
     func setProxy(id: String, host: String, port: Int) { link.setProxy(id: id, host: host, port: port) }
 
+    /// Push the desktop CA to a device so it can prompt the user to install/trust it.
+    func installCa(id: String, pem: Data, name: String = "Jaca CA") { link.installCa(id: id, pem: pem, name: name) }
+
     /// Remember a device by IP (from QR onboarding) and keep trying to reach it, so it
     /// shows up in the device list and connects automatically once its app is running.
     func rememberManual(host: String, port: UInt16 = 8889, name: String? = nil) {

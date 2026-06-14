@@ -31,6 +31,11 @@ public protocol Jaca_CompanionClientProtocol: GRPCClient {
     _ request: Jaca_Empty,
     callOptions: CallOptions?
   ) -> UnaryCall<Jaca_Empty, Jaca_DeviceInfo>
+
+  func installCa(
+    _ request: Jaca_CaCert,
+    callOptions: CallOptions?
+  ) -> UnaryCall<Jaca_CaCert, Jaca_Ack>
 }
 
 extension Jaca_CompanionClientProtocol {
@@ -96,6 +101,25 @@ extension Jaca_CompanionClientProtocol {
       request: request,
       callOptions: callOptions ?? self.defaultCallOptions,
       interceptors: self.interceptors?.makeDescribeInterceptors() ?? []
+    )
+  }
+
+  /// The desktop pushes its CA so the device can prompt the user to install/trust it
+  /// (used by "auto mode" when the desktop detects the CA isn't trusted yet).
+  ///
+  /// - Parameters:
+  ///   - request: Request to send to InstallCa.
+  ///   - callOptions: Call options.
+  /// - Returns: A `UnaryCall` with futures for the metadata, status and response.
+  public func installCa(
+    _ request: Jaca_CaCert,
+    callOptions: CallOptions? = nil
+  ) -> UnaryCall<Jaca_CaCert, Jaca_Ack> {
+    return self.makeUnaryCall(
+      path: Jaca_CompanionClientMetadata.Methods.installCa.path,
+      request: request,
+      callOptions: callOptions ?? self.defaultCallOptions,
+      interceptors: self.interceptors?.makeInstallCaInterceptors() ?? []
     )
   }
 }
@@ -176,6 +200,11 @@ public protocol Jaca_CompanionAsyncClientProtocol: GRPCClient {
     _ request: Jaca_Empty,
     callOptions: CallOptions?
   ) -> GRPCAsyncUnaryCall<Jaca_Empty, Jaca_DeviceInfo>
+
+  func makeInstallCaCall(
+    _ request: Jaca_CaCert,
+    callOptions: CallOptions?
+  ) -> GRPCAsyncUnaryCall<Jaca_CaCert, Jaca_Ack>
 }
 
 @available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
@@ -223,6 +252,18 @@ extension Jaca_CompanionAsyncClientProtocol {
       interceptors: self.interceptors?.makeDescribeInterceptors() ?? []
     )
   }
+
+  public func makeInstallCaCall(
+    _ request: Jaca_CaCert,
+    callOptions: CallOptions? = nil
+  ) -> GRPCAsyncUnaryCall<Jaca_CaCert, Jaca_Ack> {
+    return self.makeAsyncUnaryCall(
+      path: Jaca_CompanionClientMetadata.Methods.installCa.path,
+      request: request,
+      callOptions: callOptions ?? self.defaultCallOptions,
+      interceptors: self.interceptors?.makeInstallCaInterceptors() ?? []
+    )
+  }
 }
 
 @available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
@@ -262,6 +303,18 @@ extension Jaca_CompanionAsyncClientProtocol {
       interceptors: self.interceptors?.makeDescribeInterceptors() ?? []
     )
   }
+
+  public func installCa(
+    _ request: Jaca_CaCert,
+    callOptions: CallOptions? = nil
+  ) async throws -> Jaca_Ack {
+    return try await self.performAsyncUnaryCall(
+      path: Jaca_CompanionClientMetadata.Methods.installCa.path,
+      request: request,
+      callOptions: callOptions ?? self.defaultCallOptions,
+      interceptors: self.interceptors?.makeInstallCaInterceptors() ?? []
+    )
+  }
 }
 
 @available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
@@ -291,6 +344,9 @@ public protocol Jaca_CompanionClientInterceptorFactoryProtocol: Sendable {
 
   /// - Returns: Interceptors to use when invoking 'describe'.
   func makeDescribeInterceptors() -> [ClientInterceptor<Jaca_Empty, Jaca_DeviceInfo>]
+
+  /// - Returns: Interceptors to use when invoking 'installCa'.
+  func makeInstallCaInterceptors() -> [ClientInterceptor<Jaca_CaCert, Jaca_Ack>]
 }
 
 public enum Jaca_CompanionClientMetadata {
@@ -301,6 +357,7 @@ public enum Jaca_CompanionClientMetadata {
       Jaca_CompanionClientMetadata.Methods.streamFlows,
       Jaca_CompanionClientMetadata.Methods.setProxy,
       Jaca_CompanionClientMetadata.Methods.describe,
+      Jaca_CompanionClientMetadata.Methods.installCa,
     ]
   )
 
@@ -320,6 +377,12 @@ public enum Jaca_CompanionClientMetadata {
     public static let describe = GRPCMethodDescriptor(
       name: "Describe",
       path: "/jaca.Companion/Describe",
+      type: GRPCCallType.unary
+    )
+
+    public static let installCa = GRPCMethodDescriptor(
+      name: "InstallCa",
+      path: "/jaca.Companion/InstallCa",
       type: GRPCCallType.unary
     )
   }

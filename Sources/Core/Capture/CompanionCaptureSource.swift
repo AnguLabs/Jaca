@@ -14,6 +14,8 @@ final class CompanionCaptureSource: CaptureSource {
     private var proxy: ProxyServer?
     /// Set once a MITM handshake succeeds — CA is trusted and decryption works.
     private var decryptionConfirmed = false
+    /// Set once we've pushed the CA to the device (auto mode), so we don't nag repeatedly.
+    private var caInstallRequested = false
 
     init(device: Device, hub: CompanionHub, ca: CertificateAuthority) {
         self.device = device
@@ -49,7 +51,14 @@ final class CompanionCaptureSource: CaptureSource {
                     self.decryptionConfirmed = true
                     sink?.capture(didChangeStatus: "Decrypting \(label) ✓")
                 } else if !self.decryptionConfirmed {
-                    sink?.capture(didChangeStatus: "CA not trusted on \(label) — install it to decrypt HTTPS")
+                    // Auto mode: push the CA to the device once so the user can install it.
+                    if !self.caInstallRequested {
+                        self.caInstallRequested = true
+                        self.hub.installCa(id: self.companionID, pem: Data(self.ca.rootCertificatePEM.utf8))
+                        sink?.capture(didChangeStatus: "CA not trusted on \(label) — sent it to the device to install")
+                    } else {
+                        sink?.capture(didChangeStatus: "CA not trusted on \(label) — install it to decrypt HTTPS")
+                    }
                 }
             }
         })
