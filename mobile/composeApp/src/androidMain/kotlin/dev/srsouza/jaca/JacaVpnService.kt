@@ -95,7 +95,7 @@ class JacaVpnService : VpnService() {
             }
         }
 
-        val tcp = TcpProxy(this, sessions).also { it.start() }
+        val tcp = TcpProxy(this, sessions, TUN_ADDRESS).also { it.start() }
         val udp = UdpProxy(this, sessions, output, writeLock, onSession).also { it.start() }
         tcpProxy = tcp
         udpProxy = udp
