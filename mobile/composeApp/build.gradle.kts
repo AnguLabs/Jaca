@@ -49,6 +49,15 @@ android {
         targetSdk = libs.versions.android.targetSdk.get().toInt()
         versionCode = 1
         versionName = "0.1.0"
+        // Git commit the APK was built from, so the desktop can detect when a connected
+        // device runs an older companion build than the one Jaca bundles. Passed in by
+        // scripts/build-mobile.sh (-PcommitHash=...); "dev" for ad-hoc local builds.
+        val commitHash = (project.findProperty("commitHash") as String?) ?: "dev"
+        buildConfigField("String", "COMMIT_HASH", "\"$commitHash\"")
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     compileOptions {

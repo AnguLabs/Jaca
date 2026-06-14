@@ -17,6 +17,8 @@ final class CompanionHub {
     var onDevices: (([CompanionDevice]) -> Void)?
     /// (deviceID, connected) as streams open and close.
     var onConnectionChange: ((String, Bool) -> Void)?
+    /// (deviceID, name, build commit) from the device on (re)connect.
+    var onDeviceInfo: ((String, String, String) -> Void)?
     /// Device ids with a live stream right now.
     private(set) var connected: Set<String> = []
 
@@ -30,6 +32,7 @@ final class CompanionHub {
         }
         link.onConnected = { [weak self] id, c in Task { @MainActor in self?.handleConnection(id, c) } }
         link.onFlow = { [weak self] id, flow in Task { @MainActor in self?.flowHandlers[id]?(flow) } }
+        link.onDeviceInfo = { [weak self] id, name, version in Task { @MainActor in self?.onDeviceInfo?(id, name, version) } }
     }
 
     func startBrowsing() {
@@ -48,8 +51,8 @@ final class CompanionHub {
 
     func subscribe(id: String, _ handler: @escaping (CompanionFlow) -> Void) { flowHandlers[id] = handler }
     func unsubscribe(id: String) { flowHandlers[id] = nil }
-    /// Send a control line to a connected device (e.g. the decryption proxy address).
-    func send(id: String, line: String) { link.send(id: id, line: line) }
+    /// Tell a connected device where the desktop's decryption proxy is.
+    func setProxy(id: String, host: String, port: Int) { link.setProxy(id: id, host: host, port: port) }
 
     /// Remember a device by IP (from QR onboarding) and keep trying to reach it, so it
     /// shows up in the device list and connects automatically once its app is running.

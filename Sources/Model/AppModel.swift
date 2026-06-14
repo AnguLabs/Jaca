@@ -51,6 +51,8 @@ final class AppModel {
     let companionHub = CompanionHub()
     private var companionDevices: [CompanionDevice] = []
     private var companionConnectedIDs: Set<String> = []
+    /// Build commit each connected companion reported (id -> hash), for update detection.
+    private var companionVersions: [String: String] = [:]
     private let companionStore = CompanionDeviceStore()
     /// Companion devices seen before (persisted), shown offline until rediscovered.
     private var knownCompanions: [CompanionDeviceStore.Cached] = []
@@ -141,6 +143,11 @@ final class AppModel {
             if connected { self.companionConnectedIDs.insert(id) } else { self.companionConnectedIDs.remove(id) }
             self.recomputeDevices()
         }
+        companionHub.onDeviceInfo = { [weak self] id, _, version in
+            guard let self else { return }
+            self.companionVersions[id] = version
+            self.recomputeDevices()
+        }
         if !uiTestMode { companionHub.startBrowsing() }
     }
 
@@ -152,6 +159,12 @@ final class AppModel {
         }
         let n = norm(comp.name), m = norm(device.model)
         return !m.isEmpty && !n.isEmpty && (n.contains(m) || m.contains(n))
+    }
+
+    /// Whether the companion app on `companionID` is older than the bundled APK.
+    private func companionNeedsUpdate(_ companionID: String) -> Bool {
+        guard let v = companionVersions[companionID] else { return false }
+        return CompanionVersion.updateAvailable(deviceVersion: v)
     }
 
     private func persistKnownCompanions(_ live: [CompanionDevice]) {
@@ -175,14 +188,17 @@ final class AppModel {
                 let comp = unmatched.remove(at: idx)
                 merged[i].companionID = comp.id
                 merged[i].companionConnected = companionConnectedIDs.contains(comp.id)
+                merged[i].companionUpdateAvailable = companionNeedsUpdate(comp.id)
             }
         }
         let liveIDs = Set(companionDevices.map(\.id))
         for comp in unmatched {
             let connected = companionConnectedIDs.contains(comp.id)
-            merged.append(Device(id: comp.id, platform: .android, model: comp.name,
-                                 state: connected ? .connected : .offline,
-                                 isCompanion: true, companionID: comp.id, companionConnected: connected))
+            var device = Device(id: comp.id, platform: .android, model: comp.name,
+                                state: connected ? .connected : .offline,
+                                isCompanion: true, companionID: comp.id, companionConnected: connected)
+            device.companionUpdateAvailable = companionNeedsUpdate(comp.id)
+            merged.append(device)
         }
         // Previously-seen companion devices not currently advertised: show offline.
         for cached in knownCompanions where !liveIDs.contains(cached.id) {

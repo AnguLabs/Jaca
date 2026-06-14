@@ -57,6 +57,9 @@ struct Device: Identifiable, Hashable, Sendable, Codable {
     var companionID: String?
     /// Whether the companion stream is currently connected (chip: green vs red).
     var companionConnected: Bool = false
+    /// The companion app on this device is older than the APK Jaca bundles (commit hash
+    /// mismatch) — prompt the user to update it.
+    var companionUpdateAvailable: Bool = false
 
     /// Short label for the device row / tab subtitle, e.g. "Pixel 7".
     var displayModel: String { model.isEmpty ? id : model }

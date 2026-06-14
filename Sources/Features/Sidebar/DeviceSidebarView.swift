@@ -107,6 +107,7 @@ struct DeviceSidebarView: View {
                         onStart: { model.startSession(for: device) },
                         onInspectNetwork: { model.startNetworkSession(for: device, autoStart: false) },
                         onStartCompanion: { model.startNetworkSession(for: device, autoStart: true) },
+                        onUpdate: { showConnect = true },
                         checkProxy: { await model.strandedProxy(for: device) },
                         revertProxy: { await model.revertDeviceProxy(device) }
                     )
@@ -150,6 +151,8 @@ private struct DeviceRow: View {
     let onInspectNetwork: () -> Void
     /// Start (and auto-run) companion network capture — the primary action for companion devices.
     let onStartCompanion: () -> Void
+    /// Open the connect/onboarding sheet to reinstall an out-of-date companion app.
+    let onUpdate: () -> Void
     /// Returns the device's stranded Jaca proxy (host == this Mac), or nil.
     let checkProxy: () async -> String?
     /// Clears the device's HTTP proxy.
@@ -192,6 +195,7 @@ private struct DeviceRow: View {
                             maxLines: 1
                         )
                         if device.companionID != nil { companionChip }
+                        if device.companionUpdateAvailable { updateChip }
                     }
                     LemonadeUi.Text(
                         device.isCompanion ? "Companion (network only)" : device.id,
@@ -245,6 +249,10 @@ private struct DeviceRow: View {
                 showOptions = false
                 onInspectNetwork()
             }
+            if device.companionUpdateAvailable {
+                Divider()
+                Button("Update Companion App…", action: onUpdate)
+            }
         }
         .padding(LemonadeTheme.spaces.spacing100)
         .frame(minWidth: 196)
@@ -264,6 +272,20 @@ private struct DeviceRow: View {
         }
         .padding(.horizontal, 6).padding(.vertical, 2)
         .background(Capsule().fill(LemonadeTheme.colors.background.bgNeutralSubtle))
+    }
+
+    /// Shown when the device's companion app is older than the APK Jaca bundles.
+    private var updateChip: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "arrow.down.circle.fill")
+                .font(.system(size: 9, weight: .bold))
+            Text("update")
+                .font(.system(size: 9, weight: .bold))
+        }
+        .foregroundStyle(LemonadeTheme.colors.content.contentCaution)
+        .padding(.horizontal, 6).padding(.vertical, 2)
+        .background(Capsule().fill(LemonadeTheme.colors.background.bgNeutralSubtle))
+        .help("The companion app is out of date. Right-click → Update Companion App.")
     }
 
     /// Shown when this device still has a proxy Jaca set but a teardown couldn't

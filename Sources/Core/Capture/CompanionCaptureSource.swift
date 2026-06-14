@@ -41,7 +41,7 @@ final class CompanionCaptureSource: CaptureSource {
         if (try? server.start()) != nil {
             proxy = server
             if let host = LANAddress.current() {
-                hub.send(id: companionID, line: #"{"type":"proxy","host":"\#(host)","port":\#(server.boundPort)}"#)
+                hub.setProxy(id: companionID, host: host, port: server.boundPort)
             }
         }
         sink.capture(didChangeStatus: "Streaming from \(device.displayModel)")

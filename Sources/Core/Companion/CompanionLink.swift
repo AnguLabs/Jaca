@@ -1,4 +1,8 @@
 import Foundation
+import GRPC
+import NIOCore
+import NIOPosix
+import NIOSSL
 import Network
 
 /// One captured flow received from a Jaca mobile device over the companion stream.
@@ -19,19 +23,34 @@ struct CompanionDevice: Identifiable, Hashable {
     let endpoint: NWEndpoint
 }
 
-/// mDNS discovery + TCP clients for Jaca mobile devices. Supports MANY simultaneous
-/// connections (one per device); each delivers newline-delimited JSON tagged with the
-/// device id. Uses Network.framework; all state lives on a private serial queue and
-/// results are delivered via callbacks the model hops to the main actor.
+/// mDNS discovery + gRPC clients for Jaca mobile devices. Supports MANY simultaneous
+/// connections (one per device); each opens a TLS gRPC channel to the phone's Companion
+/// service and runs a server-streaming `StreamFlows` call. The channel's connectivity
+/// state drives the connected/disconnected callbacks (and auto-reconnects), while the
+/// stream delivers per-app flow metadata. The phone presents a self-signed cert which we
+/// trust without PKI — the goal is link confidentiality; the installed CA is what
+/// authenticates decrypted app traffic. All mutable state lives on a private serial
+/// queue; results are delivered via callbacks the model hops to the main actor.
 final class CompanionLink {
     var onDevices: (([CompanionDevice]) -> Void)?
     var onConnected: ((String, Bool) -> Void)?
     var onFlow: ((String, CompanionFlow) -> Void)?
+    /// Device self-description from `Describe` on (re)connect: (id, name, build commit).
+    var onDeviceInfo: ((String, String, String) -> Void)?
 
+    private let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
     private let queue = DispatchQueue(label: "dev.srsouza.jaca.companion")
     private var browser: NWBrowser?
-    private var connections: [String: NWConnection] = [:]
-    private var buffers: [String: Data] = [:]
+
+    private final class Channel {
+        let connection: ClientConnection
+        var streamTask: Task<Void, Never>?
+        init(_ connection: ClientConnection) { self.connection = connection }
+    }
+    private var channels: [String: Channel] = [:]            // guarded by queue
+    private var resolved: [String: (String, UInt16)] = [:]   // id -> host:port, guarded by queue
+
+    // MARK: Discovery
 
     func startBrowsing() {
         queue.async {
@@ -50,86 +69,157 @@ final class CompanionLink {
         }
     }
 
-    /// TLS parameters for the companion link. The phone presents a self-signed cert; we
-    /// trust it without PKI because the goal here is link confidentiality (no passive
-    /// tracing), while the CA installed on the device is what authenticates app traffic.
-    private func tlsParams() -> NWParameters {
-        let tls = NWProtocolTLS.Options()
-        sec_protocol_options_set_verify_block(
-            tls.securityProtocolOptions,
-            { _, _, complete in complete(true) },
-            queue,
-        )
-        return NWParameters(tls: tls)
-    }
+    // MARK: Connect
 
+    /// Connect to an mDNS-discovered device. gRPC needs an explicit address, so the
+    /// Bonjour endpoint is resolved to host:port first (cached for reconnects).
     func connect(id: String, to endpoint: NWEndpoint) {
         queue.async {
-            self.connections[id]?.cancel()
-            self.buffers[id] = Data()
-            let conn = NWConnection(to: endpoint, using: self.tlsParams())
-            conn.stateUpdateHandler = { [weak self] state in
-                guard let self else { return }
-                switch state {
-                case .ready: self.onConnected?(id, true); self.receive(id: id)
-                case .failed, .cancelled: self.cleanup(id); self.onConnected?(id, false)
-                default: break
+            if let hp = self.resolved[id] { self.openChannel(id: id, host: hp.0, port: hp.1); return }
+            self.resolve(endpoint) { [weak self] hp in
+                self?.queue.async {
+                    guard let self else { return }
+                    guard let hp else { self.onConnected?(id, false); return }
+                    self.resolved[id] = hp
+                    self.openChannel(id: id, host: hp.0, port: hp.1)
                 }
             }
-            self.connections[id] = conn
-            conn.start(queue: self.queue)
         }
     }
 
     func connect(id: String, host: String, port: UInt16) {
-        guard let p = NWEndpoint.Port(rawValue: port) else { return }
-        connect(id: id, to: .hostPort(host: NWEndpoint.Host(host), port: p))
+        queue.async {
+            self.resolved[id] = (host, port)
+            self.openChannel(id: id, host: host, port: port)
+        }
     }
 
-    /// Send a control line (newline-terminated JSON) to a connected device — e.g. telling
-    /// it which desktop proxy to tunnel through for decryption.
-    func send(id: String, line: String) {
+    private func openChannel(id: String, host: String, port: UInt16) {
+        guard channels[id] == nil else { return } // idempotent; the channel auto-reconnects
+        let delegate = ConnDelegate { [weak self] state in
+            switch state {
+            case .ready: self?.onConnected?(id, true)
+            case .transientFailure, .shutdown: self?.onConnected?(id, false)
+            default: break
+            }
+        }
+        let connection = ClientConnection.usingTLS(with: Self.clientTLS(), on: group)
+            .withConnectivityStateDelegate(delegate, executingOn: queue)
+            .connect(host: host, port: Int(port))
+        let channel = Channel(connection)
+        channel.streamTask = Task { [weak self] in await self?.runStream(id: id, connection: connection) }
+        channels[id] = channel
+    }
+
+    /// Keep a `StreamFlows` call running, restarting it if it ends (transient drop or the
+    /// phone closing it). Connected/disconnected is owned by the connectivity delegate.
+    private func runStream(id: String, connection: ClientConnection) async {
+        let client = Jaca_CompanionAsyncClient(channel: connection)
+        while !Task.isCancelled {
+            do {
+                // Identify the build on (re)connect so the desktop can flag stale apps.
+                let opts = CallOptions(timeLimit: .timeout(.seconds(5)))
+                if let info = try? await client.describe(Jaca_Empty(), callOptions: opts) {
+                    onDeviceInfo?(id, info.name, info.version)
+                }
+                for try await meta in client.streamFlows(Jaca_Empty()) {
+                    onFlow?(id, CompanionFlow(
+                        app: meta.app,
+                        packageName: meta.packageName,
+                        host: meta.host,
+                        port: Int(meta.port),
+                        proto: meta.`protocol`,
+                    ))
+                }
+            } catch {
+                if Task.isCancelled { break }
+            }
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+        }
+    }
+
+    /// Tell a connected device where the desktop's decryption proxy is.
+    func setProxy(id: String, host: String, port: Int) {
         queue.async {
-            self.connections[id]?.send(content: Data((line + "\n").utf8), completion: .contentProcessed { _ in })
+            guard let connection = self.channels[id]?.connection else { return }
+            let client = Jaca_CompanionAsyncClient(channel: connection)
+            Task {
+                var cfg = Jaca_ProxyConfig()
+                cfg.host = host
+                cfg.port = UInt32(port)
+                _ = try? await client.setProxy(cfg)
+            }
         }
     }
 
     func disconnect(id: String) {
         queue.async {
-            self.connections[id]?.cancel()
-            self.cleanup(id)
+            self.teardown(id)
             self.onConnected?(id, false)
         }
     }
 
-    private func cleanup(_ id: String) { connections[id] = nil; buffers[id] = nil }
-
-    private func receive(id: String) {
-        connections[id]?.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
-            guard let self else { return }
-            if let data, !data.isEmpty { self.buffers[id, default: Data()].append(data); self.drain(id) }
-            if isComplete || error != nil { self.cleanup(id); self.onConnected?(id, false); return }
-            self.receive(id: id)
+    private func teardown(_ id: String) {
+        if let channel = channels[id] {
+            channel.streamTask?.cancel()
+            _ = channel.connection.close()
         }
+        channels[id] = nil
     }
 
-    private func drain(_ id: String) {
-        guard var buf = buffers[id] else { return }
-        while let nl = buf.firstIndex(of: 0x0A) {
-            let line = buf.subdata(in: buf.startIndex..<nl)
-            buf.removeSubrange(buf.startIndex...nl)
-            if !line.isEmpty, let flow = Self.parse(line) { onFlow?(id, flow) }
+    /// Trust-all TLS for the companion channel. `certificateVerification = .none` because
+    /// the goal is link confidentiality, not PKI (the installed CA authenticates app
+    /// traffic). ALPN must advertise h2 explicitly — without it the handshake completes but
+    /// the server never sees the HTTP/2 preface and the connection is torn down.
+    private static func clientTLS() -> GRPCTLSConfiguration {
+        var tls = TLSConfiguration.makeClientConfiguration()
+        tls.certificateVerification = .none
+        tls.applicationProtocols = ["grpc-exp", "h2"]
+        return .makeClientConfigurationBackedByNIOSSL(configuration: tls)
+    }
+
+    // MARK: mDNS endpoint -> host:port (gRPC needs an explicit address)
+
+    private func resolve(_ endpoint: NWEndpoint, _ completion: @escaping ((String, UInt16)?) -> Void) {
+        let conn = NWConnection(to: endpoint, using: .tcp)
+        var done = false
+        conn.stateUpdateHandler = { state in
+            switch state {
+            case .ready:
+                guard !done else { return }
+                done = true
+                let remote = conn.currentPath?.remoteEndpoint
+                conn.cancel()
+                completion(remote.flatMap(Self.hostPort))
+            case .failed, .cancelled:
+                guard !done else { return }
+                done = true
+                completion(nil)
+            default: break
+            }
         }
-        buffers[id] = buf
+        conn.start(queue: queue)
     }
 
-    private struct FlowLine: Decodable {
-        let type: String; let app: String; let package: String
-        let host: String; let port: Int; let `protocol`: String
+    private static func hostPort(_ endpoint: NWEndpoint) -> (String, UInt16)? {
+        guard case let .hostPort(host, port) = endpoint else { return nil }
+        let raw: String
+        switch host {
+        case .ipv4(let a): raw = "\(a)"
+        case .ipv6(let a): raw = "\(a)"
+        case .name(let n, _): raw = n
+        @unknown default: return nil
+        }
+        let clean = raw.split(separator: "%").first.map(String.init) ?? raw // drop %en0 zone
+        return (clean, port.rawValue)
     }
+}
 
-    private static func parse(_ data: Data) -> CompanionFlow? {
-        guard let line = try? JSONDecoder().decode(FlowLine.self, from: data), line.type == "flow" else { return nil }
-        return CompanionFlow(app: line.app, packageName: line.package, host: line.host, port: line.port, proto: line.protocol)
+/// Bridges gRPC's connectivity-state delegate to a closure on our queue.
+private final class ConnDelegate: ConnectivityStateDelegate {
+    private let onState: (ConnectivityState) -> Void
+    init(_ onState: @escaping (ConnectivityState) -> Void) { self.onState = onState }
+    func connectivityStateDidChange(from oldState: ConnectivityState, to newState: ConnectivityState) {
+        onState(newState)
     }
 }

@@ -72,6 +72,7 @@ class DesktopBridge(
                     .setName("Jaca ${Build.MODEL}")
                     .setDeviceIp(deviceIp().orEmpty())
                     .setMode(CaptureMode.STREAM_FULL)
+                    .setVersion(BuildConfig.COMMIT_HASH)
                     .build(),
             )
             responseObserver.onCompleted()

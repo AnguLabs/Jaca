@@ -46,6 +46,7 @@ message DeviceInfo {
   string name = 1;        // Build.MODEL
   string device_ip = 2;   // LAN ipv4
   CaptureMode mode = 3;
+  string version = 4;     // git commit hash the APK was built from (for update detection)
 }
 
 message Empty {}
