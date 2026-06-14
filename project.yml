@@ -72,6 +72,17 @@ targets:
         INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.developer-tools"
         INFOPLIST_KEY_NSHumanReadableCopyright: ""
         COMBINE_HIDPI_IMAGES: YES
+    postBuildScripts:
+      # Records where this build came from + which commit it built, so the in-app
+      # updater can compare against origin/main and pull/rebuild. Written to a
+      # sidecar (not the bundle) so it never invalidates the ad-hoc code signature.
+      - name: Write build-info sidecar
+        basedOnDependencyAnalysis: false
+        script: |
+          DIR="$HOME/Library/Application Support/Jaca"
+          mkdir -p "$DIR"
+          COMMIT=$(cd "$SRCROOT" && git rev-parse HEAD 2>/dev/null || echo "")
+          printf '{"repoPath": "%s", "buildCommit": "%s"}\n' "$SRCROOT" "$COMMIT" > "$DIR/build-info.json"
 
   JacaTests:
     type: bundle.unit-test

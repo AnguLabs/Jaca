@@ -17,6 +17,7 @@ struct RootView: View {
         }
         .task {
             model.startDiscovery()
+            UpdateModel.shared.start()
             // Bring the window frontmost so it becomes key on launch.
             DispatchQueue.main.async {
                 NSApp.activate(ignoringOtherApps: true)
@@ -43,6 +44,7 @@ struct RootView: View {
             XcodeSidebarHeader(model: model)
             Divider()
             DeviceSidebarView(model: model)
+            UpdateBanner()
         }
         .background(LemonadeTheme.colors.background.bgElevated)
     }
