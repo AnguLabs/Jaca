@@ -236,6 +236,13 @@ private struct DeviceRow: View {
         .popover(isPresented: $showOptions, arrowEdge: .bottom) {
             inspectMenu
         }
+        .contextMenu {
+            // Right-click path for the companion update — reachable even on companion-only
+            // devices, which single-click straight into capture and never open the popover.
+            if device.companionUpdateAvailable {
+                Button("Update Companion App…", action: onUpdate)
+            }
+        }
     }
 
     /// Pops up on a single click of a ready adb/ios device: pick logcat or network capture.
