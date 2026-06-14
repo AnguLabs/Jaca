@@ -108,7 +108,7 @@ struct NetworkSessionView: View {
                                         textAlign: .center,
                                         color: LemonadeTheme.colors.content.contentTertiary)
                             .frame(maxWidth: 420)
-                        if session.isAndroid {
+                        if session.isADBDevice {
                             LemonadeUi.Button(label: "Install CA automatically", onClick: { openCAInstall() },
                                               leadingIcon: .smartphone, variant: .neutral, type: .subtle, size: .small)
                                 .fixedSize()
@@ -128,7 +128,7 @@ struct NetworkSessionView: View {
                             .frame(maxWidth: 420)
                     }
 
-                    if session.agentAvailable {
+                    if session.agentAvailable && session.isADBDevice {
                         if hasCompanion {
                             LemonadeUi.Text("— or —",
                                             textStyle: LemonadeTypography.shared.bodyXSmallOverline,
@@ -193,7 +193,7 @@ struct NetworkSessionView: View {
 
             LemonadeUi.IconButton(icon: .trash, contentDescription: "Clear") { session.clear() }
 
-            if session.isAndroid {
+            if session.isADBDevice {
                 NetworkAppPicker(session: session)
             }
 
@@ -214,8 +214,13 @@ struct NetworkSessionView: View {
                                 color: LemonadeTheme.colors.content.contentSecondary, maxLines: 1)
             }
             LemonadeUi.IconButton(icon: .download, contentDescription: "Export HAR") { exportHAR() }
-            LemonadeUi.Button(label: "Setup", onClick: { showSetup = true },
-                              leadingIcon: .circleInfo, variant: .neutral, type: .subtle, size: .small)
+            // Proxy/CA setup only applies to a real ADB device capturing via the proxy.
+            // Companion and agent modes need no proxy setup (the companion app installs its
+            // own CA), and a companion-only device has no adb to set up — so hide it there.
+            if session.showsProxySetup {
+                LemonadeUi.Button(label: "Setup", onClick: { showSetup = true },
+                                  leadingIcon: .circleInfo, variant: .neutral, type: .subtle, size: .small)
+            }
         }
         .padding(.horizontal, LemonadeTheme.spaces.spacing300)
         .padding(.vertical, LemonadeTheme.spaces.spacing200)
@@ -303,7 +308,7 @@ struct NetworkSessionView: View {
                             textStyle: LemonadeTypography.shared.bodySmallRegular,
                             color: LemonadeTheme.colors.content.contentSecondary)
             if session.captureMode == .companion {
-                LemonadeUi.Text("Make sure Jaca mobile is capturing on the device and the CA is installed.",
+                LemonadeUi.Text("Open the Jaca app on \(session.device.displayModel) and start capture — it connects automatically. Install the certificate in the app to decrypt HTTPS.",
                                 textStyle: LemonadeTypography.shared.bodyXSmallRegular,
                                 textAlign: .center,
                                 color: LemonadeTheme.colors.content.contentTertiary)

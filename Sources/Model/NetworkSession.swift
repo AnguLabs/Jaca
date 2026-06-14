@@ -64,6 +64,16 @@ final class NetworkSession: WorkspaceTab, CaptureSink {
     var agentAvailable: Bool { device.platform == .android && AgentArtifacts.isAvailable }
     var isAndroid: Bool { device.platform == .android }
 
+    /// A real ADB-connected Android device, not a companion-only entry. Proxy capture, the
+    /// agent, the app picker, and adb-driven CA install only work here — a companion-only
+    /// device has no adb path, so none of those apply to it.
+    var isADBDevice: Bool { device.platform == .android && !device.isCompanion && adbURL != nil }
+
+    /// Whether the toolbar's proxy "Setup" affordance is relevant: only for a real ADB
+    /// device actively capturing via the MITM proxy. Companion and agent modes need no
+    /// proxy/CA setup (the companion app installs the CA itself), so it's hidden there.
+    var showsProxySetup: Bool { isADBDevice && hasSelectedMode && captureMode == .proxy }
+
     var subtitle: String {
         var parts = [device.displayModel]
         if let d = currentDescriptor { parts.append(d.label) }
