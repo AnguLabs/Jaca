@@ -73,6 +73,14 @@ final class CompanionLink {
         connect(id: id, to: .hostPort(host: NWEndpoint.Host(host), port: p))
     }
 
+    /// Send a control line (newline-terminated JSON) to a connected device — e.g. telling
+    /// it which desktop proxy to tunnel through for decryption.
+    func send(id: String, line: String) {
+        queue.async {
+            self.connections[id]?.send(content: Data((line + "\n").utf8), completion: .contentProcessed { _ in })
+        }
+    }
+
     func disconnect(id: String) {
         queue.async {
             self.connections[id]?.cancel()

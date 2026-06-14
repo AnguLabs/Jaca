@@ -1,35 +1,55 @@
 import Foundation
 
-/// Companion capture: receives per-app flow metadata streamed from the Jaca mobile agent
-/// over the LAN (no proxy, no ADB) and surfaces each as a transaction, attributed to its
-/// app. Desktop-side decryption lands later; this already shows who-talks-to-whom per app.
+/// Companion capture. Two streams from the Jaca mobile agent:
+///  1. flow metadata (app + host:port) over the companion connection — shown immediately,
+///     attributed per app, even before the CA is trusted;
+///  2. decrypted request/response — the desktop runs a MITM proxy (reusing ProxyServer
+///     + the Keychain CA) and tells the phone to tunnel its TLS connections here, so the
+///     CA private key never leaves this Mac.
 @MainActor
 final class CompanionCaptureSource: CaptureSource {
     private let device: Device
     private let hub: CompanionHub
+    private let ca: CertificateAuthority
+    private var proxy: ProxyServer?
 
-    init(device: Device, hub: CompanionHub) {
+    init(device: Device, hub: CompanionHub, ca: CertificateAuthority) {
         self.device = device
         self.hub = hub
+        self.ca = ca
     }
 
     private var companionID: String { device.companionID ?? device.id }
 
     func start(into sink: CaptureSink) {
+        // 1. Metadata stream.
         hub.subscribe(id: companionID) { [weak sink] flow in
             sink?.capture(didReceive: Self.transaction(from: flow))
         }
         hub.connect(id: companionID)
+
+        // 2. Decryption proxy: spin up a MITM and tell the phone to tunnel through it.
+        let server = ProxyServer(port: 0, ca: ca) { [weak sink] txn in
+            Task { @MainActor in sink?.capture(didReceive: txn) }
+        }
+        if (try? server.start()) != nil {
+            proxy = server
+            if let host = LANAddress.current() {
+                hub.send(id: companionID, line: #"{"type":"proxy","host":"\#(host)","port":\#(server.boundPort)}"#)
+            }
+        }
         sink.capture(didChangeStatus: "Streaming from \(device.displayModel)")
     }
 
     func stop() {
         hub.unsubscribe(id: companionID)
         hub.disconnect(id: companionID)
+        proxy?.stop()
+        proxy = nil
     }
 
-    /// Synthesize a transaction from a companion flow. The owning app/package is carried
-    /// in a header so the package filter (and a future decrypt layer) can use it.
+    /// Synthesize a transaction from a companion flow (pre-decryption visibility). The
+    /// owning app/package is carried in a header so the package filter can use it.
     static func transaction(from flow: CompanionFlow) -> NetworkTransaction {
         let appHeader = HeaderPair(name: "X-Jaca-App", value: "\(flow.app) (\(flow.packageName))")
         var txn = NetworkTransaction(

@@ -25,7 +25,7 @@ enum CaptureSourceRegistry {
         detail: "Receive per-app traffic from the Jaca mobile agent over the network.",
         isAvailable: { device, _ in device.companionID != nil },
         needsPackage: false,
-        make: { ctx in CompanionCaptureSource(device: ctx.device, hub: ctx.companion ?? CompanionHub()) },
+        make: { ctx in CompanionCaptureSource(device: ctx.device, hub: ctx.companion ?? CompanionHub(), ca: ctx.ca) },
     )
 
     /// Options offered for a device, in display order.
