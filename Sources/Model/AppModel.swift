@@ -51,6 +51,8 @@ final class AppModel {
     let companionHub = CompanionHub()
     private var companionDevices: [CompanionDevice] = []
     private var companionConnectedIDs: Set<String> = []
+    /// Companion ids we've already sent the CA to on this connection (re-sent on reconnect).
+    private var companionCAPushed: Set<String> = []
     /// Build commit each connected companion reported (id -> hash), for update detection.
     private var companionVersions: [String: String] = [:]
     private let companionStore = CompanionDeviceStore()
@@ -137,11 +139,22 @@ final class AppModel {
             guard let self else { return }
             self.companionDevices = devices
             self.persistKnownCompanions(devices)
+            // Keep a control link to every discovered companion, even before capture, so the
+            // desktop can configure it and push its CA automatically. connect() is idempotent.
+            for d in devices where !self.companionConnectedIDs.contains(d.id) {
+                self.companionHub.connect(id: d.id)
+            }
             self.recomputeDevices()
         }
         companionHub.onConnectionChange = { [weak self] id, connected in
             guard let self else { return }
-            if connected { self.companionConnectedIDs.insert(id) } else { self.companionConnectedIDs.remove(id) }
+            if connected {
+                self.companionConnectedIDs.insert(id)
+                self.pushCAToCompanion(id)   // give the app the cert to install, pre-capture
+            } else {
+                self.companionConnectedIDs.remove(id)
+                self.companionCAPushed.remove(id)   // re-push on reconnect (the app may have restarted)
+            }
             self.recomputeDevices()
         }
         companionHub.onDeviceInfo = { [weak self] id, _, version in
@@ -370,6 +383,15 @@ final class AppModel {
         guard let made = try? CertificateAuthority() else { return nil }
         ca = made
         return made
+    }
+
+    /// Push the desktop CA to a freshly connected companion so the app can prompt the user to
+    /// install it — before any capture. Once per connection (re-sent on reconnect, since the
+    /// app may have restarted and lost it).
+    private func pushCAToCompanion(_ id: String) {
+        guard !companionCAPushed.contains(id), let ca = ensureCA() else { return }
+        companionCAPushed.insert(id)
+        companionHub.installCa(id: id, pem: Data(ca.rootCertificatePEM.utf8))
     }
 
     @discardableResult

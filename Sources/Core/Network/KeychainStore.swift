@@ -7,6 +7,19 @@ import Security
 enum KeychainStore {
     private static let service = "dev.srsouza.Jaca"
 
+    /// Whether an item exists for `account`, without returning its secret data. An
+    /// existence check doesn't trip the data-access ACL prompt that reading the secret can,
+    /// so it reliably distinguishes "no key yet" from "key present but unreadable".
+    static func exists(account: String) -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
+    }
+
     static func read(account: String) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,

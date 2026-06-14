@@ -71,7 +71,10 @@ final class CompanionHub {
 
     private func retryConnect(id: String) {
         Task { @MainActor in
-            for _ in 0..<40 {
+            // Keep trying long enough for the user to install + open the app after scanning
+            // the QR; once connected the gRPC channel auto-reconnects, and mDNS auto-connect
+            // (in AppModel) covers later sessions.
+            for _ in 0..<120 {
                 if connected.contains(id) { return }
                 connect(id: id)
                 try? await Task.sleep(for: .seconds(3))

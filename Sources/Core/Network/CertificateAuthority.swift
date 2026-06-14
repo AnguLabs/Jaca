@@ -4,6 +4,9 @@ import X509
 import SwiftASN1
 import NIOSSL
 
+/// Failures that must not be papered over by minting a replacement CA.
+enum CAError: Error { case keyPresentButUnreadable }
+
 /// Generates and persists a local root CA, and mints per-host leaf certificates
 /// signed by it so the MITM proxy can terminate TLS for any host. The user
 /// installs/ trusts the root CA on the device; leaves are cached per host.
@@ -47,13 +50,21 @@ final class CertificateAuthority: @unchecked Sendable {
             return nil
         }
 
-        if let certPEM = try? String(contentsOf: certURL, encoding: .utf8),
-           let keyPEM = loadKeyPEM(),
+        let certPEM = try? String(contentsOf: certURL, encoding: .utf8)
+        let keyPEM = loadKeyPEM()
+        if let certPEM, let keyPEM,
            let cert = try? Certificate(pemEncoded: certPEM),
            let key = try? P256.Signing.PrivateKey(pemRepresentation: keyPEM) {
             caCertificate = cert
             caKey = key
         } else {
+            // Never silently replace an existing CA. If a key is already stored but we
+            // couldn't read it (e.g. a transient Keychain failure), minting a fresh one would
+            // invalidate every cert already installed on devices. Fail loudly instead so the
+            // persisted CA survives for the next launch.
+            if useKeychain, keyPEM == nil, KeychainStore.exists(account: keyAccount) {
+                throw CAError.keyPresentButUnreadable
+            }
             let (cert, key) = try Self.makeRootCA()
             caCertificate = cert
             caKey = key
@@ -112,7 +123,10 @@ final class CertificateAuthority: @unchecked Sendable {
             serialNumber: Certificate.SerialNumber(),
             publicKey: Certificate.PublicKey(key.publicKey),
             notValidBefore: Date().addingTimeInterval(-86_400),
-            notValidAfter: Date().addingTimeInterval(10 * 365 * 86_400),
+            // Very long-lived (≈30y): the root is minted once per Mac, persisted (cert on
+            // disk + key in the Keychain) and reused across every device and every Jaca
+            // update, so a cert the user installs keeps working for the life of the machine.
+            notValidAfter: Date().addingTimeInterval(30 * 365 * 86_400),
             issuer: name,
             subject: name,
             signatureAlgorithm: .ecdsaWithSHA256,

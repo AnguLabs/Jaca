@@ -51,14 +51,13 @@ final class CompanionCaptureSource: CaptureSource {
                     self.decryptionConfirmed = true
                     sink?.capture(didChangeStatus: "Decrypting \(label) ✓")
                 } else if !self.decryptionConfirmed {
-                    // Auto mode: push the CA to the device once so the user can install it.
+                    // The CA is pushed to the device on connect; re-push once in case this
+                    // device connected after that, then point the user at the in-app install.
                     if !self.caInstallRequested {
                         self.caInstallRequested = true
                         self.hub.installCa(id: self.companionID, pem: Data(self.ca.rootCertificatePEM.utf8))
-                        sink?.capture(didChangeStatus: "CA not trusted on \(label) — sent it to the device to install")
-                    } else {
-                        sink?.capture(didChangeStatus: "CA not trusted on \(label) — install it to decrypt HTTPS")
                     }
+                    sink?.capture(didChangeStatus: "HTTPS not decrypted on \(label) — open the Jaca app and tap Install certificate")
                 }
             }
         })
