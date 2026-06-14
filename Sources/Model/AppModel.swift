@@ -54,6 +54,8 @@ final class AppModel {
     private let companionStore = CompanionDeviceStore()
     /// Companion devices seen before (persisted), shown offline until rediscovered.
     private var knownCompanions: [CompanionDeviceStore.Cached] = []
+    /// QR / web / adb onboarding for connecting a new device (set in init).
+    private(set) var companionSetup: CompanionSetupModel!
 
     /// Per-device shared state (capabilities + installed-app polling), one per
     /// `Device.id`, reused by every tab for that device. Created with the first
@@ -79,6 +81,7 @@ final class AppModel {
         }
         if !uiTestMode { pendingRestores = Self.loadPersistedTabs(); knownCompanions = companionStore.load() }
         buildProviders()
+        companionSetup = CompanionSetupModel(hub: companionHub, adbURL: adbURL)
         // Push global message-exclusion edits to every open log tab, live.
         LogExclusionStore.shared.onChange = { [weak self] in
             guard let self else { return }
