@@ -100,7 +100,11 @@ final class SmokeUITests: XCTestCase {
 
     func testStartLogcatSession() throws {
         let row = try XCTUnwrap(firstReadyDeviceRow(), "no ready device connected")
-        XCTAssertTrue(robustClickDevice(row, expect: app.buttons["logTransportButton"], timeout: 10),
+        let logcatOption = app.buttons["Start Logcat"]
+        XCTAssertTrue(robustClickDevice(row, expect: logcatOption, timeout: 10),
+                      "inspect menu didn't open")
+        logcatOption.click()
+        XCTAssertTrue(app.buttons["logTransportButton"].waitForExistence(timeout: 10),
                       "log session didn't open")
         // Let it stream — this is where a render/observation crash would surface.
         Thread.sleep(forTimeInterval: 3)
@@ -109,10 +113,17 @@ final class SmokeUITests: XCTestCase {
 
     func testMultipleLogcatTabs() throws {
         let row = try XCTUnwrap(firstReadyDeviceRow(), "no ready device connected")
-        XCTAssertTrue(robustClickDevice(row, expect: app.buttons["logTransportButton"], timeout: 10),
+        let logcatOption = app.buttons["Start Logcat"]
+        XCTAssertTrue(robustClickDevice(row, expect: logcatOption, timeout: 10),
+                      "inspect menu didn't open")
+        logcatOption.click()
+        XCTAssertTrue(app.buttons["logTransportButton"].waitForExistence(timeout: 10),
                       "first tab didn't open")
         assertAlive("first tab")
-        row.click()
+        // Re-open the menu and start a second, independent logcat tab.
+        XCTAssertTrue(robustClickDevice(row, expect: logcatOption, timeout: 8),
+                      "inspect menu didn't reopen")
+        logcatOption.click()
         Thread.sleep(forTimeInterval: 2)
         // Two tabs should now exist (each tab has a close button).
         XCTAssertGreaterThanOrEqual(app.buttons.matching(identifier: "tabClose").count, 2)
@@ -161,12 +172,10 @@ final class SmokeUITests: XCTestCase {
 
     func testStartNetworkInspection() throws {
         let row = try XCTUnwrap(firstReadyDeviceRow(), "no ready device connected")
-        app.activate()
-        row.rightClick()
-        let item = app.menuItems["Inspect Network"]
-        if !item.waitForExistence(timeout: 4) { row.rightClick() }  // re-arm after activation
-        XCTAssertTrue(item.waitForExistence(timeout: 6), "context menu didn't show")
-        item.click()
+        let networkOption = app.buttons["Inspect Network"]
+        XCTAssertTrue(robustClickDevice(row, expect: networkOption, timeout: 10),
+                      "inspect menu didn't open")
+        networkOption.click()
         let transport = app.buttons["netTransportButton"]
         XCTAssertTrue(transport.waitForExistence(timeout: 10), "network session didn't open")
         Thread.sleep(forTimeInterval: 2)

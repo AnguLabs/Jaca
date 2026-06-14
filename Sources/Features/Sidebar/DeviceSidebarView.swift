@@ -1,8 +1,8 @@
 import SwiftUI
 import Lemonade
 
-/// Live device list. Clicking a ready device starts a new logcat tab; clicking
-/// again starts another (independent filter) tab on the same device.
+/// Live device list. Clicking a ready device opens a small menu to start a new
+/// logcat tab or a network-capture tab; each pick opens an independent tab.
 struct DeviceSidebarView: View {
     @Bindable var model: AppModel
     @State private var showHistory = false
@@ -132,6 +132,7 @@ private struct DeviceRow: View {
     @State private var hovering = false
     @State private var stranded: String?
     @State private var reverting = false
+    @State private var showOptions = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: LemonadeTheme.spaces.spacing100) {
@@ -144,7 +145,7 @@ private struct DeviceRow: View {
     }
 
     private var deviceButton: some View {
-        Button(action: { if device.state.isReady { onStart() } }) {
+        Button(action: { if device.state.isReady { showOptions = true } }) {
             HStack(spacing: LemonadeTheme.spaces.spacing200) {
                 LemonadeUi.Icon(
                     icon: device.platform == .android ? .smartphone : .smartphone,
@@ -167,10 +168,13 @@ private struct DeviceRow: View {
                 }
                 Spacer(minLength: 0)
                 if device.state.isReady {
-                    Image(systemName: "play.fill")
+                    // Disclosure affordance: clicking opens the logcat/network menu.
+                    Image(systemName: "chevron.down")
                         .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(LemonadeTheme.colors.content.contentBrand)
-                        .opacity(hovering ? 1 : 0.35)
+                        .foregroundStyle(LemonadeTheme.colors.content.contentSecondary)
+                        .rotationEffect(.degrees(showOptions ? 180 : 0))
+                        .opacity(hovering || showOptions ? 1 : 0.35)
+                        .animation(.easeInOut(duration: 0.15), value: showOptions)
                 } else {
                     stateBadge
                 }
@@ -179,7 +183,7 @@ private struct DeviceRow: View {
             .padding(.vertical, LemonadeTheme.spaces.spacing200)
             .background(
                 RoundedRectangle(cornerRadius: LemonadeTheme.radius.radius150)
-                    .fill(hovering && device.state.isReady
+                    .fill((hovering || showOptions) && device.state.isReady
                         ? LemonadeTheme.colors.interaction.bgSubtleInteractive
                         : .clear)
             )
@@ -190,11 +194,26 @@ private struct DeviceRow: View {
         .disabled(!device.state.isReady)
         .accessibilityIdentifier("deviceRow")
         .onHover { hovering = $0 }
-        .help(device.state.isReady ? "Start logcat" : device.state.label)
-        .contextMenu {
-            Button("Start Logcat", action: onStart)
-            Button("Inspect Network", action: onInspectNetwork)
+        .help(device.state.isReady ? "Logcat or network capture" : device.state.label)
+        .popover(isPresented: $showOptions, arrowEdge: .bottom) {
+            inspectMenu
         }
+    }
+
+    /// Pops up on a single click of a ready device: pick logcat or network capture.
+    private var inspectMenu: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            OptionMenuRow(icon: "play.fill", title: "Start Logcat") {
+                showOptions = false
+                onStart()
+            }
+            OptionMenuRow(icon: "network", title: "Inspect Network") {
+                showOptions = false
+                onInspectNetwork()
+            }
+        }
+        .padding(LemonadeTheme.spaces.spacing100)
+        .frame(minWidth: 196)
     }
 
     /// Shown when this device still has a proxy Jaca set but a teardown couldn't
@@ -245,5 +264,43 @@ private struct DeviceRow: View {
                 : LemonadeTheme.colors.content.contentTertiary,
             maxLines: 1
         )
+    }
+}
+
+/// A single row inside the device inspect popover (logcat / network).
+private struct OptionMenuRow: View {
+    let icon: String
+    let title: String
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: LemonadeTheme.spaces.spacing200) {
+                Image(systemName: icon)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(LemonadeTheme.colors.content.contentSecondary)
+                    .frame(width: 18)
+                LemonadeUi.Text(
+                    title,
+                    textStyle: LemonadeTypography.shared.bodySmallRegular,
+                    color: LemonadeTheme.colors.content.contentPrimary,
+                    maxLines: 1
+                )
+                Spacer(minLength: 12)
+            }
+            .padding(.horizontal, LemonadeTheme.spaces.spacing200)
+            .padding(.vertical, LemonadeTheme.spaces.spacing100)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: LemonadeTheme.radius.radius150)
+                    .fill(hovering ? LemonadeTheme.colors.interaction.bgSubtleInteractive : .clear)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(.easeInOut(duration: 0.12), value: hovering)
+        .accessibilityIdentifier(title)
     }
 }
