@@ -33,13 +33,16 @@ struct NetworkSetupSheet: View {
                 if session.device.platform == .android {
                     LemonadeUi.Button(label: "Install CA automatically", onClick: onInstallCA,
                                       leadingIcon: .smartphone, variant: .primary, type: .solid, size: .small)
+                        .fixedSize()
                 }
-                LemonadeUi.Button(label: "Export CA certificate…", onClick: exportCA,
+                LemonadeUi.Button(label: "Export CA…", onClick: exportCA,
                                   leadingIcon: .download, variant: .neutral, type: .subtle, size: .small)
+                    .fixedSize()
                 Spacer()
                 if session.agentAvailable {
-                    LemonadeUi.Button(label: "Switch to Agent mode", onClick: onSwitchToAgent,
+                    LemonadeUi.Button(label: "Switch to Agent", onClick: onSwitchToAgent,
                                       variant: .neutral, type: .subtle, size: .small)
+                        .fixedSize()
                 }
             }
 

@@ -21,8 +21,9 @@ import Foundation
 final class AndroidCACertInstaller {
     enum Phase: Equatable {
         case idle
+        case choosingMode     // non-rooted: user picks Auto vs Manual
         case running
-        case awaitingUser     // non-rooted: the install dialog is up on the device
+        case awaitingUser     // non-rooted: waiting on the user (PIN / install)
         case succeeded
         case cancelled
         case failed(String)
@@ -37,10 +38,14 @@ final class AndroidCACertInstaller {
         var state: StepState
     }
 
+    enum Mode { case auto, manual }
+
     private(set) var phase: Phase = .idle
     private(set) var steps: [Step] = []
     /// True when we can install silently into the system store (rooted/emulator).
     let rootMode: Bool
+    /// Which non-rooted path the user picked (drives the in-sheet tutorial video).
+    private(set) var chosenMode: Mode?
 
     private let adbURL: URL
     private let serial: String
@@ -62,9 +67,7 @@ final class AndroidCACertInstaller {
         self.caPEM = caPEM
         self.capabilities = capabilities
         self.rootMode = capabilities.root == .rooted
-        self.steps = (rootMode ? Self.rootSteps : Self.userSteps).map {
-            Step(id: $0.0, title: $0.1, detail: nil, state: .pending)
-        }
+        if rootMode { self.steps = Self.make(Self.rootSteps) }
     }
 
     private static let rootSteps: [(String, String)] = [
@@ -73,19 +76,54 @@ final class AndroidCACertInstaller {
         ("install", "Install into system trust store"),
         ("verify", "Verify trust"),
     ]
-    private static let userSteps: [(String, String)] = [
-        ("push", "Copy certificate to device"),
-        ("open", "Open the certificate install dialog"),
-        ("confirm", "Confirm the install on your device"),
-        ("verify", "Verify trust"),
+    /// Manual mode: the user installs it themselves with on-device guidance.
+    private static let manualSteps: [(String, String)] = [
+        ("push", "Copy certificate to the device"),
+        ("open", "Open the on-device guide"),
+        ("trust", "Install & trust it in Settings"),
+        ("verify", "Confirm HTTPS is decrypting"),
     ]
+    /// Auto mode: Jaca taps through Settings, pausing only for the PIN/biometric.
+    private static let autoSteps: [(String, String)] = [
+        ("push", "Copy certificate to the device"),
+        ("navigate", "Open the CA install screen"),
+        ("auth", "Authenticate on the device"),
+        ("pick", "Select & name the certificate"),
+        ("verify", "Confirm HTTPS is decrypting"),
+    ]
+    private static func make(_ defs: [(String, String)]) -> [Step] {
+        defs.map { Step(id: $0.0, title: $0.1, detail: nil, state: .pending) }
+    }
 
     // MARK: - Lifecycle
 
     func start() {
         guard phase == .idle else { return }
+        if rootMode {
+            phase = .running
+            task = Task { await runRooted() }
+        } else {
+            // Non-rooted: let the user pick Auto vs Manual first.
+            phase = .choosingMode
+        }
+    }
+
+    /// Auto mode: Jaca drives Settings to the install screen, pausing for the PIN.
+    func chooseAuto() {
+        guard phase == .choosingMode else { return }
+        chosenMode = .auto
+        steps = Self.make(Self.autoSteps)
         phase = .running
-        task = Task { await rootMode ? runRooted() : runUser() }
+        task = Task { await runUserAuto() }
+    }
+
+    /// Manual mode: on-device guide (video + Open-settings button); user installs it.
+    func chooseManual() {
+        guard phase == .choosingMode else { return }
+        chosenMode = .manual
+        steps = Self.make(Self.manualSteps)
+        phase = .running
+        task = Task { await runUserManual() }
     }
 
     /// User-initiated cancel, or teardown. Removes pushed files and best-effort
@@ -193,105 +231,151 @@ final class AndroidCACertInstaller {
         return r?.stdout.contains("\(hash).0") ?? false
     }
 
-    // MARK: - Non-rooted (user store via the install dialog)
+    // MARK: - Non-rooted: manual (user installs, we guide on-device)
 
-    private func runUser() async {
-        // 1. Push the cert to Downloads as a .crt so the cert installer recognises it.
+    private func runUserManual() async {
         setState("push", .active)
-        // Use the canonical storage path (not /sdcard) so it matches the `_data`
-        // column MediaStore indexes — needed to resolve a content:// URI below.
         let devCert = "/storage/emulated/0/Download/JacaProxyCA.crt"
         hashName = "JacaProxyCA.crt"
         guard await push(caPEM.path, to: devCert) else {
             fail("push", "Couldn't copy the certificate to the device.")
             return
         }
-        // Make MediaStore aware of the file so we can resolve a content:// URI.
         _ = try? await CommandRunner.run(adbURL, ["-s", serial, "shell", "am", "broadcast",
             "-a", "android.intent.action.MEDIA_SCANNER_SCAN_FILE", "-d", "file://\(devCert)"])
         setState("push", .done)
         if Task.isCancelled { return }
 
-        // 2. Open the CA install dialog directly (content:// VIEW → skips the file picker).
+        // On-device guide (companion app: tutorial video + an "Open security settings"
+        // button), so the steps are where the user is looking. Falls back to a plain
+        // Settings deep-link if the helper APK isn't bundled.
         setState("open", .active)
         if !capabilities.hasScreenLock {
-            detail("open", "Set a screen lock on the device first — Android requires one for CA certs.")
+            detail("open", "Set a screen lock on the device first — Android requires one to install a CA.")
         }
-        guard await openInstallDialog(devCert: devCert) else {
-            fail("open", "Couldn't open the certificate install dialog.")
-            return
+        if !(await OnDeviceGuide.show(adbURL: adbURL, serial: serial)) {
+            await openSecuritySettings()
         }
         setState("open", .done)
 
-        // 3. Wait for the user to confirm on the device, auto-detecting completion.
-        setState("confirm", .active)
+        setState("trust", .active)
+        detail("trust", "On the device: More security settings → Install from device storage → CA certificate → JacaProxyCA, then confirm with your PIN.")
         phase = .awaitingUser
-        let confirmed = await awaitUserConfirmation()
-        guard confirmed else {
+        guard await awaitInterception() else {
             if Task.isCancelled || phase == .cancelled { return }
-            fail("confirm", "Install wasn't completed on the device.")
+            fail("trust", "No decrypted HTTPS seen yet. Finish the install on the device, then open any app to confirm.")
             return
         }
-        setState("confirm", .done)
-
-        // 4. Verify — for the user store we can't read the cert without root, so we
-        //    rely on a real intercepted HTTPS round-trip as ground truth.
-        setState("verify", .active)
-        phase = .running
-        if interceptionConfirmed {
-            setState("verify", .done)
-        } else {
-            detail("verify", "Trusted — generate some app traffic to confirm interception.")
-            setState("verify", .done)
-        }
+        setState("trust", .done)
+        setState("verify", .active); setState("verify", .done)
         phase = .succeeded
     }
 
-    private func openInstallDialog(devCert: String) async -> Bool {
-        // Resolve a MediaStore content:// URI for the pushed file; CertInstaller's
-        // VIEW handler reads the bytes from it and jumps straight to the dialog.
-        let uri = await contentURI(forDevicePath: devCert) ?? "file://\(devCert)"
-        let r = try? await CommandRunner.run(adbURL, ["-s", serial, "shell", "am", "start",
-            "-a", "android.intent.action.VIEW",
-            "-t", "application/x-x509-ca-cert",
-            "-d", uri,
-            "--grant-read-uri-permission"])
-        let out = ((r?.stdout ?? "") + (r?.stderr ?? "")).lowercased()
-        return r?.exitCode == 0 && !out.contains("error")
+    // MARK: - Non-rooted: auto (Jaca drives Settings; user only does the PIN)
+
+    private func runUserAuto() async {
+        setState("push", .active)
+        let devCert = "/storage/emulated/0/Download/JacaProxyCA.crt"
+        hashName = "JacaProxyCA.crt"
+        guard await push(caPEM.path, to: devCert) else {
+            fail("push", "Couldn't copy the certificate to the device.")
+            return
+        }
+        _ = try? await CommandRunner.run(adbURL, ["-s", serial, "shell", "am", "broadcast",
+            "-a", "android.intent.action.MEDIA_SCANNER_SCAN_FILE", "-d", "file://\(devCert)"])
+        setState("push", .done)
+        if Task.isCancelled { return }
+
+        let driver = UiAutomatorDriver(adbURL: adbURL, serial: serial)
+
+        // Drive Settings → CA-install warning. Falls back to guidance if the OEM
+        // layout/locale doesn't match, rather than failing.
+        setState("navigate", .active)
+        if !capabilities.hasScreenLock {
+            detail("navigate", "Set a screen lock on the device first — Android requires one to install a CA.")
+        }
+        await driver.openSecuritySettings()
+        try? await Task.sleep(for: .seconds(1))
+        let reached = await driveToInstallWarning(driver)
+        if Task.isCancelled || phase == .cancelled { return }
+        if !reached {
+            detail("navigate", "Couldn't auto-navigate this device — on it: More security settings → Install from device storage → CA certificate → JacaProxyCA.")
+        }
+        setState("navigate", reached ? .done : .skipped)
+
+        // Biometric / PIN — only the user can pass this. Wait for the file picker.
+        setState("auth", .active)
+        detail("auth", "Confirm with your fingerprint or PIN on the device.")
+        phase = .awaitingUser
+        let pickerReady = await driver.waitFor(text: ["JacaProxyCA", "Download"], timeoutSeconds: 120)
+        if Task.isCancelled || phase == .cancelled { return }
+        setState("auth", .done)
+
+        // Auto-pick the cert + confirm the name (best-effort).
+        setState("pick", .active)
+        phase = .running
+        if pickerReady {
+            _ = await driver.tapText(["JacaProxyCA"], scrolls: 3)
+            try? await Task.sleep(for: .seconds(1))
+            if !(await driver.tapId("android:id/button1")) { _ = await driver.tapText(["OK"], scrolls: 0) }
+        } else {
+            detail("pick", "Pick JacaProxyCA from Downloads on the device.")
+        }
+        setState("pick", .done)
+
+        setState("verify", .active)
+        phase = .awaitingUser
+        guard await awaitInterception() else {
+            if Task.isCancelled || phase == .cancelled { return }
+            fail("verify", "No decrypted HTTPS seen yet. If it's installed, open any app to confirm.")
+            return
+        }
+        setState("verify", .done)
+        phase = .succeeded
     }
 
-    private func contentURI(forDevicePath path: String) async -> String? {
-        let r = try? await CommandRunner.run(adbURL, ["-s", serial, "shell", "content", "query",
-            "--uri", "content://media/external/file",
-            "--projection", "_id",
-            "--where", "_data='\(path)'"])
-        // Output like: "Row: 0 _id=1234"
-        guard let line = r?.stdout, let range = line.range(of: "_id=") else { return nil }
-        let id = line[range.upperBound...].prefix { $0.isNumber }
-        return id.isEmpty ? nil : "content://media/external/file/\(id)"
+    /// Walks Settings → (More security settings) → Install from device storage →
+    /// CA certificate → "Install anyway", by localized text + stable ids.
+    private func driveToInstallWarning(_ driver: UiAutomatorDriver) async -> Bool {
+        let moreSecurity = ["More security settings", "Mais configurações de segurança",
+                            "Other security settings", "Outras configurações de segurança"]
+        let installFromStorage = ["Install from device storage", "Install from storage",
+                                  "Instalar do armazen", "Instalar do armazenamento"]
+        let caCertificate = ["CA certificate", "Certificado CA"]
+        _ = await driver.tapText(moreSecurity, scrolls: 4)
+        try? await Task.sleep(for: .milliseconds(700))
+        guard await driver.tapText(installFromStorage, scrolls: 6) else { return false }
+        try? await Task.sleep(for: .milliseconds(700))
+        guard await driver.tapText(caCertificate, scrolls: 3) else { return false }
+        try? await Task.sleep(for: .milliseconds(800))
+        if await driver.tapId("com.android.settings:id/button_positive") { return true }
+        return await driver.tapText(["Install anyway", "Instalar mesmo assim"], scrolls: 0)
     }
 
-    /// Polls until the CertInstaller activity is gone (user finished/cancelled) or
-    /// an intercepted HTTPS request confirms trust, whichever comes first.
-    private func awaitUserConfirmation() async -> Bool {
-        for _ in 0..<150 {   // ~5 min at 2s
+    /// Opens the device's Security settings (the only place a non-rooted CA install
+    /// can complete). Public so the sheet can re-open it on demand.
+    func openSecuritySettings() async {
+        _ = try? await CommandRunner.run(adbURL, ["-s", serial, "shell", "am", "start",
+            "-a", "android.settings.SECURITY_SETTINGS"])
+    }
+
+    /// Opens a test HTTPS page on the device so the proxy gets a request to decrypt.
+    /// If the CA is trusted it succeeds and the passive detector confirms — a one-tap
+    /// way to verify without making the user go browse something.
+    func triggerVerifyRequest() async {
+        _ = try? await CommandRunner.run(adbURL, ["-s", serial, "shell", "am", "start",
+            "-a", "android.intent.action.VIEW", "-d", "https://example.com"])
+    }
+
+    /// Polls for the ground-truth trust signal: the first HTTPS request decrypted
+    /// through the proxy (`noteInterceptionConfirmed`). ~20 min budget.
+    private func awaitInterception() async -> Bool {
+        for _ in 0..<600 {
             if Task.isCancelled || phase == .cancelled { return false }
             if interceptionConfirmed { return true }
-            if !(await certInstallerForeground()) {
-                // Dialog dismissed. Treat as completed; the verify step relies on
-                // interception for ground truth.
-                return true
-            }
             try? await Task.sleep(for: .seconds(2))
         }
         return false
-    }
-
-    private func certInstallerForeground() async -> Bool {
-        let r = try? await CommandRunner.run(adbURL, ["-s", serial, "shell",
-            "dumpsys", "activity", "activities"])
-        let out = r?.stdout ?? ""
-        return out.contains("com.android.certinstaller")
     }
 
     // MARK: - Cleanup
