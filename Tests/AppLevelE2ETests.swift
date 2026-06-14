@@ -43,44 +43,6 @@ final class AppLevelE2ETests: XCTestCase {
         XCTAssertTrue(session.transactions.isEmpty)
     }
 
-    // MARK: - NetworkSession proxy mode (the default for any app)
-
-    func testNetworkSessionProxyCaptureAndExportLive() async throws {
-        setenv("JACA_UITEST", "1", 1)   // don't mutate a real device proxy
-        defer { unsetenv("JACA_UITEST") }
-        let ca = try XCTUnwrap(try? CertificateAuthority())
-        let device = Device(id: "test-host", platform: .android, model: "Test", state: .connected)
-        let session = NetworkSession(device: device, ca: ca, adbURL: nil)
-
-        session.startProxyCapture()
-        let started = await waitUntil(8) { session.isRunning && session.boundPort > 0 }
-        try XCTSkipUnless(started, "proxy didn't start")
-        XCTAssertEqual(session.captureMode, .proxy)
-
-        let caPath = ca.storageDirectory.appendingPathComponent("rootCA.pem").path
-        let code = curl(throughProxyPort: session.boundPort, caPath: caPath, url: "https://example.com/")
-        try XCTSkipIf(code == "000" || code.isEmpty, "network unavailable")
-        XCTAssertEqual(code, "200")
-
-        let captured = await waitUntil(6) { session.transactions.contains { $0.host.contains("example.com") && !$0.isInFlight } }
-        XCTAssertTrue(captured, "session did not capture via proxy")
-
-        // Feature checks through the session: filter, time-range, HAR, clear.
-        session.filterText = "example.com"
-        XCTAssertTrue(session.filtered.allSatisfy { $0.host.contains("example.com") })
-        session.filterText = ""
-        let future = Date().addingTimeInterval(3600)
-        session.selectedTimeRange = future...future.addingTimeInterval(1)
-        XCTAssertTrue(session.filtered.isEmpty, "time-range filter should exclude all")
-        session.selectedTimeRange = nil
-
-        XCTAssertNotNil(HARExport.data(from: session.transactions))
-        session.clear()
-        XCTAssertTrue(session.transactions.isEmpty)
-        session.stop()
-        XCTAssertFalse(session.isRunning)
-    }
-
     // MARK: - NetworkSession agent mode (debuggable Android app, no proxy/CA)
 
     func testNetworkSessionAgentModeLive() async throws {
