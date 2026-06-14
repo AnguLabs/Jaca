@@ -1,11 +1,13 @@
 package dev.srsouza.jaca
 
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.os.Build
-import android.security.KeyChain
+import android.provider.MediaStore
+import android.provider.Settings
 import dev.srsouza.jaca.grpc.Ack
 import dev.srsouza.jaca.grpc.CaCert
 import dev.srsouza.jaca.grpc.CaptureMode
@@ -14,8 +16,6 @@ import dev.srsouza.jaca.grpc.DeviceInfo
 import dev.srsouza.jaca.grpc.Empty
 import dev.srsouza.jaca.grpc.FlowMeta
 import dev.srsouza.jaca.grpc.ProxyConfig
-import java.io.ByteArrayInputStream
-import java.security.cert.CertificateFactory
 import io.grpc.Server
 import io.grpc.ServerCredentials
 import io.grpc.TlsServerCredentials
@@ -84,18 +84,23 @@ class DesktopBridge(
         }
 
         override fun installCa(request: CaCert, responseObserver: StreamObserver<Ack>) {
-            // Prompt the user to install/trust the desktop's CA (system dialog). Best-effort:
-            // on a non-rooted device this installs a user CA; full system-store trust (all
-            // apps) still needs the rooted/adb path.
+            // Android 11+ blocks apps from installing a CA cert directly (every intent path
+            // dead-ends to "install in Settings"). Best a non-root app can do: drop the cert
+            // into Downloads so it's pickable, and open Security settings — the user finishes
+            // via Encryption & credentials > Install a certificate > CA certificate. A fully
+            // automatic, all-apps install still needs the rooted/adb system-store path.
             runCatching {
-                val cert = CertificateFactory.getInstance("X.509")
-                    .generateCertificate(ByteArrayInputStream(request.pem.toByteArray()))
-                val intent = KeyChain.createInstallIntent().apply {
-                    putExtra(KeyChain.EXTRA_CERTIFICATE, cert.encoded) // DER
-                    putExtra(KeyChain.EXTRA_NAME, request.name.ifEmpty { "Jaca CA" })
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                val values = ContentValues().apply {
+                    put(MediaStore.Downloads.DISPLAY_NAME, "Jaca-CA.crt")
+                    put(MediaStore.Downloads.MIME_TYPE, "application/x-x509-ca-cert")
                 }
-                context.startActivity(intent)
+                val resolver = context.contentResolver
+                resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)?.let { uri ->
+                    resolver.openOutputStream(uri)?.use { it.write(request.pem.toByteArray()) }
+                }
+                context.startActivity(
+                    Intent(Settings.ACTION_SECURITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
             }
             responseObserver.onNext(Ack.getDefaultInstance())
             responseObserver.onCompleted()
