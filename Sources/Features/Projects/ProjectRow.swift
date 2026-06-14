@@ -77,6 +77,14 @@ struct ProjectNodeView: View {
 
             if hovering, project.source == .user { removeButton }
 
+            if model.herdrInstalled, project.isClaudeProject, let herdrIcon = model.herdrIcon {
+                OpenInAppButton(icon: herdrIcon, help: "Open in Herdr (new worktree)", iconCornerRadius: 4) {
+                    model.openInHerdr(
+                        projectRoot: project.url, projectName: project.name,
+                        folder: project.url, isWorktree: false, hasGit: project.isGitRepo
+                    )
+                }
+            }
             if let zed = model.zed {
                 OpenInAppButton(icon: zed.icon, help: "Open in \(zed.name)") { model.openInZed(project.url) }
             }
@@ -193,6 +201,14 @@ struct ProjectCheckoutRow: View {
             }
             .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
 
+            if model.herdrInstalled, project.isClaudeProject, let herdrIcon = model.herdrIcon {
+                OpenInAppButton(icon: herdrIcon, help: herdrHelp, iconCornerRadius: 4) {
+                    model.openInHerdr(
+                        projectRoot: project.url, projectName: project.name,
+                        folder: checkout.url, isWorktree: !checkout.isMain, hasGit: project.isGitRepo
+                    )
+                }
+            }
             if let zed = model.zed {
                 OpenInAppButton(icon: zed.icon, help: "Open in \(zed.name)") { model.openInZed(checkout.url) }
             }
@@ -268,5 +284,10 @@ struct ProjectCheckoutRow: View {
     private var sizeText: String {
         if checkout.cleaning { return "cleaning…" }
         return checkout.sizeComputed ? formatSize(checkout.sizeMB) : "—"
+    }
+
+    /// The main checkout starts a fresh worktree; a linked worktree opens in place.
+    private var herdrHelp: String {
+        checkout.isMain ? "Open in Herdr (new worktree)" : "Open in Herdr"
     }
 }

@@ -48,6 +48,17 @@ final class ProjectsModel {
         return ws.icon(forFile: url.path)
     }()
 
+    /// Whether the `herdr` CLI is installed — gates the "Open in Herdr" action.
+    let herdrInstalled = HerdrService.binaryURL() != nil
+    /// The Herdr logo (bundled asset), for the "Open in Herdr" button. nil hides the action.
+    let herdrIcon = NSImage(named: "HerdrIcon")
+    /// Presents the Herdr config sheet via the Projects-header gear (command settings only).
+    var showingHerdrConfig = false
+    /// Presents the launch sheet (name this session; + command on first run) on row click.
+    var showingHerdrLaunch = false
+    private let herdrService = HerdrService()
+    private var pendingHerdrTarget: HerdrService.LaunchTarget?
+
     private var userFolders: [String]
     private let scanner = ProjectsScanner()
     private let cache = ProjectsCache()
@@ -61,6 +72,9 @@ final class ProjectsModel {
     private static let userFoldersKey = "jaca.projectFolders"
     private static let legacyWorktreeKey = "jaca.worktreesFolder"
     private static let viewModeKey = "jaca.projectsViewMode"
+    private static let herdrCommandKey = "jaca.herdr.claudeCommand"
+    /// The app-wide default Claude command Herdr runs in the new tab.
+    static let defaultHerdrCommand = "claude --permission-mode bypassPermissions"
 
     init() {
         userFolders = Self.loadUserFolders()
@@ -303,6 +317,78 @@ final class ProjectsModel {
         }
         zed.open(url)
         flash("Opening \(url.lastPathComponent) in \(zed.name)")
+    }
+
+    // MARK: - Herdr
+
+    /// The app-wide Claude command Herdr launches. Persisted; falls back to the default
+    /// until the user configures it the first time.
+    var herdrClaudeCommand: String {
+        UserDefaults.standard.string(forKey: Self.herdrCommandKey) ?? Self.defaultHerdrCommand
+    }
+    /// True once the user has confirmed the command at least once (first-run gate).
+    var isHerdrConfigured: Bool {
+        UserDefaults.standard.string(forKey: Self.herdrCommandKey) != nil
+    }
+
+    /// Begins a Herdr launch for a project root or worktree: stashes the target and opens
+    /// the launch sheet so the user names the session (and sets the command on first run).
+    /// - `isWorktree`: a linked worktree (cd into it) vs the project root (new-worktree flow).
+    func openInHerdr(projectRoot: URL, projectName: String, folder: URL, isWorktree: Bool, hasGit: Bool) {
+        pendingHerdrTarget = HerdrService.LaunchTarget(
+            projectRoot: projectRoot, projectName: projectName,
+            folder: folder, isWorktree: isWorktree, hasGit: hasGit, tabName: ""
+        )
+        showingHerdrLaunch = true
+    }
+
+    /// Confirms the launch sheet: persists the command on first run, names the tab, launches.
+    func confirmHerdrLaunch(tabName: String, command: String?) {
+        if let command { persistHerdrCommand(command) }
+        showingHerdrLaunch = false
+        guard var target = pendingHerdrTarget else { return }
+        pendingHerdrTarget = nil
+        target.tabName = tabName.trimmingCharacters(in: .whitespacesAndNewlines)
+        launchHerdr(target)
+    }
+
+    /// Dismisses the launch sheet without launching.
+    func cancelHerdrLaunch() {
+        pendingHerdrTarget = nil
+        showingHerdrLaunch = false
+    }
+
+    /// Opens the command-only config sheet from the Projects header gear.
+    func openHerdrSettings() { showingHerdrConfig = true }
+
+    /// Saves the command app-wide (gear sheet).
+    func saveHerdrConfig(_ command: String) {
+        persistHerdrCommand(command)
+        showingHerdrConfig = false
+    }
+
+    /// Dismisses the config sheet.
+    func cancelHerdrConfig() { showingHerdrConfig = false }
+
+    private func persistHerdrCommand(_ command: String) {
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        UserDefaults.standard.set(trimmed.isEmpty ? Self.defaultHerdrCommand : trimmed, forKey: Self.herdrCommandKey)
+    }
+
+    private func launchHerdr(_ target: HerdrService.LaunchTarget) {
+        let command = herdrClaudeCommand
+        let service = herdrService
+        Task { [weak self] in
+            do {
+                let result = try await service.launch(target, claudeCommand: command) { message in
+                    await MainActor.run { self?.flash(message, fallback: "sparkles") }
+                }
+                self?.flash("Launched in Herdr · \(result.workspaceLabel)/\(result.tabLabel)", fallback: "sparkles")
+            } catch {
+                let reason = (error as? LocalizedError)?.errorDescription ?? "launch failed"
+                self?.flash("Herdr: \(reason)", fallback: "eraser")
+            }
+        }
     }
 
     // MARK: - Toast

@@ -8,6 +8,9 @@ import Lemonade
 struct OpenInAppButton: View {
     let icon: NSImage
     let help: String
+    /// Rounds the icon's corners — for square logos (e.g. Herdr) so they read as app icons
+    /// alongside the already-rounded macOS icons. nil leaves the icon as-is.
+    var iconCornerRadius: CGFloat? = nil
     let action: () -> Void
 
     @State private var hovering = false
@@ -18,6 +21,7 @@ struct OpenInAppButton: View {
                 .resizable()
                 .interpolation(.high)
                 .frame(width: 18, height: 18)
+                .clipShape(RoundedRectangle(cornerRadius: iconCornerRadius ?? 0, style: .continuous))
                 .padding(5)
                 .background(
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
