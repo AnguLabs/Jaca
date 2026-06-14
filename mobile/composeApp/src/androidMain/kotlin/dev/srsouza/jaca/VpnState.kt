@@ -21,4 +21,10 @@ object VpnState {
     fun setServerAddress(address: String?) { state.update { it.copy(serverAddress = address) } }
 
     fun setDesktopConnected(connected: Boolean) { state.update { it.copy(desktopConnected = connected) } }
+
+    /// CA state from [CompanionCa]: whether a cert was received and whether it's trusted
+    /// on this device. Drives the in-app "install certificate" prompt.
+    fun setCa(received: Boolean, trusted: Boolean, name: String) {
+        state.update { it.copy(caReceived = received, caTrusted = trusted, caName = name) }
+    }
 }

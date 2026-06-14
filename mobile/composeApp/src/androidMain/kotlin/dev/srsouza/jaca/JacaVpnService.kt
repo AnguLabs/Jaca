@@ -67,16 +67,20 @@ class JacaVpnService : VpnService() {
         val bridgePort = tb.start()
         tunnelBridge = tb
 
-        // Companion link to Jaca desktop: advertise over mDNS + stream captured flows.
-        val db = DesktopBridge(applicationContext) { connected ->
-            VpnState.setDesktopConnected(connected)
-            if (!connected) { tb.clearProxy(); runCatching { nativeClearDnat() } } // back to direct
+        // Companion link to Jaca desktop. The gRPC server may already be running — it starts
+        // when the app opens so the desktop can set up the CA before any capture — so acquire
+        // the shared instance and wire only the data plane: engage the tunnel when the
+        // desktop advertises its proxy, drop it (back to direct) when the desktop drops.
+        val db = CompanionServer.acquire(applicationContext)
+        db.onProxyChanged = { host, port ->
+            if (host != null) {
+                tb.setProxy(host, port)
+                runCatching { nativeSetDnat(bridgePort) } // route TLS(443) through the bridge
+            } else {
+                tb.clearProxy()
+                runCatching { nativeClearDnat() } // back to direct so the device stays online
+            }
         }
-        db.onProxy = { host, port ->
-            tb.setProxy(host, port)
-            runCatching { nativeSetDnat(bridgePort) } // route TLS(443) through the bridge
-        }
-        db.start()
         bridge = db
         VpnState.setServerAddress(db.deviceIp()?.let { "$it:${db.port}" })
 
@@ -114,7 +118,11 @@ class JacaVpnService : VpnService() {
         attribThread?.interrupt(); attribThread = null
         captureThread?.interrupt(); captureThread = null
         tunnelBridge?.stop(); tunnelBridge = null
-        bridge?.stop(); bridge = null
+        // Release our hold on the shared gRPC server (don't stop it outright — the app UI may
+        // still be holding it for CA setup). Clear the data-plane hook first.
+        bridge?.onProxyChanged = null
+        bridge = null
+        CompanionServer.release()
         runCatching { tun?.close() }; tun = null   // unblocks the native tun read
         VpnState.stop()
         super.onDestroy()

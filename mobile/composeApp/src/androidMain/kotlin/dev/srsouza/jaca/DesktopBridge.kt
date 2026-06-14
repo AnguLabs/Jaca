@@ -1,13 +1,9 @@
 package dev.srsouza.jaca
 
-import android.content.ContentValues
 import android.content.Context
-import android.content.Intent
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.os.Build
-import android.provider.MediaStore
-import android.provider.Settings
 import dev.srsouza.jaca.grpc.Ack
 import dev.srsouza.jaca.grpc.CaCert
 import dev.srsouza.jaca.grpc.CaptureMode
@@ -43,10 +39,13 @@ import java.util.concurrent.TimeUnit
 /// keepalive detects dead connections, replacing the old hand-rolled heartbeat.
 class DesktopBridge(
     private val context: Context,
-    private val onConnectedChange: (Boolean) -> Unit,
 ) {
-    /// Desktop told us its decryption-proxy address (host, port) — tunnel TLS there.
-    var onProxy: ((String, Int) -> Unit)? = null
+    /// Data-plane hook set by the capture service: called with (host, port) when the desktop
+    /// advertises its decryption proxy, and with (null, 0) when the desktop disconnects so
+    /// the tunnel is torn down and the device stays online. Null before capture starts — the
+    /// control plane (Describe / InstallCa / flow stream) runs regardless, so the desktop can
+    /// push and the user can install the CA before any capture.
+    var onProxyChanged: ((String?, Int) -> Unit)? = null
 
     private val subscribers = Collections.synchronizedList(mutableListOf<FlowSubscriber>())
     private var server: Server? = null
@@ -66,7 +65,7 @@ class DesktopBridge(
         }
 
         override fun setProxy(request: ProxyConfig, responseObserver: StreamObserver<Ack>) {
-            onProxy?.invoke(request.host, request.port)
+            onProxyChanged?.invoke(request.host, request.port)
             responseObserver.onNext(Ack.getDefaultInstance())
             responseObserver.onCompleted()
         }
@@ -84,24 +83,11 @@ class DesktopBridge(
         }
 
         override fun installCa(request: CaCert, responseObserver: StreamObserver<Ack>) {
-            // Android 11+ blocks apps from installing a CA cert directly (every intent path
-            // dead-ends to "install in Settings"). Best a non-root app can do: drop the cert
-            // into Downloads so it's pickable, and open Security settings — the user finishes
-            // via Encryption & credentials > Install a certificate > CA certificate. A fully
-            // automatic, all-apps install still needs the rooted/adb system-store path.
-            runCatching {
-                val values = ContentValues().apply {
-                    put(MediaStore.Downloads.DISPLAY_NAME, "Jaca-CA.crt")
-                    put(MediaStore.Downloads.MIME_TYPE, "application/x-x509-ca-cert")
-                }
-                val resolver = context.contentResolver
-                resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)?.let { uri ->
-                    resolver.openOutputStream(uri)?.use { it.write(request.pem.toByteArray()) }
-                }
-                context.startActivity(
-                    Intent(Settings.ACTION_SECURITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                )
-            }
+            // The desktop pushes its CA over the link. We persist it and detect whether it's
+            // already trusted; the app then surfaces a single "Install certificate" prompt
+            // that opens the system flow (the one manual tap Android 11+ still requires).
+            // Nothing is downloaded by hand and Settings is never opened unprompted.
+            CompanionCa.store(context, request.pem.toByteArray(), request.name)
             responseObserver.onNext(Ack.getDefaultInstance())
             responseObserver.onCompleted()
         }
@@ -137,7 +123,8 @@ class DesktopBridge(
         synchronized(subscribers) { subscribers.toList().forEach { it.die() } }
         runCatching { server?.shutdownNow() }
         server = null
-        onConnectedChange(false)
+        VpnState.setDesktopConnected(false)
+        onProxyChanged?.invoke(null, 0)
     }
 
     /// Non-blocking: enqueues one FlowMeta per connected desktop. Safe to call from the
@@ -165,7 +152,7 @@ class DesktopBridge(
         fun start() {
             observer.setOnCancelHandler { die() } // desktop disconnected / cancelled
             writer.start()
-            onConnectedChange(true)
+            VpnState.setDesktopConnected(true)
         }
 
         fun enqueue(meta: FlowMeta) {
@@ -188,7 +175,9 @@ class DesktopBridge(
             writer.interrupt()
             subscribers.remove(this)
             runCatching { observer.onCompleted() }
-            onConnectedChange(subscribers.isNotEmpty())
+            val stillConnected = subscribers.isNotEmpty()
+            VpnState.setDesktopConnected(stillConnected)
+            if (!stillConnected) onProxyChanged?.invoke(null, 0) // back to direct; device stays online
         }
     }
 

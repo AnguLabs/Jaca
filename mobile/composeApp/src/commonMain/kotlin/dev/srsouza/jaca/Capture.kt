@@ -14,6 +14,12 @@ data class CaptureState(
     val serverAddress: String? = null,
     /// Whether a Jaca desktop is currently connected and receiving the stream.
     val desktopConnected: Boolean = false,
+    /// HTTPS-decryption certificate state, driven by the desktop pushing its CA over the
+    /// link: whether we've received a cert to install, whether it's trusted on this device
+    /// (detected from the system trust store), and its display name.
+    val caReceived: Boolean = false,
+    val caTrusted: Boolean = false,
+    val caName: String = "Jaca CA",
 )
 
 /// The platform traffic-capture engine behind the shared UI. The UI only ever talks to
@@ -29,6 +35,16 @@ interface CaptureEngine {
 
     /// Start capture when idle, stop it when running.
     fun toggle()
+
+    /// Stage the desktop's CA (already received over the link) and open the system
+    /// certificate-install flow — the single manual tap Android 11+ still requires. The
+    /// cert is never downloaded by hand. No-op on platforms without on-device capture.
+    fun requestCaInstall() {}
+
+    /// Re-check whether the CA is trusted now. Called on a short timer while the install
+    /// prompt is showing, so the UI flips to "installed" the moment the user finishes in
+    /// Settings — no need to leave and re-enter the app. No-op where unsupported.
+    fun recheckCa() {}
 }
 
 /// Newest-first flow history with consecutive-duplicate suppression and a hard cap.
