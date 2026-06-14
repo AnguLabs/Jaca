@@ -7,6 +7,7 @@ struct DeviceSidebarView: View {
     @Bindable var model: AppModel
     @State private var showHistory = false
     @State private var showSettings = false
+    @State private var showConnect = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: LemonadeTheme.spaces.spacing300) {
@@ -19,6 +20,13 @@ struct DeviceSidebarView: View {
                         : LemonadeTheme.colors.content.contentSecondary
                 )
                 Spacer()
+                Button(action: { showConnect = true }) {
+                    Image(systemName: "plus.circle")
+                        .foregroundStyle(LemonadeTheme.colors.content.contentSecondary)
+                }
+                .buttonStyle(.plain)
+                .help("Connect a device (QR / USB)")
+                .accessibilityIdentifier("connectDeviceButton")
                 LemonadeUi.IconButton(
                     icon: .clockArrowUp, contentDescription: "History",
                     onClick: { showHistory = true }, size: .small
@@ -69,6 +77,9 @@ struct DeviceSidebarView: View {
         }
         .sheet(isPresented: $showSettings) {
             SettingsView(model: model)
+        }
+        .sheet(isPresented: $showConnect) {
+            CompanionSetupSheet(model: model.companionSetup)
         }
     }
 
