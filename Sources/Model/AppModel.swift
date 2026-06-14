@@ -83,7 +83,8 @@ final class AppModel {
         }
         if !uiTestMode { pendingRestores = Self.loadPersistedTabs(); knownCompanions = companionStore.load() }
         buildProviders()
-        companionSetup = CompanionSetupModel(hub: companionHub, adbURL: adbURL)
+        companionSetup = CompanionSetupModel(hub: companionHub, adbURL: adbURL,
+                                             caCertPEM: { [weak self] in self?.ensureCA()?.rootCertificatePEM })
         // Push global message-exclusion edits to every open log tab, live.
         LogExclusionStore.shared.onChange = { [weak self] in
             guard let self else { return }
@@ -362,16 +363,19 @@ final class AppModel {
     /// long-running capture sessions).
     private let bodyCache = NetworkBodyCache()
 
+    /// The shared CA, minted (and persisted, key in the Keychain) on first use. Also feeds
+    /// the onboarding web server so a phone can download and trust the cert.
+    private func ensureCA() -> CertificateAuthority? {
+        if let ca { return ca }
+        guard let made = try? CertificateAuthority() else { return nil }
+        ca = made
+        return made
+    }
+
     @discardableResult
     func startNetworkSession(for device: Device, name: String? = nil, autoStart: Bool = true) -> NetworkSession? {
         mode = .devices   // opening a session returns to the devices/sessions view
-        let authority: CertificateAuthority
-        if let ca { authority = ca }
-        else {
-            guard let made = try? CertificateAuthority() else { return nil }
-            ca = made
-            authority = made
-        }
+        guard let authority = ensureCA() else { return nil }
         let session = NetworkSession(device: device, ca: authority, adbURL: adbURL,
                                      displayName: name, bodyCache: bodyCache, companion: companionHub)
         session.deviceContext = context(for: device)

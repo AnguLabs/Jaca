@@ -20,16 +20,19 @@ final class CompanionSetupModel {
     private var server: CompanionWebServer?
     private let hub: CompanionHub
     private let adbURL: URL?
+    /// Resolves the desktop's root CA PEM (lazily, so the CA is only minted when needed).
+    private let caCertPEM: () -> String?
 
-    init(hub: CompanionHub, adbURL: URL?) {
+    init(hub: CompanionHub, adbURL: URL?, caCertPEM: @escaping () -> String? = { nil }) {
         self.hub = hub
         self.adbURL = adbURL
+        self.caCertPEM = caCertPEM
     }
 
     func start() {
         guard server == nil else { return }
         let apk = Bundle.main.url(forResource: "jaca-mobile", withExtension: "apk")
-        let s = CompanionWebServer(apkURL: apk)
+        let s = CompanionWebServer(apkURL: apk, caCertPEM: caCertPEM)
         s.onClientSeen = { [weak self] ip in Task { @MainActor in self?.deviceSeen(ip) } }
         let port = s.start() ?? 8890
         server = s

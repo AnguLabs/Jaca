@@ -7,13 +7,19 @@ import Network
 /// auto-connect to the companion app once it's running.
 final class CompanionWebServer {
     private let apkURL: URL?
+    /// The desktop's root CA, served at /ca.crt so a phone can download and trust it
+    /// without adb (the alternative to pushing it over a debug bridge).
+    private let caCertPEM: () -> String?
     private let queue = DispatchQueue(label: "dev.srsouza.jaca.web")
     private var listener: NWListener?
     /// Called with the phone's LAN IP each time it hits the server.
     var onClientSeen: ((String) -> Void)?
     private(set) var port: UInt16 = 0
 
-    init(apkURL: URL?) { self.apkURL = apkURL }
+    init(apkURL: URL?, caCertPEM: @escaping () -> String? = { nil }) {
+        self.apkURL = apkURL
+        self.caCertPEM = caCertPEM
+    }
 
     @discardableResult
     func start(port preferred: UInt16 = 8890) -> UInt16? {
@@ -57,15 +63,16 @@ final class CompanionWebServer {
     private func respond(_ conn: NWConnection, path: String) {
         let body: Data
         let contentType: String
+        var filename: String?
         if path.hasPrefix("/jaca.apk"), let apkURL, let apk = try? Data(contentsOf: apkURL) {
-            body = apk; contentType = "application/vnd.android.package-archive"
+            body = apk; contentType = "application/vnd.android.package-archive"; filename = "jaca.apk"
+        } else if path.hasPrefix("/ca.crt"), let pem = caCertPEM() {
+            body = Data(pem.utf8); contentType = "application/x-x509-ca-cert"; filename = "jaca-ca.crt"
         } else {
             body = Data(Self.landingHTML.utf8); contentType = "text/html; charset=utf-8"
         }
         var header = "HTTP/1.0 200 OK\r\nContent-Type: \(contentType)\r\nContent-Length: \(body.count)\r\n"
-        if contentType.hasPrefix("application") {
-            header += "Content-Disposition: attachment; filename=\"jaca.apk\"\r\n"
-        }
+        if let filename { header += "Content-Disposition: attachment; filename=\"\(filename)\"\r\n" }
         header += "Connection: close\r\n\r\n"
         var out = Data(header.utf8); out.append(body)
         conn.send(content: out, completion: .contentProcessed { _ in conn.cancel() })
@@ -93,6 +100,10 @@ final class CompanionWebServer {
     <p>Download the Jaca companion app, open it, and start capture. Your desktop connects automatically.</p>
     <a class="btn" href="/jaca.apk">Download Jaca.apk</a>
     <p style="color:#8e8e93;margin-top:24px;font-size:14px">You may need to allow installs from this browser.</p>
+    <h2 style="margin-top:36px">Decrypt HTTPS</h2>
+    <p>To inspect HTTPS traffic, also install the Jaca certificate and trust it for apps.</p>
+    <a class="btn" href="/ca.crt">Download certificate</a>
+    <p style="color:#8e8e93;margin-top:24px;font-size:14px">After downloading, open Settings and install it as a CA certificate.</p>
     </body></html>
     """
 }
