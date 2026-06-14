@@ -26,6 +26,8 @@ class DesktopBridge(
     private val context: Context,
     private val onConnectedChange: (Boolean) -> Unit,
 ) {
+    /// Desktop told us its decryption-proxy address (host, port) — tunnel TLS there.
+    var onProxy: ((String, Int) -> Unit)? = null
     private val clients = Collections.synchronizedList(mutableListOf<Client>())
     private var serverSocket: ServerSocket? = null
     private var acceptThread: Thread? = null
@@ -106,10 +108,19 @@ class DesktopBridge(
 
         private fun readLoop() {
             runCatching {
-                val input = socket.getInputStream(); val buf = ByteArray(256)
-                while (input.read(buf) >= 0) { /* desktop is a reader; just watch for EOF */ }
+                val reader = socket.getInputStream().bufferedReader()
+                var line = reader.readLine()
+                while (line != null) { handleControl(line); line = reader.readLine() }
             }
             die()
+        }
+
+        /// Desktop control lines, e.g. {"type":"proxy","host":"1.2.3.4","port":54321}.
+        private fun handleControl(line: String) {
+            if (!line.contains("\"proxy\"")) return
+            val host = Regex("\"host\"\\s*:\\s*\"([^\"]+)\"").find(line)?.groupValues?.get(1) ?: return
+            val port = Regex("\"port\"\\s*:\\s*(\\d+)").find(line)?.groupValues?.get(1)?.toIntOrNull() ?: return
+            onProxy?.invoke(host, port)
         }
 
         fun die() {

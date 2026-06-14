@@ -68,7 +68,10 @@ class JacaVpnService : VpnService() {
         val attributor = FlowAttributor(this)
 
         // Companion link to Jaca desktop: advertise over mDNS + stream captured flows.
-        val db = DesktopBridge(applicationContext) { connected -> VpnState.setDesktopConnected(connected) }
+        val db = DesktopBridge(applicationContext) { connected ->
+            VpnState.setDesktopConnected(connected)
+            if (!connected) tcpProxy?.tunnel = null   // desktop gone: fall back to direct, stay online
+        }
         db.start()
         bridge = db
         VpnState.setServerAddress(db.deviceIp()?.let { "$it:${db.port}" })
@@ -85,6 +88,7 @@ class JacaVpnService : VpnService() {
                     dstPort = session.remotePort.toInt() and 0xFFFF,
                 )
                 attributor.attribute(flow)?.let {
+                    session.packageName = it.packageName   // sent to the desktop proxy as X-Jaca-App
                     VpnState.addFlow(it)
                     db.broadcast(flowJson(it))
                 }
@@ -95,6 +99,8 @@ class JacaVpnService : VpnService() {
         val udp = UdpProxy(this, sessions, output, writeLock, onSession).also { it.start() }
         tcpProxy = tcp
         udpProxy = udp
+        // When the desktop advertises its decryption proxy, tunnel TLS connections there.
+        db.onProxy = { host, port -> tcpProxy?.tunnel = java.net.InetSocketAddress(host, port) }
         val tcpForwarder = TcpForwarder(ipToInt(TUN_ADDRESS), tcp.port, sessions, output, writeLock, onSession)
 
         reader = Thread({
