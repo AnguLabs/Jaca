@@ -219,21 +219,22 @@ struct NetworkSessionView: View {
     }
 
     private var modeBadge: some View {
-        let isAgent = session.captureMode == .agent
+        let mode = session.captureMode
+        let color: Color = mode == .agent ? LemonadeTheme.colors.content.contentBrand
+            : (mode == .companion ? LemonadeTheme.colors.content.contentPositive
+                                  : LemonadeTheme.colors.content.contentTertiary)
         return HStack(spacing: 4) {
-            Circle()
-                .fill(isAgent ? LemonadeTheme.colors.content.contentBrand
-                              : LemonadeTheme.colors.content.contentTertiary)
-                .frame(width: 6, height: 6)
-            Text(isAgent ? "in-process" : "proxy")
+            Circle().fill(color).frame(width: 6, height: 6)
+            Text(mode.label)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(LemonadeTheme.colors.content.contentSecondary)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
         .background(Capsule().fill(LemonadeTheme.colors.background.bgNeutralSubtle))
-        .help(isAgent ? "Capturing in-process via the agent (no proxy/CA)"
-                      : "Capturing via the MITM proxy")
+        .help(mode == .agent ? "Capturing in-process via the agent (no proxy/CA)"
+              : (mode == .companion ? "Streaming from the Jaca mobile companion app"
+                                    : "Capturing via the MITM proxy"))
     }
 
     private func exportHAR() {

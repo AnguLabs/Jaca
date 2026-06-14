@@ -1,11 +1,19 @@
 import Foundation
 
-/// How a network session is capturing traffic.
+/// How a network session is capturing traffic. One case per registered capture source
+/// (see CaptureSourceRegistry) — used for the badge, persistence and chooser styling.
 enum CaptureMode: Sendable, Equatable {
     case proxy
     case agent
+    case companion
 
-    var label: String { self == .agent ? "in-process" : "proxy" }
+    var label: String {
+        switch self {
+        case .agent: return "in-process"
+        case .companion: return "companion"
+        case .proxy: return "proxy"
+        }
+    }
 }
 
 /// Locates the bundled Android agent artifacts (native .so + dex). Falls back to

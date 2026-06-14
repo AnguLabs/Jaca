@@ -51,23 +51,11 @@ struct DeviceSidebarView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: LemonadeTheme.spaces.spacing300) {
                         ForEach(platforms, id: \.self) { platform in
-                            VStack(alignment: .leading, spacing: LemonadeTheme.spaces.spacing100) {
-                                LemonadeUi.Text(
-                                    platform.displayName.uppercased(),
-                                    textStyle: LemonadeTypography.shared.bodyXSmallOverline,
-                                    color: LemonadeTheme.colors.content.contentTertiary
-                                )
-                                ForEach(model.devices.filter { $0.platform == platform }) { device in
-                                    DeviceRow(
-                                        device: device,
-                                        onStart: { model.startSession(for: device) },
-                                        onInspectNetwork: { model.startNetworkSession(for: device, autoStart: false) },
-                                        checkProxy: { await model.strandedProxy(for: device) },
-                                        revertProxy: { await model.revertDeviceProxy(device) }
-                                    )
-                                }
-                            }
+                            deviceSection(platform.displayName.uppercased(),
+                                          model.devices.filter { $0.platform == platform && !$0.isCompanion })
                         }
+                        // Devices reachable only over the companion link (no USB/ADB).
+                        deviceSection("COMPANION", model.devices.filter { $0.isCompanion })
                     }
                 }
             }
@@ -86,10 +74,34 @@ struct DeviceSidebarView: View {
 
     private var platforms: [DevicePlatform] {
         var seen: [DevicePlatform] = []
-        for device in model.devices where !seen.contains(device.platform) {
+        for device in model.devices where !device.isCompanion && !seen.contains(device.platform) {
             seen.append(device.platform)
         }
         return seen
+    }
+
+    /// A titled group of device rows (a platform, or the companion-only section).
+    @ViewBuilder
+    private func deviceSection(_ title: String, _ devices: [Device]) -> some View {
+        if !devices.isEmpty {
+            VStack(alignment: .leading, spacing: LemonadeTheme.spaces.spacing100) {
+                LemonadeUi.Text(
+                    title,
+                    textStyle: LemonadeTypography.shared.bodyXSmallOverline,
+                    color: LemonadeTheme.colors.content.contentTertiary
+                )
+                ForEach(devices) { device in
+                    DeviceRow(
+                        device: device,
+                        onStart: { model.startSession(for: device) },
+                        onInspectNetwork: { model.startNetworkSession(for: device, autoStart: false) },
+                        onStartCompanion: { model.startNetworkSession(for: device, autoStart: true) },
+                        checkProxy: { await model.strandedProxy(for: device) },
+                        revertProxy: { await model.revertDeviceProxy(device) }
+                    )
+                }
+            }
+        }
     }
 
     private var adbMissingNotice: some View {
@@ -125,6 +137,8 @@ private struct DeviceRow: View {
     let device: Device
     let onStart: () -> Void
     let onInspectNetwork: () -> Void
+    /// Start (and auto-run) companion network capture — the primary action for companion devices.
+    let onStartCompanion: () -> Void
     /// Returns the device's stranded Jaca proxy (host == this Mac), or nil.
     let checkProxy: () async -> String?
     /// Clears the device's HTTP proxy.
@@ -144,32 +158,41 @@ private struct DeviceRow: View {
         }
     }
 
+    /// A companion device (network only) or a ready adb/ios device can be acted on:
+    /// companions open Network inspection directly, adb/ios open the logcat/network menu.
+    private var actionable: Bool { device.isCompanion || device.state.isReady }
+
     private var deviceButton: some View {
-        Button(action: { if device.state.isReady { showOptions = true } }) {
+        Button(action: {
+            if device.isCompanion { onStartCompanion() }
+            else if device.state.isReady { showOptions = true }
+        }) {
             HStack(spacing: LemonadeTheme.spaces.spacing200) {
                 LemonadeUi.Icon(
-                    icon: device.platform == .android ? .smartphone : .smartphone,
-                    contentDescription: nil, size: .medium,
+                    icon: .smartphone, contentDescription: nil, size: .medium,
                     tint: LemonadeTheme.colors.content.contentSecondary
                 )
                 VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 6) {
+                        LemonadeUi.Text(
+                            device.displayModel,
+                            textStyle: LemonadeTypography.shared.bodySmallSemiBold,
+                            color: LemonadeTheme.colors.content.contentPrimary,
+                            maxLines: 1
+                        )
+                        if device.companionID != nil { companionChip }
+                    }
                     LemonadeUi.Text(
-                        device.displayModel,
-                        textStyle: LemonadeTypography.shared.bodySmallSemiBold,
-                        color: LemonadeTheme.colors.content.contentPrimary,
-                        maxLines: 1
-                    )
-                    LemonadeUi.Text(
-                        device.id,
+                        device.isCompanion ? "Companion (network only)" : device.id,
                         textStyle: LemonadeTypography.shared.bodyXSmallRegular,
                         color: LemonadeTheme.colors.content.contentTertiary,
                         maxLines: 1
                     )
                 }
                 Spacer(minLength: 0)
-                if device.state.isReady {
-                    // Disclosure affordance: clicking opens the logcat/network menu.
-                    Image(systemName: "chevron.down")
+                if actionable {
+                    // Companion: direct play (network only). adb/ios: chevron opens the logcat/network menu.
+                    Image(systemName: device.isCompanion ? "play.fill" : "chevron.down")
                         .font(.system(size: 11, weight: .bold))
                         .foregroundStyle(LemonadeTheme.colors.content.contentSecondary)
                         .rotationEffect(.degrees(showOptions ? 180 : 0))
@@ -183,24 +206,24 @@ private struct DeviceRow: View {
             .padding(.vertical, LemonadeTheme.spaces.spacing200)
             .background(
                 RoundedRectangle(cornerRadius: LemonadeTheme.radius.radius150)
-                    .fill((hovering || showOptions) && device.state.isReady
+                    .fill((hovering || showOptions) && actionable
                         ? LemonadeTheme.colors.interaction.bgSubtleInteractive
                         : .clear)
             )
-            // Whole row is clickable, not just the text/icon.
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(!device.state.isReady)
+        .disabled(!actionable)
         .accessibilityIdentifier("deviceRow")
         .onHover { hovering = $0 }
-        .help(device.state.isReady ? "Logcat or network capture" : device.state.label)
+        .help(device.isCompanion ? "Inspect network (companion)"
+              : (device.state.isReady ? "Logcat or network capture" : device.state.label))
         .popover(isPresented: $showOptions, arrowEdge: .bottom) {
             inspectMenu
         }
     }
 
-    /// Pops up on a single click of a ready device: pick logcat or network capture.
+    /// Pops up on a single click of a ready adb/ios device: pick logcat or network capture.
     private var inspectMenu: some View {
         VStack(alignment: .leading, spacing: 2) {
             OptionMenuRow(icon: "play.fill", title: "Start Logcat") {
@@ -214,6 +237,22 @@ private struct DeviceRow: View {
         }
         .padding(LemonadeTheme.spaces.spacing100)
         .frame(minWidth: 196)
+    }
+
+    /// Green when the companion stream is connected, red (caution) when it isn't.
+    private var companionChip: some View {
+        HStack(spacing: 3) {
+            Circle()
+                .fill(device.companionConnected
+                    ? LemonadeTheme.colors.content.contentPositive
+                    : LemonadeTheme.colors.content.contentCritical)
+                .frame(width: 6, height: 6)
+            Text("companion")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(LemonadeTheme.colors.content.contentSecondary)
+        }
+        .padding(.horizontal, 6).padding(.vertical, 2)
+        .background(Capsule().fill(LemonadeTheme.colors.background.bgNeutralSubtle))
     }
 
     /// Shown when this device still has a proxy Jaca set but a teardown couldn't
