@@ -4,135 +4,162 @@ import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.os.Build
+import dev.srsouza.jaca.grpc.Ack
+import dev.srsouza.jaca.grpc.CaptureMode
+import dev.srsouza.jaca.grpc.CompanionGrpc
+import dev.srsouza.jaca.grpc.DeviceInfo
+import dev.srsouza.jaca.grpc.Empty
+import dev.srsouza.jaca.grpc.FlowMeta
+import dev.srsouza.jaca.grpc.ProxyConfig
+import io.grpc.Server
+import io.grpc.ServerCredentials
+import io.grpc.TlsServerCredentials
+import io.grpc.okhttp.OkHttpServerBuilder
+import io.grpc.stub.ServerCallStreamObserver
+import io.grpc.stub.StreamObserver
 import java.net.Inet4Address
 import java.net.NetworkInterface
-import java.net.ServerSocket
-import java.net.Socket
 import java.util.Collections
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
-/// The companion link to Jaca desktop. Advertises this device over mDNS (so the desktop
-/// finds it with no ADB), accepts desktop connections, and streams captured flows as
-/// newline-delimited JSON. Decryption happens on the desktop, so nothing sensitive (no CA
-/// key) lives here.
+/// The companion link to Jaca desktop, served over gRPC (HTTP/2) with TLS. Advertises
+/// this device over mDNS (so the desktop finds it with no ADB), then:
+///  - `StreamFlows`: streams captured flow metadata to each connected desktop. The stream
+///    staying open is also the liveness signal — when it ends the phone clears the
+///    decryption tunnel and falls back to direct so the device stays online.
+///  - `SetProxy`: the desktop tells the phone where its decryption proxy is (decryption
+///    stays on the desktop; no CA key here).
+///  - `Describe`: device self-info for the desktop's device list.
 ///
-/// Each client gets its OWN bounded queue + writer thread, so [broadcast] (called from
-/// the capture/tun thread) only ever does a non-blocking enqueue. A dead or stalled
-/// desktop can never block packet forwarding — it just gets pruned. This is essential:
-/// writing straight to a half-open socket on the capture thread would freeze the device's
-/// whole network.
+/// Each flow subscriber gets its OWN bounded queue + writer thread, so [broadcast] (called
+/// from the capture/tun thread) only ever does a non-blocking enqueue. A dead or stalled
+/// desktop can never block packet forwarding — it just gets pruned. gRPC's HTTP/2
+/// keepalive detects dead connections, replacing the old hand-rolled heartbeat.
 class DesktopBridge(
     private val context: Context,
     private val onConnectedChange: (Boolean) -> Unit,
 ) {
     /// Desktop told us its decryption-proxy address (host, port) — tunnel TLS there.
     var onProxy: ((String, Int) -> Unit)? = null
-    private val clients = Collections.synchronizedList(mutableListOf<Client>())
-    private var serverSocket: ServerSocket? = null
-    private var acceptThread: Thread? = null
-    private var heartbeatThread: Thread? = null
+
+    private val subscribers = Collections.synchronizedList(mutableListOf<FlowSubscriber>())
+    private var server: Server? = null
     private var nsd: NsdManager? = null
     private var regListener: NsdManager.RegistrationListener? = null
     @Volatile private var running = false
     var port: Int = PORT
         private set
 
+    private val service = object : CompanionGrpc.CompanionImplBase() {
+        override fun streamFlows(request: Empty, responseObserver: StreamObserver<FlowMeta>) {
+            @Suppress("UNCHECKED_CAST")
+            val sco = responseObserver as ServerCallStreamObserver<FlowMeta>
+            val sub = FlowSubscriber(sco)
+            subscribers.add(sub)
+            sub.start()
+        }
+
+        override fun setProxy(request: ProxyConfig, responseObserver: StreamObserver<Ack>) {
+            onProxy?.invoke(request.host, request.port)
+            responseObserver.onNext(Ack.getDefaultInstance())
+            responseObserver.onCompleted()
+        }
+
+        override fun describe(request: Empty, responseObserver: StreamObserver<DeviceInfo>) {
+            responseObserver.onNext(
+                DeviceInfo.newBuilder()
+                    .setName("Jaca ${Build.MODEL}")
+                    .setDeviceIp(deviceIp().orEmpty())
+                    .setMode(CaptureMode.STREAM_FULL)
+                    .build(),
+            )
+            responseObserver.onCompleted()
+        }
+    }
+
     fun start() {
         running = true
-        // TLS so the desktop link is encrypted on the LAN (the phone is the TLS server,
-        // key in the AndroidKeyStore). Falls back to a fresh port if 8889 is taken.
-        val factory = CompanionTls.serverSocketFactory()
-        val ss = runCatching { factory.createServerSocket(PORT) }.getOrElse { factory.createServerSocket(0) }
-        serverSocket = ss
-        port = ss.localPort
-        acceptThread = Thread({ acceptLoop(ss) }, "jaca-bridge-accept").apply { start() }
-        heartbeatThread = Thread({
-            while (running) {
-                runCatching { Thread.sleep(HEARTBEAT_MS) }
-                if (!running) break
-                broadcast("""{"type":"ping"}""")
-            }
-        }, "jaca-bridge-heartbeat").apply { start() }
+        // TLS so the link is encrypted on the LAN (the phone is the TLS server, key in the
+        // AndroidKeyStore). Falls back to a fresh port if 8889 is taken.
+        val creds = TlsServerCredentials.newBuilder().keyManager(*CompanionTls.keyManagers()).build()
+        val srv = runCatching { buildServer(PORT, creds) }
+            .getOrElse { buildServer(0, creds) }
+        server = srv
+        port = srv.port
         registerNsd(port)
     }
 
+    private fun buildServer(port: Int, creds: ServerCredentials): Server =
+        OkHttpServerBuilder.forPort(port, creds)
+            .addService(service)
+            // HTTP/2 keepalive: ping idle desktops; drop the connection (and its stream)
+            // if they stop answering, so a dead desktop is detected and the tunnel cleared.
+            .keepAliveTime(KEEPALIVE_MS, TimeUnit.MILLISECONDS)
+            .keepAliveTimeout(KEEPALIVE_MS, TimeUnit.MILLISECONDS)
+            .permitKeepAliveWithoutCalls(true)
+            .permitKeepAliveTime(1, TimeUnit.SECONDS)
+            .build()
+            .start()
+
     fun stop() {
         running = false
-        heartbeatThread?.interrupt(); heartbeatThread = null
         unregisterNsd()
-        runCatching { serverSocket?.close() }
-        synchronized(clients) { clients.toList().forEach { it.die() } }
+        synchronized(subscribers) { subscribers.toList().forEach { it.die() } }
+        runCatching { server?.shutdownNow() }
+        server = null
         onConnectedChange(false)
     }
 
-    /// Non-blocking: enqueues one JSON line per connected desktop. Safe to call from the
+    /// Non-blocking: enqueues one FlowMeta per connected desktop. Safe to call from the
     /// capture thread because no socket I/O happens here.
-    fun broadcast(line: String) {
-        val bytes = (line + "\n").toByteArray()
-        synchronized(clients) { clients.forEach { it.enqueue(bytes) } }
+    fun broadcast(flow: CapturedFlow) {
+        val meta = FlowMeta.newBuilder()
+            .setId("${flow.protocol}|${flow.host}:${flow.port}")
+            .setApp(flow.app)
+            .setPackageName(flow.packageName)
+            .setHost(flow.host)
+            .setPort(flow.port)
+            .setProtocol(flow.protocol)
+            .setStartedAtMs(System.currentTimeMillis())
+            .build()
+        synchronized(subscribers) { subscribers.forEach { it.enqueue(meta) } }
     }
 
-    private fun acceptLoop(ss: ServerSocket) {
-        while (running) {
-            val sock = runCatching { ss.accept() }.getOrNull() ?: break
-            runCatching {
-                sock.tcpNoDelay = true
-                sock.keepAlive = true
-                val client = Client(sock)
-                clients.add(client)
-                client.start()
-                onConnectedChange(true)
-            }
-        }
-    }
-
-    /// One connected desktop: a bounded outgoing queue drained by a dedicated writer
-    /// thread, plus a reader thread that only watches for disconnect.
-    private inner class Client(private val socket: Socket) {
-        private val queue = LinkedBlockingQueue<ByteArray>(QUEUE_CAP)
+    /// One connected desktop's flow stream: a bounded queue drained by a dedicated writer
+    /// thread. The writer owns all `onNext` calls; the capture thread only enqueues.
+    private inner class FlowSubscriber(private val observer: ServerCallStreamObserver<FlowMeta>) {
+        private val queue = LinkedBlockingQueue<FlowMeta>(QUEUE_CAP)
         @Volatile private var alive = true
-        private val writer = Thread({ writeLoop() }, "jaca-bridge-writer")
-        private val reader = Thread({ readLoop() }, "jaca-bridge-reader")
+        private val writer = Thread({ writeLoop() }, "jaca-grpc-writer")
 
-        fun start() { writer.start(); reader.start() }
+        fun start() {
+            observer.setOnCancelHandler { die() } // desktop disconnected / cancelled
+            writer.start()
+            onConnectedChange(true)
+        }
 
-        fun enqueue(bytes: ByteArray) {
-            if (!queue.offer(bytes)) { queue.poll(); queue.offer(bytes) } // drop oldest if backed up
+        fun enqueue(meta: FlowMeta) {
+            if (!alive) return
+            if (!queue.offer(meta)) { queue.poll(); queue.offer(meta) } // drop oldest if backed up
         }
 
         private fun writeLoop() {
-            val out = runCatching { socket.getOutputStream() }.getOrNull() ?: return die()
             while (alive) {
-                val bytes = try { queue.poll(2, TimeUnit.SECONDS) } catch (_: InterruptedException) { break } ?: continue
-                try { out.write(bytes); out.flush() } catch (_: Exception) { return die() }
+                val meta = try { queue.poll(2, TimeUnit.SECONDS) } catch (_: InterruptedException) { break } ?: continue
+                try {
+                    if (observer.isReady) observer.onNext(meta) // honor flow control; else drop
+                } catch (_: Exception) { return die() }
             }
-        }
-
-        private fun readLoop() {
-            runCatching {
-                val reader = socket.getInputStream().bufferedReader()
-                var line = reader.readLine()
-                while (line != null) { handleControl(line); line = reader.readLine() }
-            }
-            die()
-        }
-
-        /// Desktop control lines, e.g. {"type":"proxy","host":"1.2.3.4","port":54321}.
-        private fun handleControl(line: String) {
-            if (!line.contains("\"proxy\"")) return
-            val host = Regex("\"host\"\\s*:\\s*\"([^\"]+)\"").find(line)?.groupValues?.get(1) ?: return
-            val port = Regex("\"port\"\\s*:\\s*(\\d+)").find(line)?.groupValues?.get(1)?.toIntOrNull() ?: return
-            onProxy?.invoke(host, port)
         }
 
         fun die() {
             if (!alive) return
             alive = false
-            runCatching { socket.close() }
             writer.interrupt()
-            clients.remove(this)
-            onConnectedChange(clients.isNotEmpty())
+            subscribers.remove(this)
+            runCatching { observer.onCompleted() }
+            onConnectedChange(subscribers.isNotEmpty())
         }
     }
 
@@ -172,26 +199,7 @@ class DesktopBridge(
     companion object {
         const val PORT = 8889
         const val SERVICE_TYPE = "_jaca._tcp."
-        const val HEARTBEAT_MS = 3000L
+        const val KEEPALIVE_MS = 5000L
         const val QUEUE_CAP = 2000
     }
 }
-
-/// Minimal JSON escaping for the line protocol (no serialization dependency needed).
-private fun jsonStr(s: String): String {
-    val sb = StringBuilder("\"")
-    for (c in s) when (c) {
-        '\\' -> sb.append("\\\\")
-        '"' -> sb.append("\\\"")
-        '\n' -> sb.append("\\n")
-        '\r' -> sb.append("\\r")
-        '\t' -> sb.append("\\t")
-        else -> if (c < ' ') sb.append("\\u%04x".format(c.code)) else sb.append(c)
-    }
-    return sb.append("\"").toString()
-}
-
-/// One captured flow as a JSON line for the desktop stream.
-fun flowJson(f: CapturedFlow): String =
-    """{"type":"flow","app":${jsonStr(f.app)},"package":${jsonStr(f.packageName)},""" +
-        """"host":${jsonStr(f.host)},"port":${f.port},"protocol":${jsonStr(f.protocol)}}"""

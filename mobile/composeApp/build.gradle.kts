@@ -12,7 +12,10 @@ kotlin {
         compilerOptions { jvmTarget.set(JvmTarget.JVM_17) }
     }
 
-    listOf(iosX64(), iosArm64(), iosSimulatorArm64()).forEach { iosTarget ->
+    // iosArm64 = devices, iosSimulatorArm64 = Apple-Silicon simulator. iosX64 (the legacy
+    // Intel-Mac simulator) is dropped: Lemonade and Compose Multiplatform don't publish
+    // iosX64 artifacts, and the strict KMP dependency checker rejects an unresolvable target.
+    listOf(iosArm64(), iosSimulatorArm64()).forEach { iosTarget ->
         iosTarget.binaries.framework {
             baseName = "ComposeApp"
             isStatic = true
@@ -31,6 +34,7 @@ kotlin {
         androidMain.dependencies {
             implementation(libs.androidx.activity.compose)
             implementation(libs.kotlinx.coroutines.android)
+            implementation(projects.companionGrpc) // generated protobuf + gRPC stubs
         }
     }
 }

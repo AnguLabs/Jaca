@@ -5,14 +5,13 @@ import android.security.keystore.KeyProperties
 import java.security.KeyPairGenerator
 import java.security.KeyStore
 import java.util.Date
+import javax.net.ssl.KeyManager
 import javax.net.ssl.KeyManagerFactory
-import javax.net.ssl.SSLContext
-import javax.net.ssl.SSLServerSocketFactory
 import javax.security.auth.x500.X500Principal
 
-/// TLS for the companion stream so the desktop↔device link is encrypted on the LAN and
-/// can't be passively traced. The phone is the TLS server; its key + self-signed cert
-/// live in the AndroidKeyStore (no extra crypto dependency, key non-exportable). The
+/// TLS for the companion gRPC link so the desktop↔device channel is encrypted on the
+/// LAN and can't be passively traced. The phone is the TLS server; its key + self-signed
+/// cert live in the AndroidKeyStore (no extra crypto dependency, key non-exportable). The
 /// desktop trusts it without PKI — the goal is confidentiality of the link, and the CA
 /// the desktop installs is what actually authenticates decrypted app traffic.
 ///
@@ -23,7 +22,8 @@ import javax.security.auth.x500.X500Principal
 object CompanionTls {
     private const val ALIAS = "jaca-companion-ec2"
 
-    fun serverSocketFactory(): SSLServerSocketFactory {
+    /// KeyManagers backing the gRPC server's TLS (`TlsServerCredentials.keyManager`).
+    fun keyManagers(): Array<KeyManager> {
         val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         // Purge stale Jaca keys: the X509 KeyManager serves EVERY key in the store, so a
         // leftover alias from an older config (e.g. wrong digest/padding) can get picked
@@ -33,8 +33,7 @@ object CompanionTls {
             .forEach { runCatching { keyStore.deleteEntry(it) } }
         if (!keyStore.containsAlias(ALIAS)) generateKey()
         val kmf = KeyManagerFactory.getInstance("X509").apply { init(keyStore, null) }
-        val ctx = SSLContext.getInstance("TLS").apply { init(kmf.keyManagers, null, null) }
-        return ctx.serverSocketFactory
+        return kmf.keyManagers
     }
 
     private fun generateKey() {

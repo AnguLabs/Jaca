@@ -90,7 +90,7 @@ class JacaVpnService : VpnService() {
                 attributor.attribute(flow)?.let {
                     session.packageName = it.packageName   // sent to the desktop proxy as X-Jaca-App
                     VpnState.addFlow(it)
-                    db.broadcast(flowJson(it))
+                    db.broadcast(it)
                 }
             }
         }
