@@ -55,6 +55,7 @@ final class CompanionLink {
     }
     private var channels: [String: Channel] = [:]            // guarded by queue
     private var resolved: [String: (String, UInt16)] = [:]   // id -> host:port, guarded by queue
+    private var connectedIDs: Set<String> = []               // ids with a live (.ready) channel, guarded by queue
 
     // MARK: Discovery
 
@@ -90,14 +91,18 @@ final class CompanionLink {
     /// Bonjour endpoint is resolved to host:port first (cached for reconnects).
     func connect(id: String, to endpoint: NWEndpoint) {
         queue.async {
-            // Re-resolve the current address each time: a device that left and rejoined the
-            // network may have a new IP. If it changed, reconnect — same id, one entry.
+            // A live, connected channel? Leave it alone. gRPC auto-reconnects to the same
+            // address on transient drops, and re-resolving on every mDNS update would churn
+            // the connection (flapping between a device's IPv4/IPv6 or a stale address).
+            if self.channels[id] != nil, self.connectedIDs.contains(id) { return }
+            // No channel, or a dead one: resolve the current address and (re)connect. This
+            // also recovers a device that came back on a new IP.
             self.resolve(endpoint) { [weak self] hp in
                 self?.queue.async {
                     guard let self else { return }
                     guard let hp else { if self.channels[id] == nil { self.onConnected?(id, false) }; return }
-                    if let cur = self.resolved[id], cur == hp, self.channels[id] != nil { return } // unchanged & live
-                    if self.channels[id] != nil { self.teardown(id) }   // address changed → reconnect
+                    if self.channels[id] != nil, self.connectedIDs.contains(id) { return } // became live meanwhile
+                    if self.channels[id] != nil { self.teardown(id) }   // dead channel → replace
                     self.resolved[id] = hp
                     self.openChannel(id: id, host: hp.0, port: hp.1)
                 }
@@ -115,9 +120,10 @@ final class CompanionLink {
     private func openChannel(id: String, host: String, port: UInt16) {
         guard channels[id] == nil else { return } // idempotent; the channel auto-reconnects
         let delegate = ConnDelegate { [weak self] state in
+            guard let self else { return }
             switch state {
-            case .ready: self?.onConnected?(id, true)
-            case .transientFailure, .shutdown: self?.onConnected?(id, false)
+            case .ready: self.connectedIDs.insert(id); self.onConnected?(id, true)
+            case .transientFailure, .shutdown: self.connectedIDs.remove(id); self.onConnected?(id, false)
             default: break
             }
         }
@@ -197,6 +203,7 @@ final class CompanionLink {
     }
 
     private func teardown(_ id: String) {
+        connectedIDs.remove(id)
         if let channel = channels[id] {
             channel.streamTask?.cancel()
             _ = channel.connection.close()
