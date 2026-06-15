@@ -79,6 +79,9 @@ final class NetworkSession: WorkspaceTab, CaptureSink {
     /// Whether the companion gRPC link is connected right now (read live from the hub, so a
     /// companion status banner can validate "device up" without a stale Device snapshot).
     var companionLinked: Bool { companion?.connected.contains(companionID) ?? false }
+    /// One-shot guard so the guided companion setup sheet auto-presents once per session
+    /// (when opened and not yet decrypting), not on every tab switch.
+    var didAutoShowCompanionSetup = false
 
     var subtitle: String {
         var parts = [device.displayModel]

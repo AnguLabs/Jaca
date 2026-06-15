@@ -8,6 +8,7 @@ struct NetworkSessionView: View {
     @Bindable var session: NetworkSession
     @State private var showSetup = false
     @State private var showCAInstall = false
+    @State private var showCompanionCA = false
     @State private var searchText = ""
 
     var body: some View {
@@ -18,6 +19,9 @@ struct NetworkSessionView: View {
             // a companion device tells you whether it's set up and what to do if not.
             if session.captureMode == .companion {
                 CompanionStatusBanner(session: session)
+                    .contentShape(Rectangle())
+                    .onTapGesture { showCompanionCA = true }
+                    .help("Open HTTPS decryption setup")
                 divider
             }
             if showCaptureChooser {
@@ -39,7 +43,15 @@ struct NetworkSessionView: View {
         }
         .background(LemonadeTheme.colors.background.bgDefault)
         .accessibilityIdentifier("networkSessionView")
-        .onAppear { searchText = session.filterText }
+        .onAppear {
+            searchText = session.filterText
+            // Auto-present the guided companion setup once when opening a companion device that
+            // isn't decrypting yet — mirrors the proxy CA flow, focused on the companion app.
+            if session.captureMode == .companion, !session.caReady, !session.didAutoShowCompanionSetup {
+                session.didAutoShowCompanionSetup = true
+                showCompanionCA = true
+            }
+        }
         // Proxy started but HTTPS isn't decrypting yet → guide the user to set up
         // the CA (or switch to Agent). One-shot: cleared once consumed.
         .onChange(of: session.proxyNeedsSetup) { _, needs in
@@ -56,6 +68,9 @@ struct NetworkSessionView: View {
             if let installer = session.caInstaller {
                 CAInstallSheet(installer: installer, onCancel: { session.cancelCAInstall() })
             }
+        }
+        .sheet(isPresented: $showCompanionCA) {
+            CompanionCASheet(session: session)
         }
     }
 
