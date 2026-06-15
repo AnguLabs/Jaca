@@ -74,6 +74,12 @@ final class NetworkSession: WorkspaceTab, CaptureSink {
     /// proxy/CA setup (the companion app installs the CA itself), so it's hidden there.
     var showsProxySetup: Bool { isADBDevice && hasSelectedMode && captureMode == .proxy }
 
+    /// The companion stream id for this device.
+    var companionID: String { device.companionID ?? device.id }
+    /// Whether the companion gRPC link is connected right now (read live from the hub, so a
+    /// companion status banner can validate "device up" without a stale Device snapshot).
+    var companionLinked: Bool { companion?.connected.contains(companionID) ?? false }
+
     var subtitle: String {
         var parts = [device.displayModel]
         if let d = currentDescriptor { parts.append(d.label) }

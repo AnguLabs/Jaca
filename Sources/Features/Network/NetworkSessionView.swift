@@ -14,6 +14,12 @@ struct NetworkSessionView: View {
         VStack(spacing: 0) {
             toolbar
             divider
+            // Companion mode: always show the live setup status (linked? decrypting?) so opening
+            // a companion device tells you whether it's set up and what to do if not.
+            if session.captureMode == .companion {
+                CompanionStatusBanner(session: session)
+                divider
+            }
             if showCaptureChooser {
                 captureChooser
             } else {
@@ -514,5 +520,58 @@ private struct NetworkRowView: View {
         .padding(.horizontal, LemonadeTheme.spaces.spacing300)
         .padding(.vertical, LemonadeTheme.spaces.spacing100)
         .background(selected ? LemonadeTheme.colors.interaction.bgSubtleInteractive : .clear)
+    }
+}
+
+/// Live companion setup status. Tells the user, when they open a companion device, whether
+/// it's actually linked and whether HTTPS is decrypting — and what to do if not. The link
+/// state is polled (the session's `Device` is a snapshot); `caReady` is observed and flips
+/// the moment the first request is decrypted, so it validates automatically.
+private struct CompanionStatusBanner: View {
+    let session: NetworkSession
+    @State private var linked = false
+
+    var body: some View {
+        let decrypting = session.caReady
+        return HStack(spacing: LemonadeTheme.spaces.spacing200) {
+            Circle().fill(dotColor(linked, decrypting)).frame(width: 8, height: 8)
+            VStack(alignment: .leading, spacing: 1) {
+                LemonadeUi.Text(title(linked, decrypting),
+                                textStyle: LemonadeTypography.shared.bodyXSmallSemiBold,
+                                color: LemonadeTheme.colors.content.contentPrimary, maxLines: 1)
+                LemonadeUi.Text(detail(linked, decrypting),
+                                textStyle: LemonadeTypography.shared.bodyXSmallRegular,
+                                color: LemonadeTheme.colors.content.contentTertiary, maxLines: 2)
+            }
+            Spacer(minLength: 6)
+            if linked && !decrypting { ProgressView().controlSize(.small) }   // verifying decryption
+        }
+        .padding(.horizontal, LemonadeTheme.spaces.spacing300)
+        .padding(.vertical, LemonadeTheme.spaces.spacing200)
+        .background(LemonadeTheme.colors.background.bgElevated)
+        .animation(.easeInOut(duration: 0.2), value: linked)
+        .animation(.easeInOut(duration: 0.2), value: decrypting)
+        .task(id: session.id) {
+            while !Task.isCancelled {
+                linked = session.companionLinked
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
+    }
+
+    private func dotColor(_ linked: Bool, _ decrypting: Bool) -> Color {
+        if decrypting { return LemonadeTheme.colors.content.contentPositive }
+        if linked { return LemonadeTheme.colors.content.contentCaution }
+        return LemonadeTheme.colors.content.contentCritical
+    }
+    private func title(_ linked: Bool, _ decrypting: Bool) -> String {
+        if decrypting { return "Decrypting HTTPS ✓" }
+        if linked { return "Connected — setting up HTTPS" }
+        return "Companion offline"
+    }
+    private func detail(_ linked: Bool, _ decrypting: Bool) -> String {
+        if decrypting { return "Capturing decrypted traffic from \(session.device.displayModel)." }
+        if linked { return "Open the Jaca app on the device and tap Install certificate to decrypt HTTPS — it confirms here automatically." }
+        return "Open the Jaca app on \(session.device.displayModel) and start capture — it connects automatically."
     }
 }
