@@ -60,11 +60,11 @@ static int cb_on_connection_open(zdtun_t *tun, zdtun_conn_t *conn) {
     const zdtun_5tuple_t *t = zdtun_conn_get_5tuple(conn);
     if (t->ipver != 4) return 0; // IPv4 only for now (matches attribution path)
 
-    // While decryption is on, block QUIC (UDP/443) so apps fall back to TCP TLS, which we can
-    // route to the desktop proxy and decrypt. Without this, Chrome and most Google traffic
-    // stays on QUIC and never gets decrypted. When decryption is off, let QUIC flow normally.
-    if (g_dnat_on && t->ipproto == IPPROTO_UDP && ntohs(t->dst_port) == 443)
-        return 1; // drop -> the client retries over TCP
+    // NOTE: we deliberately do NOT block QUIC (UDP/443). Forcing apps off QUIC onto TCP
+    // pushes them through the MITM, and any app that doesn't trust the Jaca CA (most apps,
+    // plus any that pin) then fails its TLS handshake and breaks. Letting QUIC flow keeps
+    // those apps working; the cost is QUIC traffic isn't decrypted. Decryption coverage is a
+    // separate problem (system-store CA for trust, plus a per-host MITM bypass on failure).
 
     char src[INET_ADDRSTRLEN], dst[INET_ADDRSTRLEN];
     inet_ntop(AF_INET, &t->src_ip.ip4, src, sizeof(src));
