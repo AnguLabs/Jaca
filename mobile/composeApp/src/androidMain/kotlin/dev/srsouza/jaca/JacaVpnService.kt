@@ -34,14 +34,22 @@ class JacaVpnService : VpnService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
-            running = false
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+            stopFromUser()
             return START_NOT_STICKY
         }
         startForeground(NOTIF_ID, buildNotification())
+        active = this
         startTun()
         return START_STICKY
+    }
+
+    /// Tear down capture. Called either via the ACTION_STOP intent or directly through the
+    /// static [stop] (the reliable path — a startService(ACTION_STOP) can be dropped by
+    /// background-start rules on some OEMs).
+    private fun stopFromUser() {
+        running = false
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
     private fun startTun() {
@@ -124,6 +132,7 @@ class JacaVpnService : VpnService() {
         bridge = null
         CompanionServer.release()
         runCatching { tun?.close() }; tun = null   // unblocks the native tun read
+        if (active === this) active = null
         VpnState.stop()
         super.onDestroy()
     }
@@ -151,6 +160,11 @@ class JacaVpnService : VpnService() {
     companion object {
         init { System.loadLibrary("jacacapture") }
         const val ACTION_STOP = "dev.srsouza.jaca.STOP"
+        /// The running service instance, so the UI can stop capture directly and reliably.
+        @Volatile private var active: JacaVpnService? = null
+        /// Stop capture from the app (Activity ↔ Service share a process). Reliable even when
+        /// a startService(ACTION_STOP) would be refused by background-start restrictions.
+        fun stop() { active?.stopFromUser() }
         private const val NOTIF_ID = 1
         private const val CHANNEL = "jaca_vpn"
         private const val MTU = 4096

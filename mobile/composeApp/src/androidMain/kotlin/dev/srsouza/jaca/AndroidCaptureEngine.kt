@@ -65,8 +65,14 @@ class AndroidCaptureEngine(
     }
 
     private fun stop() {
-        context.startService(
-            Intent(context, JacaVpnService::class.java).setAction(JacaVpnService.ACTION_STOP),
-        )
+        // Stop directly via the live service instance — reliable even when a
+        // startService(ACTION_STOP) would be dropped by background-start rules (some OEMs).
+        JacaVpnService.stop()
+        // Fallback for the edge case where there's no live instance reference.
+        runCatching {
+            context.startService(
+                Intent(context, JacaVpnService::class.java).setAction(JacaVpnService.ACTION_STOP),
+            )
+        }
     }
 }
