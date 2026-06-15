@@ -11,7 +11,10 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HASH="$(git -C "$ROOT" rev-parse --short HEAD)"
 
 echo "==> Building companion APK at $HASH"
-(cd "$ROOT/mobile" && ./gradlew :composeApp:assembleDebug -PcommitHash="$HASH" --no-configuration-cache)
+# --rerun-tasks: Gradle's incremental + native up-to-date checks miss edits here (a changed
+# .c or .kt can produce a no-op "BUILD SUCCESSFUL in 1s" with a stale APK), so force every
+# task to run. Correctness over speed; a stale APK silently ships old behavior.
+(cd "$ROOT/mobile" && ./gradlew :composeApp:assembleDebug -PcommitHash="$HASH" --no-configuration-cache --rerun-tasks)
 
 APK="$ROOT/mobile/composeApp/build/outputs/apk/debug/composeApp-debug.apk"
 cp "$APK" "$ROOT/Resources/jaca-mobile.apk"
