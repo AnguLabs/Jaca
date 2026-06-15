@@ -89,8 +89,7 @@ final class AppModel {
             knownCompanions = companionStore.load().filter { Self.isDeviceID($0.id) }
         }
         buildProviders()
-        companionSetup = CompanionSetupModel(hub: companionHub, adbURL: adbURL,
-                                             caCertPEM: { [weak self] in self?.ensureCA()?.rootCertificatePEM })
+        companionSetup = CompanionSetupModel(hub: companionHub, adbURL: adbURL)
         // Push global message-exclusion edits to every open log tab, live.
         LogExclusionStore.shared.onChange = { [weak self] in
             guard let self else { return }
