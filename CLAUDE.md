@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Jaca is a non-sandboxed SwiftUI macOS app (developer tools): device log streaming, network capture (in-process Android agent + MITM proxy), and local maintenance areas (Projects — auto-detected Claude projects + their worktrees + user-added folders, with per-checkout cache cleanup; Gradle daemons; Xcode DerivedData). See `README.md` for the product/network-capture deep dive.
+Jaca is a non-sandboxed SwiftUI macOS app (developer tools): device log streaming, network capture (in-process Android agent, MITM proxy, and an on-device **companion app** — Compose Multiplatform under `mobile/` — that captures per-app traffic and streams it over gRPC/TLS for desktop-side decryption), and local maintenance areas (Projects — auto-detected Claude projects + their worktrees + user-added folders, with per-checkout cache cleanup; Gradle daemons; Xcode DerivedData). See `README.md` for the product/network-capture deep dive.
 
 ## Build, run, test
 
@@ -10,10 +10,13 @@ The Xcode project is **not committed** — it's generated from `project.yml` by 
 
 ```bash
 ./scripts/run.sh            # generate + build (Debug) + launch
-./scripts/build.sh [Release]# build only
+./scripts/build.sh [Release]# build only (re-signs with the dev identity if set up)
 ./scripts/gen.sh            # regenerate Jaca.xcodeproj from project.yml
 ./scripts/uitest.sh         # XCUITest suite (kills stray instances first)
 ./scripts/all.sh [--release|--install|--no-agent|--no-run]  # agent + app + launch
+./scripts/dev-signing.sh    # one-time: stable code-signing so the Keychain CA prompt stops
+./scripts/build-mobile.sh   # build the companion APK + bundle it into Resources/
+./scripts/proto-gen.sh      # regenerate gRPC stubs from proto/companion.proto
 ```
 
 The scripts set `DEVELOPER_DIR` to Xcode (needed when `xcode-select` points at the CLT). To run **one test** (scripts don't expose this), invoke xcodebuild directly:
@@ -34,6 +37,16 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
 ```bash
 ln -sf "$HOME/workspace/lemonade-design-system" "$(git rev-parse --show-toplevel)/../lemonade-design-system"
 ```
+
+(If a `clean` removes it, just re-create the symlink — it's only needed at build time.)
+
+### Stable code-signing (stops the recurring Keychain prompt)
+
+The MITM CA private key lives in the macOS Keychain, and macOS binds a key's "Always Allow" to the requesting app's code signature. Ad-hoc debug builds (`CODE_SIGN_IDENTITY="-"`) get a new signature every rebuild, so the CA-key prompt returns on each launch. Run `./scripts/dev-signing.sh` **once** to create a stable self-signed `Jaca Dev` identity in a dedicated keychain (authorize the single trust prompt — codesign refuses an untrusted identity); `build.sh` then re-signs the app with it via `dev-resign.sh`, so one "Always Allow" sticks across rebuilds. Optional — without it the build stays ad-hoc.
+
+### The companion mobile app (`mobile/`)
+
+A Compose Multiplatform app (`mobile/composeApp`, package `dev.srsouza.jaca`) that captures on-device traffic with a `VpnService` + a userspace TCP/IP stack (zdtun JNI, `androidMain/jni/`) and streams per-app flow metadata to the desktop over **gRPC + TLS** (contract: `proto/companion.proto`; phone = server, desktop = client). TLS is decrypted on the **desktop** — the CA private key never reaches the phone; the phone tunnels intercepted TLS to the desktop's MITM proxy. The gRPC server runs from app open (`CompanionServer`) so the desktop can push its CA (`InstallCa`) and the app guides the user to install it before any capture. `./scripts/build-mobile.sh` assembles + bundles the APK (needs the NDK/CMake in the README table); the desktop serves it for QR onboarding and reads its commit hash for update detection.
 
 ## Architecture
 
