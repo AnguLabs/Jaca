@@ -1,5 +1,6 @@
 import SwiftUI
 import Lemonade
+import AppKit
 
 /// Live device list. Clicking a ready device opens a small menu to start a new
 /// logcat tab or a network-capture tab; each pick opens an independent tab.
@@ -51,6 +52,10 @@ struct DeviceSidebarView: View {
 
             if model.adbURL == nil {
                 adbMissingNotice
+            }
+
+            if model.companionNetworkBlocked {
+                localNetworkNotice
             }
 
             if model.devices.isEmpty {
@@ -121,6 +126,25 @@ struct DeviceSidebarView: View {
             content: "adb not found. Set its path in Settings or install Android platform-tools.",
             voice: .critical
         )
+    }
+
+    /// macOS blocks the in-app mDNS browse until Local Network permission is granted, and there's
+    /// no API to request it on demand — so guide the user straight to the setting.
+    private var localNetworkNotice: some View {
+        VStack(alignment: .leading, spacing: LemonadeTheme.spaces.spacing100) {
+            LemonadeUi.Notice(
+                content: "Allow Jaca under Local Network so it can find companion devices on your Wi-Fi.",
+                voice: .warning
+            )
+            LemonadeUi.Button(label: "Open Local Network Settings",
+                              onClick: { Self.openLocalNetworkSettings() },
+                              variant: .neutral, type: .subtle, size: .small)
+        }
+    }
+
+    private static func openLocalNetworkSettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork") else { return }
+        NSWorkspace.shared.open(url)
     }
 
     private var emptyState: some View {

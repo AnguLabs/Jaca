@@ -55,6 +55,9 @@ final class AppModel {
     private var companionCAPushed: Set<String> = []
     /// Build commit each connected companion reported (id -> hash), for update detection.
     private var companionVersions: [String: String] = [:]
+    /// True when macOS blocks mDNS discovery (Local Network permission not granted) — the
+    /// device sidebar surfaces a one-click jump to the setting.
+    private(set) var companionNetworkBlocked = false
     private let companionStore = CompanionDeviceStore()
     /// Companion devices seen before (persisted), shown offline until rediscovered.
     private var knownCompanions: [CompanionDeviceStore.Cached] = []
@@ -163,6 +166,9 @@ final class AppModel {
             guard let self else { return }
             self.companionVersions[id] = version
             self.recomputeDevices()
+        }
+        companionHub.onBrowseBlocked = { [weak self] blocked in
+            self?.companionNetworkBlocked = blocked
         }
         if !uiTestMode { companionHub.startBrowsing() }
     }

@@ -19,6 +19,8 @@ final class CompanionHub {
     var onConnectionChange: ((String, Bool) -> Void)?
     /// (deviceID, name, build commit) from the device on (re)connect.
     var onDeviceInfo: ((String, String, String) -> Void)?
+    /// mDNS browsing is blocked (macOS Local Network permission not granted yet).
+    var onBrowseBlocked: ((Bool) -> Void)?
     /// Device ids with a live stream right now.
     private(set) var connected: Set<String> = []
     /// Device ids whose on-device VPN capture is currently running (from the heartbeat).
@@ -36,6 +38,7 @@ final class CompanionHub {
         link.onFlow = { [weak self] id, flow in Task { @MainActor in self?.flowHandlers[id]?(flow) } }
         link.onDeviceInfo = { [weak self] id, name, version in Task { @MainActor in self?.onDeviceInfo?(id, name, version) } }
         link.onCaptureState = { [weak self] id, c in Task { @MainActor in self?.setCapturing(id, c) } }
+        link.onBrowseBlocked = { [weak self] blocked in Task { @MainActor in self?.onBrowseBlocked?(blocked) } }
     }
 
     func startBrowsing() {

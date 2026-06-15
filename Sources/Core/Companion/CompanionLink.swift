@@ -40,6 +40,9 @@ final class CompanionLink {
     /// Device capture (VPN) state heartbeat: (id, capturing). Lets the desktop show whether
     /// the VPN is actually up and notice within seconds when the user stops capture.
     var onCaptureState: ((String, Bool) -> Void)?
+    /// mDNS browsing can't run — almost always macOS Local Network permission not granted.
+    /// The UI surfaces this with a one-click jump to the Local Network settings.
+    var onBrowseBlocked: ((Bool) -> Void)?
 
     /// Sentinel flow id the phone uses to carry capture state instead of a real flow.
     private static let captureStatusID = "__jaca_capture__"
@@ -63,6 +66,13 @@ final class CompanionLink {
         queue.async {
             guard self.browser == nil else { return }
             let browser = NWBrowser(for: .bonjour(type: "_jaca._tcp", domain: nil), using: NWParameters())
+            browser.stateUpdateHandler = { [weak self] state in
+                switch state {
+                case .ready: self?.onBrowseBlocked?(false)
+                case .failed, .waiting: self?.onBrowseBlocked?(true)   // usually Local Network permission
+                default: break
+                }
+            }
             browser.browseResultsChangedHandler = { [weak self] results, _ in
                 let devices = results.map { result -> CompanionDevice in
                     let name: String
