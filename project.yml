@@ -83,6 +83,11 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.developer-tools"
         INFOPLIST_KEY_NSHumanReadableCopyright: ""
+        # macOS Local Network privacy: without these the in-app NWBrowser can't discover the
+        # companion over mDNS (the system dns-sd still can), so the desktop never connects.
+        # NSBonjourServices (an array) can't be set via INFOPLIST_KEY_, so build.sh injects it
+        # into the built Info.plist post-build and re-seals.
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: "Jaca finds and connects to companion devices on your local network to capture their traffic."
         COMBINE_HIDPI_IMAGES: YES
     postBuildScripts:
       # Records where this build came from + which commit it built, so the in-app
