@@ -21,6 +21,8 @@ final class CompanionHub {
     var onDeviceInfo: ((String, String, String) -> Void)?
     /// Device ids with a live stream right now.
     private(set) var connected: Set<String> = []
+    /// Device ids whose on-device VPN capture is currently running (from the heartbeat).
+    private(set) var capturing: Set<String> = []
 
     init() {
         link.onDevices = { [weak self] devices in
@@ -33,6 +35,7 @@ final class CompanionHub {
         link.onConnected = { [weak self] id, c in Task { @MainActor in self?.handleConnection(id, c) } }
         link.onFlow = { [weak self] id, flow in Task { @MainActor in self?.flowHandlers[id]?(flow) } }
         link.onDeviceInfo = { [weak self] id, name, version in Task { @MainActor in self?.onDeviceInfo?(id, name, version) } }
+        link.onCaptureState = { [weak self] id, c in Task { @MainActor in self?.setCapturing(id, c) } }
     }
 
     func startBrowsing() {
@@ -85,7 +88,11 @@ final class CompanionHub {
     private func emitDevices() { onDevices?(Array(mdns.values) + Array(manual.values)) }
 
     private func handleConnection(_ id: String, _ isConnected: Bool) {
-        if isConnected { connected.insert(id) } else { connected.remove(id) }
+        if isConnected { connected.insert(id) } else { connected.remove(id); capturing.remove(id) }
         onConnectionChange?(id, isConnected)
+    }
+
+    private func setCapturing(_ id: String, _ active: Bool) {
+        if active { capturing.insert(id) } else { capturing.remove(id) }
     }
 }

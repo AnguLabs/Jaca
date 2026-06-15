@@ -10,6 +10,7 @@ struct CompanionCASheet: View {
     let session: NetworkSession
     @Environment(\.dismiss) private var dismiss
     @State private var linked = false
+    @State private var capturing = false
 
     private var decrypting: Bool { session.caReady }
     /// Show the walkthrough video column only when a clip is actually bundled (placeholder
@@ -32,6 +33,7 @@ struct CompanionCASheet: View {
         .task(id: session.id) {
             while !Task.isCancelled {
                 linked = session.companionLinked
+                capturing = session.deviceCapturing
                 try? await Task.sleep(for: .seconds(1))
             }
         }
@@ -64,21 +66,21 @@ struct CompanionCASheet: View {
                 title: "Connect the companion",
                 detail: linked
                     ? "Linked to \(session.device.displayModel)."
-                    : "Open the Jaca app on the device and start capture — it connects automatically."
+                    : "Open the Jaca app on the device — it connects automatically."
             )
             stepRow(
-                done: decrypting, active: linked && !decrypting,
+                done: capturing, active: linked && !capturing,
+                title: "Start capture",
+                detail: capturing
+                    ? "Capture is running on the device."
+                    : "In the Jaca app, tap Start capture so the VPN is running."
+            )
+            stepRow(
+                done: decrypting, active: capturing && !decrypting,
                 title: "Install the certificate",
                 detail: decrypting
                     ? "Certificate trusted — HTTPS is decrypting."
                     : "In the Jaca app, tap Install certificate and confirm in Settings. Jaca detects it automatically — nothing to download."
-            )
-            stepRow(
-                done: decrypting, active: false,
-                title: "Decrypting traffic",
-                detail: decrypting
-                    ? "Captured requests appear live behind this dialog."
-                    : "Starts the moment the certificate is trusted."
             )
         }
     }
@@ -118,11 +120,15 @@ struct CompanionCASheet: View {
             LemonadeUi.Notice(content: "HTTPS is decrypting on \(session.device.displayModel).",
                               voice: .info, title: "All set")
         } else {
-            LemonadeUi.Notice(
-                content: "No download needed — the certificate is already on the device. Open the Jaca app, "
-                    + "start capture, and tap Install certificate. " + (showVideo ? "The video shows how." : ""),
-                voice: .warning, title: "Finish on the device")
+            LemonadeUi.Notice(content: nextStep, voice: .warning, title: "Finish on the device")
         }
+    }
+
+    private var nextStep: String {
+        if !linked { return "Open the Jaca app on the device — it connects automatically." }
+        if !capturing { return "Tap Start capture in the Jaca app so the VPN is running." }
+        return "No download needed — the certificate is already on the device. In the Jaca app, tap Install certificate."
+            + (showVideo ? " The video shows how." : "")
     }
 
     private var footer: some View {

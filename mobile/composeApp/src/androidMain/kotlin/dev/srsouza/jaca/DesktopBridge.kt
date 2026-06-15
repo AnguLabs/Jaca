@@ -149,10 +149,13 @@ class DesktopBridge(
         @Volatile private var alive = true
         private val writer = Thread({ writeLoop() }, "jaca-grpc-writer")
 
+        @Volatile private var lastStatusMs = 0L
+
         fun start() {
             observer.setOnCancelHandler { die() } // desktop disconnected / cancelled
             writer.start()
             VpnState.setDesktopConnected(true)
+            enqueue(statusMeta())   // report the current capture state to the desktop immediately
         }
 
         fun enqueue(meta: FlowMeta) {
@@ -162,12 +165,27 @@ class DesktopBridge(
 
         private fun writeLoop() {
             while (alive) {
-                val meta = try { queue.poll(2, TimeUnit.SECONDS) } catch (_: InterruptedException) { break } ?: continue
+                val meta = try { queue.poll(STATUS_INTERVAL_MS, TimeUnit.MILLISECONDS) } catch (_: InterruptedException) { break }
                 try {
-                    if (observer.isReady) observer.onNext(meta) // honor flow control; else drop
+                    if (meta != null && observer.isReady) observer.onNext(meta) // honor flow control; else drop
+                    // Heartbeat the device's capture state so the desktop knows whether the VPN
+                    // is actually up, and learns within ~2s when the user stops capture.
+                    val now = System.currentTimeMillis()
+                    if (observer.isReady && now - lastStatusMs >= STATUS_INTERVAL_MS) {
+                        observer.onNext(statusMeta())
+                        lastStatusMs = now
+                    }
                 } catch (_: Exception) { return die() }
             }
         }
+
+        /// A sentinel FlowMeta carrying capture state (not a real flow): host "1" while the
+        /// VPN is capturing, "0" when it isn't. The desktop filters it out of the flow list.
+        private fun statusMeta(): FlowMeta = FlowMeta.newBuilder()
+            .setId(STATUS_ID)
+            .setProtocol("STATUS")
+            .setHost(if (VpnState.state.value.active) "1" else "0")
+            .build()
 
         fun die() {
             if (!alive) return
@@ -222,5 +240,8 @@ class DesktopBridge(
         const val SERVICE_TYPE = "_jaca._tcp."
         const val KEEPALIVE_MS = 5000L
         const val QUEUE_CAP = 2000
+        /// Sentinel flow id + cadence for the capture-state heartbeat (VPN up/down).
+        const val STATUS_ID = "__jaca_capture__"
+        const val STATUS_INTERVAL_MS = 2000L
     }
 }

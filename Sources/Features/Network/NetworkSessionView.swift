@@ -545,48 +545,52 @@ private struct NetworkRowView: View {
 private struct CompanionStatusBanner: View {
     let session: NetworkSession
     @State private var linked = false
+    @State private var capturing = false
 
     var body: some View {
         let decrypting = session.caReady
         return HStack(spacing: LemonadeTheme.spaces.spacing200) {
-            Circle().fill(dotColor(linked, decrypting)).frame(width: 8, height: 8)
+            Circle().fill(dot(decrypting)).frame(width: 8, height: 8)
             VStack(alignment: .leading, spacing: 1) {
-                LemonadeUi.Text(title(linked, decrypting),
+                LemonadeUi.Text(title(decrypting),
                                 textStyle: LemonadeTypography.shared.bodyXSmallSemiBold,
                                 color: LemonadeTheme.colors.content.contentPrimary, maxLines: 1)
-                LemonadeUi.Text(detail(linked, decrypting),
+                LemonadeUi.Text(detail(decrypting),
                                 textStyle: LemonadeTypography.shared.bodyXSmallRegular,
                                 color: LemonadeTheme.colors.content.contentTertiary, maxLines: 2)
             }
             Spacer(minLength: 6)
-            if linked && !decrypting { ProgressView().controlSize(.small) }   // verifying decryption
         }
         .padding(.horizontal, LemonadeTheme.spaces.spacing300)
         .padding(.vertical, LemonadeTheme.spaces.spacing200)
         .background(LemonadeTheme.colors.background.bgElevated)
         .animation(.easeInOut(duration: 0.2), value: linked)
+        .animation(.easeInOut(duration: 0.2), value: capturing)
         .animation(.easeInOut(duration: 0.2), value: decrypting)
         .task(id: session.id) {
             while !Task.isCancelled {
                 linked = session.companionLinked
+                capturing = session.deviceCapturing
                 try? await Task.sleep(for: .seconds(1))
             }
         }
     }
 
-    private func dotColor(_ linked: Bool, _ decrypting: Bool) -> Color {
-        if decrypting { return LemonadeTheme.colors.content.contentPositive }
-        if linked { return LemonadeTheme.colors.content.contentCaution }
-        return LemonadeTheme.colors.content.contentCritical
+    private func dot(_ decrypting: Bool) -> Color {
+        if !linked { return LemonadeTheme.colors.content.contentCritical }
+        if !capturing || !decrypting { return LemonadeTheme.colors.content.contentCaution }
+        return LemonadeTheme.colors.content.contentPositive
     }
-    private func title(_ linked: Bool, _ decrypting: Bool) -> String {
-        if decrypting { return "Decrypting HTTPS ✓" }
-        if linked { return "Connected — setting up HTTPS" }
-        return "Companion offline"
+    private func title(_ decrypting: Bool) -> String {
+        if !linked { return "Companion offline" }
+        if !capturing { return "Capture not running" }
+        if !decrypting { return "Capturing — HTTPS not decrypted" }
+        return "Decrypting HTTPS ✓"
     }
-    private func detail(_ linked: Bool, _ decrypting: Bool) -> String {
-        if decrypting { return "Capturing decrypted traffic from \(session.device.displayModel)." }
-        if linked { return "Open the Jaca app on the device and tap Install certificate to decrypt HTTPS — it confirms here automatically." }
-        return "Open the Jaca app on \(session.device.displayModel) and start capture — it connects automatically."
+    private func detail(_ decrypting: Bool) -> String {
+        if !linked { return "Open the Jaca app on \(session.device.displayModel) and start capture — it connects automatically." }
+        if !capturing { return "The VPN isn't running — open the Jaca app on the device and start capture." }
+        if !decrypting { return "Open the Jaca app and tap Install certificate to decrypt HTTPS — it confirms here automatically." }
+        return "Capturing decrypted traffic from \(session.device.displayModel)."
     }
 }

@@ -37,6 +37,12 @@ final class CompanionLink {
     var onFlow: ((String, CompanionFlow) -> Void)?
     /// Device self-description from `Describe` on (re)connect: (id, name, build commit).
     var onDeviceInfo: ((String, String, String) -> Void)?
+    /// Device capture (VPN) state heartbeat: (id, capturing). Lets the desktop show whether
+    /// the VPN is actually up and notice within seconds when the user stops capture.
+    var onCaptureState: ((String, Bool) -> Void)?
+
+    /// Sentinel flow id the phone uses to carry capture state instead of a real flow.
+    private static let captureStatusID = "__jaca_capture__"
 
     private let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
     private let queue = DispatchQueue(label: "dev.srsouza.jaca.companion")
@@ -135,6 +141,10 @@ final class CompanionLink {
                     onDeviceInfo?(id, info.name, info.version)
                 }
                 for try await meta in client.streamFlows(Jaca_Empty()) {
+                    if meta.id == Self.captureStatusID {
+                        onCaptureState?(id, meta.host == "1")   // capture-state heartbeat, not a flow
+                        continue
+                    }
                     onFlow?(id, CompanionFlow(
                         app: meta.app,
                         packageName: meta.packageName,
