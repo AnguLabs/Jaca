@@ -48,6 +48,18 @@ if [ "$DO_AGENT" = 1 ]; then
   fi
 fi
 
+# --- 1b. Companion APK (install builds ship it inside the .app) ------------
+# The bundled APK is what the installed app serves for QR onboarding, so build + bundle it
+# before packaging the Release app. Best-effort — needs the Android toolchain (NDK/JDK).
+if [ "$DO_INSTALL" = 1 ]; then
+  step "Building companion APK (bundled into the app for QR onboarding)"
+  if ./scripts/build-mobile.sh; then
+    echo "✓ companion APK -> Resources/jaca-mobile.apk (bundled into the .app)"
+  else
+    echo "⚠️  companion APK build skipped/failed — installing with the APK already in Resources/ (if any)."
+  fi
+fi
+
 # --- 2. Generate + build the app ------------------------------------------
 step "Generating Xcode project (XcodeGen)"
 xcodegen generate >/dev/null
