@@ -58,6 +58,16 @@ final class AppModel {
     /// True when macOS blocks mDNS discovery (Local Network permission not granted) — the
     /// device sidebar surfaces a one-click jump to the setting.
     private(set) var companionNetworkBlocked = false
+    private var companionBrowseFailed = false          // NWBrowser reported .failed/.waiting
+    private var companionDiscoveryGraceElapsed = false // grace window after discovery started
+
+    /// Likely-blocked when the browser failed outright, OR when discovery has turned up no live
+    /// companion within the grace window despite a previously-seen one (macOS can leave the
+    /// browse .ready while silently returning nothing when permission is missing).
+    private func refreshCompanionBlocked() {
+        companionNetworkBlocked = companionBrowseFailed
+            || (companionDiscoveryGraceElapsed && companionDevices.isEmpty && !knownCompanions.isEmpty)
+    }
     private let companionStore = CompanionDeviceStore()
     /// Companion devices seen before (persisted), shown offline until rediscovered.
     private var knownCompanions: [CompanionDeviceStore.Cached] = []
@@ -150,6 +160,7 @@ final class AppModel {
             // the link re-resolves and reconnects if the device came back on a new IP. Idempotent.
             for d in devices { self.companionHub.connect(id: d.id, to: d.endpoint) }
             self.recomputeDevices()
+            self.refreshCompanionBlocked()   // discovering a device clears the "blocked" hint
         }
         companionHub.onConnectionChange = { [weak self] id, connected in
             guard let self else { return }
@@ -168,9 +179,21 @@ final class AppModel {
             self.recomputeDevices()
         }
         companionHub.onBrowseBlocked = { [weak self] blocked in
-            self?.companionNetworkBlocked = blocked
+            guard let self else { return }
+            self.companionBrowseFailed = blocked
+            self.refreshCompanionBlocked()
         }
-        if !uiTestMode { companionHub.startBrowsing() }
+        if !uiTestMode {
+            companionHub.startBrowsing()
+            // After a grace window, if nothing showed up for a known companion, surface the
+            // Local Network hint (covers macOS leaving the browse .ready but silent).
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(10))
+                guard let self else { return }
+                self.companionDiscoveryGraceElapsed = true
+                self.refreshCompanionBlocked()
+            }
+        }
     }
 
     /// Match a companion advertisement ("Jaca <MODEL>") to an adb device by model name.
