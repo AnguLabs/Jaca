@@ -55,6 +55,14 @@ SSL=/usr/bin/openssl
 security import "$TMP/id.p12" -k "$KC" -P jaca -T /usr/bin/codesign -T /usr/bin/security
 security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KC_PASS" "$KC" >/dev/null 2>&1 || true
 
+# codesign resolves signing identities from the keychain SEARCH LIST (its --keychain flag is
+# unreliable for this), so add our dedicated keychain to it — preserving the existing entries.
+CUR="$(security list-keychains -d user | sed -e 's/^[[:space:]]*"//' -e 's/"$//')"
+if ! printf '%s\n' "$CUR" | grep -qxF "$KC"; then
+  # shellcheck disable=SC2086
+  security list-keychains -d user -s "$KC" $CUR
+fi
+
 # Trust the self-signed cert for code signing — the one step that needs your authorization
 # (a macOS trust-settings prompt). codesign refuses an untrusted identity. After this,
 # re-signing and the keychain "Always Allow" are non-interactive.
@@ -63,7 +71,7 @@ security add-trusted-cert -r trustRoot -p codeSign "$TMP/cert.pem" || true
 
 # Self-test: can codesign actually sign with it now?
 PROBE="$TMP/probe"; cp /bin/echo "$PROBE"
-if codesign --force --sign "$IDENTITY" --keychain "$KC" "$PROBE" >/dev/null 2>&1; then
+if codesign --force --sign "$IDENTITY" "$PROBE" >/dev/null 2>&1; then
   echo "✓ '$IDENTITY' is set up and usable."
   echo "  Next: ./scripts/build.sh re-signs with it; on first launch click \"Always Allow\" once and it sticks."
 else

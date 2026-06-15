@@ -12,13 +12,17 @@ KC="$HOME/Library/Keychains/jaca-dev.keychain-db"
 # Only if the stable identity exists; otherwise leave the ad-hoc signature in place.
 security find-identity -v -p codesigning "$KC" 2>/dev/null | grep -q "$IDENTITY" || exit 0
 security unlock-keychain -p jaca-dev "$KC" 2>/dev/null || true
+# codesign resolves the identity via the keychain search list — ensure ours is in it.
+CUR="$(security list-keychains -d user | sed -e 's/^[[:space:]]*"//' -e 's/"$//')"
+# shellcheck disable=SC2086
+printf '%s\n' "$CUR" | grep -qxF "$KC" || security list-keychains -d user -s "$KC" $CUR
 
 APP="$(xcodebuild -project Jaca.xcodeproj -scheme Jaca -configuration "$CONFIG" \
   -destination 'platform=macOS' -showBuildSettings 2>/dev/null \
   | awk '/ BUILT_PRODUCTS_DIR =/{d=$3} / FULL_PRODUCT_NAME =/{n=$3} END{print d"/"n}')"
 [ -d "$APP" ] || { echo "re-sign: built app not found ($APP)"; exit 0; }
 
-if codesign --force --deep --sign "$IDENTITY" --keychain "$KC" "$APP" >/dev/null 2>&1; then
+if codesign --force --deep --sign "$IDENTITY" "$APP" >/dev/null 2>&1; then
   echo "✓ re-signed $(basename "$APP") with '$IDENTITY' (stable keychain access)"
 else
   echo "⚠ re-sign with '$IDENTITY' failed; keeping ad-hoc signature"
