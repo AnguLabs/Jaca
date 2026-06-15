@@ -21,13 +21,12 @@ final class CertificateAuthority: @unchecked Sendable {
     let rootCertificatePEM: String
     let storageDirectory: URL
 
-    /// Loads the CA from `directory` (default: Application Support/Jaca/ca), generating
-    /// and persisting a new one if absent. For the real app (default directory) the
-    /// private key lives in the macOS Keychain (encrypted, per-Mac), with a one-time
-    /// migration from any legacy on-disk key. Tests passing an explicit directory keep
-    /// the file-based key so they never touch the Keychain.
+    /// Loads the CA from `directory` (default: Application Support/Jaca/ca), generating and
+    /// persisting a new one if absent. The private key is a 0600 file next to the cert. A key
+    /// still in the Keychain from older builds is migrated to the file on first read (one last
+    /// prompt), then used from the file — which avoids the per-launch Keychain ACL prompt that
+    /// dogs locally-signed dev builds (the approach mitmproxy/Charles use for their CA key).
     init(directory: URL? = nil) throws {
-        let useKeychain = (directory == nil)
         let dir = directory ?? FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Jaca/ca", isDirectory: true)
@@ -37,15 +36,15 @@ final class CertificateAuthority: @unchecked Sendable {
         let certURL = dir.appendingPathComponent("rootCA.pem")
         let keyURL = dir.appendingPathComponent("rootCA.key.pem")
         let keyAccount = "ca-private-key"
+        let migrateFromKeychain = (directory == nil)   // only the real app ever used the Keychain
 
         func loadKeyPEM() -> String? {
-            guard useKeychain else { return try? String(contentsOf: keyURL, encoding: .utf8) }
-            if let stored = KeychainStore.read(account: keyAccount) { return stored }
-            // Migrate a legacy on-disk key into the Keychain, then remove the plain file.
-            if let legacy = try? String(contentsOf: keyURL, encoding: .utf8) {
-                KeychainStore.write(account: keyAccount, value: legacy)
-                try? FileManager.default.removeItem(at: keyURL)
-                return legacy
+            if let fromFile = try? String(contentsOf: keyURL, encoding: .utf8) { return fromFile }
+            // One-time migration: read an existing key still in the Keychain (a final prompt),
+            // write it to the file, and use the file from then on.
+            if migrateFromKeychain, let stored = KeychainStore.read(account: keyAccount) {
+                try? Self.writeKeyFile(stored, to: keyURL)
+                return stored
             }
             return nil
         }
@@ -58,26 +57,28 @@ final class CertificateAuthority: @unchecked Sendable {
             caCertificate = cert
             caKey = key
         } else {
-            // Never silently replace an existing CA. If a key is already stored but we
-            // couldn't read it (e.g. a transient Keychain failure), minting a fresh one would
-            // invalidate every cert already installed on devices. Fail loudly instead so the
-            // persisted CA survives for the next launch.
-            if useKeychain, keyPEM == nil, KeychainStore.exists(account: keyAccount) {
+            // Don't silently replace an existing CA we just couldn't read (e.g. the migration
+            // prompt was dismissed) — that would invalidate every installed cert. Fail instead.
+            if migrateFromKeychain, keyPEM == nil,
+               !FileManager.default.fileExists(atPath: keyURL.path),
+               KeychainStore.exists(account: keyAccount) {
                 throw CAError.keyPresentButUnreadable
             }
             let (cert, key) = try Self.makeRootCA()
             caCertificate = cert
             caKey = key
             try cert.serializeAsPEM().pemString.write(to: certURL, atomically: true, encoding: .utf8)
-            if useKeychain {
-                KeychainStore.write(account: keyAccount, value: key.pemRepresentation)
-            } else {
-                try key.pemRepresentation.write(to: keyURL, atomically: true, encoding: .utf8)
-            }
+            try Self.writeKeyFile(key.pemRepresentation, to: keyURL)
         }
 
         rootCertificatePEM = try caCertificate.serializeAsPEM().pemString
         caNIOCertificate = try NIOSSLCertificate(bytes: Array(rootCertificatePEM.utf8), format: .pem)
+    }
+
+    /// Write the CA private key to an owner-only (0600) file.
+    private static func writeKeyFile(_ pem: String, to url: URL) throws {
+        try pem.write(to: url, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 
     /// A cached server-side TLS context presenting a leaf cert for `host`.
