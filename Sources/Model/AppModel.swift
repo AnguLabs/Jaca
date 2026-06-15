@@ -65,8 +65,11 @@ final class AppModel {
     /// companion within the grace window despite a previously-seen one (macOS can leave the
     /// browse .ready while silently returning nothing when permission is missing).
     private func refreshCompanionBlocked() {
+        // "Intent" = we'd expect a companion: one was seen before, or a companion tab is open.
+        let companionIntent = !knownCompanions.isEmpty
+            || sessions.contains { ($0 as? NetworkSession)?.captureMode == .companion }
         companionNetworkBlocked = companionBrowseFailed
-            || (companionDiscoveryGraceElapsed && companionDevices.isEmpty && !knownCompanions.isEmpty)
+            || (companionDiscoveryGraceElapsed && companionDevices.isEmpty && companionIntent)
     }
     private let companionStore = CompanionDeviceStore()
     /// Companion devices seen before (persisted), shown offline until rediscovered.

@@ -1,5 +1,6 @@
 import SwiftUI
 import Lemonade
+import AppKit
 
 /// Guided HTTPS-decryption setup for a companion device — the companion-focused counterpart
 /// of the proxy "Install CA" sheet. It shows live progress (connect → install → decrypting),
@@ -11,6 +12,7 @@ struct CompanionCASheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var linked = false
     @State private var capturing = false
+    @State private var linkSlow = false   // not linked after a grace window → likely Local Network permission
 
     private var decrypting: Bool { session.caReady }
     /// Show the walkthrough video column only when a clip is actually bundled (placeholder
@@ -31,9 +33,11 @@ struct CompanionCASheet: View {
         .frame(width: showVideo ? 801 : 540, height: 480)
         .background(LemonadeTheme.colors.background.bgDefault)
         .task(id: session.id) {
+            var waited = 0
             while !Task.isCancelled {
                 linked = session.companionLinked
                 capturing = session.deviceCapturing
+                if linked { linkSlow = false; waited = 0 } else { waited += 1; if waited >= 8 { linkSlow = true } }
                 try? await Task.sleep(for: .seconds(1))
             }
         }
@@ -51,12 +55,33 @@ struct CompanionCASheet: View {
                                 color: LemonadeTheme.colors.content.contentTertiary)
             }
             steps
+            if !linked && linkSlow { localNetworkHint }
             guidance
             Spacer(minLength: 0)
             footer
         }
         .animation(.easeInOut(duration: 0.2), value: linked)
+        .animation(.easeInOut(duration: 0.2), value: linkSlow)
         .animation(.easeInOut(duration: 0.2), value: decrypting)
+    }
+
+    /// Shown when "Connect the companion" stays unconnected — on macOS this is almost always
+    /// Local Network permission (there's no API to request it, so point at the setting).
+    @ViewBuilder
+    private var localNetworkHint: some View {
+        VStack(alignment: .leading, spacing: LemonadeTheme.spaces.spacing100) {
+            LemonadeUi.Notice(
+                content: "Can't reach the device. If it's on the same Wi-Fi running Jaca, allow Jaca under Local Network so the desktop can find it.",
+                voice: .warning, title: "Allow Local Network")
+            LemonadeUi.Button(label: "Open Local Network Settings",
+                              onClick: { Self.openLocalNetworkSettings() },
+                              variant: .neutral, type: .subtle, size: .small)
+        }
+    }
+
+    private static func openLocalNetworkSettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork") else { return }
+        NSWorkspace.shared.open(url)
     }
 
     private var steps: some View {
