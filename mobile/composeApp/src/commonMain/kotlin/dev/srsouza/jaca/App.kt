@@ -7,6 +7,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeContentPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -66,6 +68,7 @@ fun CaptureScreen(
             .fillMaxSize()
             .background(LemonadeTheme.colors.background.bgDefault)
             .safeContentPadding()
+            .verticalScroll(rememberScrollState())
             .padding(spaces.spacing400),
         verticalArrangement = Arrangement.spacedBy(spaces.spacing400),
     ) {
