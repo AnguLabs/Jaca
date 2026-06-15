@@ -54,8 +54,11 @@ final class CompanionHub {
 
     func subscribe(id: String, _ handler: @escaping (CompanionFlow) -> Void) { flowHandlers[id] = handler }
     func unsubscribe(id: String) { flowHandlers[id] = nil }
-    /// Tell a connected device where the desktop's decryption proxy is.
-    func setProxy(id: String, host: String, port: Int) { link.setProxy(id: id, host: host, port: port) }
+    /// Tell a connected device where the desktop's decryption proxy is, plus the hosts to
+    /// pass through without interception (apps that reject the cert).
+    func setProxy(id: String, host: String, port: Int, bypass: [String] = []) {
+        link.setProxy(id: id, host: host, port: port, bypass: bypass)
+    }
 
     /// Push the desktop CA to a device so it can prompt the user to install/trust it.
     func installCa(id: String, pem: Data, name: String = "Jaca CA") { link.installCa(id: id, pem: pem, name: name) }

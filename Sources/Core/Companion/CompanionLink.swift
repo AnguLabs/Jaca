@@ -161,7 +161,7 @@ final class CompanionLink {
     }
 
     /// Tell a connected device where the desktop's decryption proxy is.
-    func setProxy(id: String, host: String, port: Int) {
+    func setProxy(id: String, host: String, port: Int, bypass: [String]) {
         queue.async {
             guard let connection = self.channels[id]?.connection else { return }
             let client = Jaca_CompanionAsyncClient(channel: connection)
@@ -169,6 +169,7 @@ final class CompanionLink {
                 var cfg = Jaca_ProxyConfig()
                 cfg.host = host
                 cfg.port = UInt32(port)
+                cfg.bypassHosts = bypass
                 _ = try? await client.setProxy(cfg)
             }
         }

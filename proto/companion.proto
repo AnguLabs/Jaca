@@ -31,6 +31,10 @@ message FlowMeta {
 message ProxyConfig {
   string host = 1;
   uint32 port = 2;
+  // Hosts to pass through WITHOUT interception. The desktop adds a host here once its TLS
+  // handshake is rejected (the app pins or doesn't trust the CA), so that app keeps working
+  // instead of breaking. Best-effort decryption: intercept what cooperates, bypass the rest.
+  repeated string bypass_hosts = 3;
 }
 
 // Capture mode. STREAM_FULL is today's behavior (desktop decrypts the live

@@ -80,9 +80,9 @@ class JacaVpnService : VpnService() {
         // the shared instance and wire only the data plane: engage the tunnel when the
         // desktop advertises its proxy, drop it (back to direct) when the desktop drops.
         val db = CompanionServer.acquire(applicationContext)
-        db.onProxyChanged = { host, port ->
+        db.onProxyChanged = { host, port, bypass ->
             if (host != null) {
-                tb.setProxy(host, port)
+                tb.setProxy(host, port, bypass.toSet())
                 runCatching { nativeSetDnat(bridgePort) } // route TLS(443) through the bridge
             } else {
                 tb.clearProxy()

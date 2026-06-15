@@ -16,6 +16,8 @@ final class CompanionCaptureSource: CaptureSource {
     private var decryptionConfirmed = false
     /// Set once we've pushed the CA to the device (auto mode), so we don't nag repeatedly.
     private var caInstallRequested = false
+    /// Hosts a client rejected (pins / distrusts the CA) — bypassed so that app keeps working.
+    private var bypassHosts: Set<String> = []
 
     init(device: Device, hub: CompanionHub, ca: CertificateAuthority) {
         self.device = device
@@ -44,30 +46,38 @@ final class CompanionCaptureSource: CaptureSource {
         let server = ProxyServer(port: 0, ca: ca, onTransaction: { [weak sink] txn in
             if txn.host == selfIP { return }
             Task { @MainActor in sink?.capture(didReceive: txn) }
-        }, onHandshake: { [weak self, weak sink] _, ok in
+        }, onHandshake: { [weak self, weak sink] host, ok in
             Task { @MainActor in
                 guard let self else { return }
                 if ok {
                     self.decryptionConfirmed = true
                     sink?.capture(didChangeStatus: "Decrypting \(label) ✓")
-                } else if !self.decryptionConfirmed {
-                    // The CA is pushed to the device on connect; re-push once in case this
-                    // device connected after that, then point the user at the in-app install.
-                    if !self.caInstallRequested {
+                } else {
+                    // This host's client rejected our cert (it pins or doesn't trust the CA).
+                    // Bypass it so that app keeps working; keep decrypting the cooperating ones.
+                    if self.bypassHosts.insert(host).inserted {
+                        self.applyProxy()
+                        sink?.capture(didChangeStatus: "Passing \(host) through — it rejects the certificate")
+                    }
+                    // Until anything decrypts, the likely cause is the CA not being installed.
+                    if !self.decryptionConfirmed, !self.caInstallRequested {
                         self.caInstallRequested = true
                         self.hub.installCa(id: self.companionID, pem: Data(self.ca.rootCertificatePEM.utf8))
                     }
-                    sink?.capture(didChangeStatus: "HTTPS not decrypted on \(label) — open the Jaca app and tap Install certificate")
                 }
             }
         })
         if (try? server.start()) != nil {
             proxy = server
-            if let host = LANAddress.current() {
-                hub.setProxy(id: companionID, host: host, port: server.boundPort)
-            }
+            applyProxy()
         }
         sink.capture(didChangeStatus: "Streaming from \(device.displayModel)")
+    }
+
+    /// (Re)advertise the proxy address and the current bypass list to the device.
+    private func applyProxy() {
+        guard let proxy, let host = LANAddress.current() else { return }
+        hub.setProxy(id: companionID, host: host, port: proxy.boundPort, bypass: Array(bypassHosts))
     }
 
     func stop() {

@@ -107,6 +107,11 @@ public nonisolated struct Jaca_ProxyConfig: Sendable {
 
   public var port: UInt32 = 0
 
+  /// Hosts to pass through WITHOUT interception. The desktop adds a host here once its TLS
+  /// handshake is rejected (the app pins or doesn't trust the CA), so that app keeps working
+  /// instead of breaking. Best-effort decryption: intercept what cooperates, bypass the rest.
+  public var bypassHosts: [String] = []
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
@@ -239,7 +244,7 @@ nonisolated extension Jaca_FlowMeta: SwiftProtobuf.Message, SwiftProtobuf._Messa
 
 nonisolated extension Jaca_ProxyConfig: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".ProxyConfig"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}host\0\u{1}port\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}host\0\u{1}port\0\u{3}bypass_hosts\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -249,6 +254,7 @@ nonisolated extension Jaca_ProxyConfig: SwiftProtobuf.Message, SwiftProtobuf._Me
       switch fieldNumber {
       case 1: try { try decoder.decodeSingularStringField(value: &self.host) }()
       case 2: try { try decoder.decodeSingularUInt32Field(value: &self.port) }()
+      case 3: try { try decoder.decodeRepeatedStringField(value: &self.bypassHosts) }()
       default: break
       }
     }
@@ -261,12 +267,16 @@ nonisolated extension Jaca_ProxyConfig: SwiftProtobuf.Message, SwiftProtobuf._Me
     if self.port != 0 {
       try visitor.visitSingularUInt32Field(value: self.port, fieldNumber: 2)
     }
+    if !self.bypassHosts.isEmpty {
+      try visitor.visitRepeatedStringField(value: self.bypassHosts, fieldNumber: 3)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
   public static func ==(lhs: Jaca_ProxyConfig, rhs: Jaca_ProxyConfig) -> Bool {
     if lhs.host != rhs.host {return false}
     if lhs.port != rhs.port {return false}
+    if lhs.bypassHosts != rhs.bypassHosts {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

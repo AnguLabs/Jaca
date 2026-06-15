@@ -40,12 +40,12 @@ import java.util.concurrent.TimeUnit
 class DesktopBridge(
     private val context: Context,
 ) {
-    /// Data-plane hook set by the capture service: called with (host, port) when the desktop
-    /// advertises its decryption proxy, and with (null, 0) when the desktop disconnects so
-    /// the tunnel is torn down and the device stays online. Null before capture starts — the
-    /// control plane (Describe / InstallCa / flow stream) runs regardless, so the desktop can
-    /// push and the user can install the CA before any capture.
-    var onProxyChanged: ((String?, Int) -> Unit)? = null
+    /// Data-plane hook set by the capture service: called with (host, port, bypassHosts) when
+    /// the desktop advertises its decryption proxy, and with (null, 0, empty) when the desktop
+    /// disconnects so the tunnel is torn down and the device stays online. bypassHosts are the
+    /// hosts to pass through without interception (their client rejects the cert). Null before
+    /// capture starts — the control plane (Describe / InstallCa / flow stream) runs regardless.
+    var onProxyChanged: ((String?, Int, List<String>) -> Unit)? = null
 
     private val subscribers = Collections.synchronizedList(mutableListOf<FlowSubscriber>())
     private var server: Server? = null
@@ -65,7 +65,7 @@ class DesktopBridge(
         }
 
         override fun setProxy(request: ProxyConfig, responseObserver: StreamObserver<Ack>) {
-            onProxyChanged?.invoke(request.host, request.port)
+            onProxyChanged?.invoke(request.host, request.port, request.bypassHostsList)
             responseObserver.onNext(Ack.getDefaultInstance())
             responseObserver.onCompleted()
         }
@@ -124,7 +124,7 @@ class DesktopBridge(
         runCatching { server?.shutdownNow() }
         server = null
         VpnState.setDesktopConnected(false)
-        onProxyChanged?.invoke(null, 0)
+        onProxyChanged?.invoke(null, 0, emptyList())
     }
 
     /// Non-blocking: enqueues one FlowMeta per connected desktop. Safe to call from the
@@ -195,7 +195,7 @@ class DesktopBridge(
             runCatching { observer.onCompleted() }
             val stillConnected = subscribers.isNotEmpty()
             VpnState.setDesktopConnected(stillConnected)
-            if (!stillConnected) onProxyChanged?.invoke(null, 0) // back to direct; device stays online
+            if (!stillConnected) onProxyChanged?.invoke(null, 0, emptyList()) // back to direct; device stays online
         }
     }
 

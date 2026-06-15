@@ -20,6 +20,9 @@ class TunnelBridge {
     private var server: ServerSocket? = null
     @Volatile private var running = false
     private val proxy = AtomicReference<InetSocketAddress?>(null)
+    /// Hosts to pass through directly (their client rejected the desktop cert), so decryption
+    /// is best-effort: intercept what cooperates, and let everything else keep working.
+    private val bypass = AtomicReference<Set<String>>(emptySet())
 
     fun start(): Int {
         val s = ServerSocket()
@@ -30,8 +33,11 @@ class TunnelBridge {
         return s.localPort
     }
 
-    fun setProxy(host: String, port: Int) { proxy.set(InetSocketAddress(host, port)) }
-    fun clearProxy() { proxy.set(null) }
+    fun setProxy(host: String, port: Int, bypassHosts: Set<String> = emptySet()) {
+        proxy.set(InetSocketAddress(host, port))
+        bypass.set(bypassHosts)
+    }
+    fun clearProxy() { proxy.set(null); bypass.set(emptySet()) }
 
     fun stop() {
         running = false
@@ -72,7 +78,8 @@ class TunnelBridge {
 
     /// Tunnel through the desktop proxy via CONNECT (decryption), or fall back to direct.
     private fun openUpstream(host: String): Socket? {
-        proxy.get()?.let { p ->
+        // Skip the proxy for bypassed hosts (their client rejects the cert) — go direct.
+        if (!bypass.get().contains(host)) proxy.get()?.let { p ->
             runCatching {
                 val s = Socket().apply { tcpNoDelay = true; connect(p, PROXY_TIMEOUT) }
                 val req = "CONNECT $host:443 HTTP/1.1\r\nHost: $host:443\r\n\r\n"
