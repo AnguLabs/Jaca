@@ -48,6 +48,8 @@ The MITM CA private key lives in the macOS Keychain, and macOS binds a key's "Al
 
 A Compose Multiplatform app (`mobile/composeApp`, package `dev.srsouza.jaca`) that captures on-device traffic with a `VpnService` + a userspace TCP/IP stack (zdtun JNI, `androidMain/jni/`) and streams per-app flow metadata to the desktop over **gRPC + TLS** (contract: `proto/companion.proto`; phone = server, desktop = client). TLS is decrypted on the **desktop** — the CA private key never reaches the phone; the phone tunnels intercepted TLS to the desktop's MITM proxy. The gRPC server runs from app open (`CompanionServer`) so the desktop can push its CA (`InstallCa`) and the app guides the user to install it before any capture. `./scripts/build-mobile.sh` assembles + bundles the APK (needs the NDK/CMake in the README table); the desktop serves it for QR onboarding and reads its commit hash for update detection.
 
+Full end-to-end flow + sequence/state diagrams: **`docs/companion-architecture.md`** — keep it current when the flow or the wire protocol changes.
+
 ## Architecture
 
 Three layers, enforced by directory:
