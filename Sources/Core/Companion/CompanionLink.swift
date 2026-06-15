@@ -60,7 +60,16 @@ final class CompanionLink {
                 let devices = results.map { result -> CompanionDevice in
                     let name: String
                     if case let .service(svcName, _, _, _) = result.endpoint { name = svcName } else { name = "\(result.endpoint)" }
-                    return CompanionDevice(id: "\(result.endpoint)", name: name, endpoint: result.endpoint)
+                    // Identity by device, not address: prefer the stable id the app advertises
+                    // in its TXT record, so the same phone is a single entry across IP changes.
+                    let id: String
+                    if case let .bonjour(txt) = result.metadata,
+                       case let .string(devID) = txt.getEntry(for: "id"), !devID.isEmpty {
+                        id = devID
+                    } else {
+                        id = "\(result.endpoint)"
+                    }
+                    return CompanionDevice(id: id, name: name, endpoint: result.endpoint)
                 }
                 self?.onDevices?(devices.sorted { $0.name < $1.name })
             }
@@ -75,11 +84,14 @@ final class CompanionLink {
     /// Bonjour endpoint is resolved to host:port first (cached for reconnects).
     func connect(id: String, to endpoint: NWEndpoint) {
         queue.async {
-            if let hp = self.resolved[id] { self.openChannel(id: id, host: hp.0, port: hp.1); return }
+            // Re-resolve the current address each time: a device that left and rejoined the
+            // network may have a new IP. If it changed, reconnect — same id, one entry.
             self.resolve(endpoint) { [weak self] hp in
                 self?.queue.async {
                     guard let self else { return }
-                    guard let hp else { self.onConnected?(id, false); return }
+                    guard let hp else { if self.channels[id] == nil { self.onConnected?(id, false) }; return }
+                    if let cur = self.resolved[id], cur == hp, self.channels[id] != nil { return } // unchanged & live
+                    if self.channels[id] != nil { self.teardown(id) }   // address changed → reconnect
                     self.resolved[id] = hp
                     self.openChannel(id: id, host: hp.0, port: hp.1)
                 }

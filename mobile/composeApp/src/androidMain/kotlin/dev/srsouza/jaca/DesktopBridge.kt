@@ -188,6 +188,9 @@ class DesktopBridge(
             serviceName = "Jaca ${Build.MODEL}"
             serviceType = SERVICE_TYPE
             setPort(port)
+            // Stable device identity so the desktop keys this device by id, not its IP, and
+            // shows one entry that survives address changes across Wi-Fi reconnects.
+            setAttribute("id", CompanionId.get(context))
         }
         val listener = object : NsdManager.RegistrationListener {
             override fun onServiceRegistered(info: NsdServiceInfo?) {}

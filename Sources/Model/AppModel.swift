@@ -83,7 +83,11 @@ final class AppModel {
         if let days = UserDefaults.standard.object(forKey: "retentionDays") as? Int, days > 0 {
             retention = TimeInterval(days) * 86_400
         }
-        if !uiTestMode { pendingRestores = Self.loadPersistedTabs(); knownCompanions = companionStore.load() }
+        if !uiTestMode {
+            pendingRestores = Self.loadPersistedTabs()
+            // Drop legacy address-keyed entries so stale IP/endpoint companions don't linger.
+            knownCompanions = companionStore.load().filter { Self.isDeviceID($0.id) }
+        }
         buildProviders()
         companionSetup = CompanionSetupModel(hub: companionHub, adbURL: adbURL,
                                              caCertPEM: { [weak self] in self?.ensureCA()?.rootCertificatePEM })
@@ -140,10 +144,9 @@ final class AppModel {
             self.companionDevices = devices
             self.persistKnownCompanions(devices)
             // Keep a control link to every discovered companion, even before capture, so the
-            // desktop can configure it and push its CA automatically. connect() is idempotent.
-            for d in devices where !self.companionConnectedIDs.contains(d.id) {
-                self.companionHub.connect(id: d.id)
-            }
+            // desktop can configure it and push its CA automatically. Pass the live endpoint so
+            // the link re-resolves and reconnects if the device came back on a new IP. Idempotent.
+            for d in devices { self.companionHub.connect(id: d.id, to: d.endpoint) }
             self.recomputeDevices()
         }
         companionHub.onConnectionChange = { [weak self] id, connected in
@@ -183,9 +186,18 @@ final class AppModel {
 
     private func persistKnownCompanions(_ live: [CompanionDevice]) {
         var byID = Dictionary(uniqueKeysWithValues: knownCompanions.map { ($0.id, $0) })
-        for d in live { byID[d.id] = CompanionDeviceStore.Cached(id: d.id, name: d.name) }
+        // Only remember devices by their stable id (the UUID the app advertises) — never by a
+        // transient address (mDNS endpoint string / "host:port") — so the list doesn't fill
+        // with stale IP entries and a device stays one entry across reconnects.
+        for d in live where Self.isDeviceID(d.id) { byID[d.id] = CompanionDeviceStore.Cached(id: d.id, name: d.name) }
         knownCompanions = Array(byID.values)
         companionStore.save(knownCompanions)
+    }
+
+    /// A stable per-install device id (the UUID the companion advertises in its TXT record),
+    /// vs a transient address-based id (an mDNS endpoint string or "host:port").
+    private static func isDeviceID(_ id: String) -> Bool {
+        id.count == 36 && id.filter { $0 == "-" }.count == 4
     }
 
     private func recomputeDevices() {
