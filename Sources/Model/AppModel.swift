@@ -215,9 +215,19 @@ final class AppModel {
             case .iosDevice: return IOSDeviceLogSource(udid: device.id)
             }
         }
+        // Simulators can additionally stream the targeted app's stdout (`print()`),
+        // which OSLog can't see, by launching it under a PTY. Other platforms have
+        // no stdout tap, so they get no console source.
+        let simulatorConsole: @Sendable (String) -> LogSource? = { bundleID -> LogSource? in
+            guard !bundleID.isEmpty else { return nil }
+            return SimulatorConsoleLogSource(udid: device.id, bundleID: bundleID)
+        }
+        let makeConsoleSource: (@Sendable (String) -> LogSource?)? =
+            device.platform == .iosSimulator ? simulatorConsole : nil
         let session = LogSession(
             device: device, makeSource: makeSource, adbURL: toolURL,
             filter: filter, displayName: name,
+            makeConsoleSource: makeConsoleSource,
             onPersist: { sid, lines in
                 Task { await store?.appendLines(sessionID: sid, lines) }
             }
