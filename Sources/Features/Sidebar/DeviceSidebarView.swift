@@ -21,13 +21,17 @@ struct DeviceSidebarView: View {
                         : LemonadeTheme.colors.content.contentSecondary
                 )
                 Spacer()
-                Button(action: { showConnect = true }) {
-                    Image(systemName: "plus.circle")
-                        .foregroundStyle(LemonadeTheme.colors.content.contentSecondary)
+                // Companion onboarding only exists when the experimental HTTPS-decryption
+                // feature is on; otherwise inspection is Agent-only and there's nothing to pair.
+                if model.httpsDecryptionEnabled {
+                    Button(action: { showConnect = true }) {
+                        Image(systemName: "plus.circle")
+                            .foregroundStyle(LemonadeTheme.colors.content.contentSecondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Connect a device (QR / USB)")
+                    .accessibilityIdentifier("connectDeviceButton")
                 }
-                .buttonStyle(.plain)
-                .help("Connect a device (QR / USB)")
-                .accessibilityIdentifier("connectDeviceButton")
                 LemonadeUi.IconButton(
                     icon: .clockArrowUp, contentDescription: "History",
                     onClick: { showHistory = true }, size: .small
@@ -54,7 +58,7 @@ struct DeviceSidebarView: View {
                 adbMissingNotice
             }
 
-            if model.companionNetworkBlocked {
+            if model.httpsDecryptionEnabled && model.companions.networkBlocked {
                 localNetworkNotice
             }
 
@@ -113,6 +117,7 @@ struct DeviceSidebarView: View {
                         onInspectNetwork: { model.startNetworkSession(for: device, autoStart: false) },
                         onStartCompanion: { model.startNetworkSession(for: device, autoStart: true) },
                         onUpdate: { showConnect = true },
+                        updateOverUSB: { await model.updateCompanionOverUSB(device) },
                         checkProxy: { await model.strandedProxy(for: device) },
                         revertProxy: { await model.revertDeviceProxy(device) }
                     )
@@ -175,8 +180,12 @@ private struct DeviceRow: View {
     let onInspectNetwork: () -> Void
     /// Start (and auto-run) companion network capture — the primary action for companion devices.
     let onStartCompanion: () -> Void
-    /// Open the connect/onboarding sheet to reinstall an out-of-date companion app.
+    /// Fallback for a Wi-Fi / companion-only device: open the QR connect sheet to reinstall an
+    /// out-of-date companion app.
     let onUpdate: () -> Void
+    /// One-click update over USB for an adb-connected device (no QR step). Returns the outcome
+    /// so the row can fall back to the sheet when there's no USB path.
+    let updateOverUSB: () async -> AppModel.CompanionUpdateOutcome
     /// Returns the device's stranded Jaca proxy (host == this Mac), or nil.
     let checkProxy: () async -> String?
     /// Clears the device's HTTP proxy.
@@ -185,14 +194,35 @@ private struct DeviceRow: View {
     @State private var stranded: String?
     @State private var reverting = false
     @State private var showOptions = false
+    @State private var isUpdating = false
+    @State private var updateError: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: LemonadeTheme.spaces.spacing100) {
             deviceButton
             if let proxy = stranded { strandedBanner(proxy) }
+            if let err = updateError { updateErrorBanner(err) }
         }
         .task(id: device.state) {
             stranded = device.state.isReady ? await checkProxy() : nil
+        }
+        .animation(.easeInOut(duration: 0.2), value: isUpdating)
+        .animation(.easeInOut(duration: 0.2), value: updateError)
+    }
+
+    /// Update an out-of-date companion. For an adb device this installs over USB in place (no
+    /// QR step); for a Wi-Fi / companion-only device it falls back to the connect sheet.
+    private func triggerUpdate() {
+        Task {
+            updateError = nil
+            isUpdating = true
+            let outcome = await updateOverUSB()
+            isUpdating = false
+            switch outcome {
+            case .noUSBPath: onUpdate()                 // QR/connect sheet fallback
+            case .success: break                         // chip clears when the new build reports its commit
+            case .failed(let msg): updateError = msg
+            }
         }
     }
 
@@ -264,7 +294,7 @@ private struct DeviceRow: View {
             // Right-click path for the companion update — reachable even on companion-only
             // devices, which single-click straight into capture and never open the popover.
             if device.companionUpdateAvailable {
-                Button("Update Companion App…", action: onUpdate)
+                Button("Update Companion App…") { triggerUpdate() }
             }
         }
     }
@@ -282,7 +312,7 @@ private struct DeviceRow: View {
             }
             if device.companionUpdateAvailable {
                 Divider()
-                Button("Update Companion App…", action: onUpdate)
+                Button("Update Companion App…") { showOptions = false; triggerUpdate() }
             }
         }
         .padding(LemonadeTheme.spaces.spacing100)
@@ -305,18 +335,33 @@ private struct DeviceRow: View {
         .background(Capsule().fill(LemonadeTheme.colors.background.bgNeutralSubtle))
     }
 
-    /// Shown when the device's companion app is older than the APK Jaca bundles.
+    /// Shown when the device's companion app is older than the APK Jaca bundles. Spins while a
+    /// USB update is in flight; clears on its own when the refreshed build reports its commit.
     private var updateChip: some View {
         HStack(spacing: 3) {
-            Image(systemName: "arrow.down.circle.fill")
-                .font(.system(size: 9, weight: .bold))
-            Text("update")
+            if isUpdating {
+                ProgressView().controlSize(.mini).scaleEffect(0.6).frame(width: 9, height: 9)
+            } else {
+                Image(systemName: "arrow.down.circle.fill")
+                    .font(.system(size: 9, weight: .bold))
+            }
+            Text(isUpdating ? "updating…" : "update")
                 .font(.system(size: 9, weight: .bold))
         }
         .foregroundStyle(LemonadeTheme.colors.content.contentCaution)
         .padding(.horizontal, 6).padding(.vertical, 2)
         .background(Capsule().fill(LemonadeTheme.colors.background.bgNeutralSubtle))
-        .help("The companion app is out of date. Right-click → Update Companion App.")
+        .help(isUpdating ? "Updating the companion app over USB…"
+                         : "The companion app is out of date. Right-click → Update Companion App (installs over USB when connected).")
+    }
+
+    /// Inline failure feedback for a USB update (tap to dismiss).
+    private func updateErrorBanner(_ msg: String) -> some View {
+        LemonadeUi.Text(msg, textStyle: LemonadeTypography.shared.bodyXSmallRegular,
+                        color: LemonadeTheme.colors.content.contentCritical, maxLines: 3)
+            .padding(.horizontal, LemonadeTheme.spaces.spacing200)
+            .contentShape(Rectangle())
+            .onTapGesture { updateError = nil }
     }
 
     /// Shown when this device still has a proxy Jaca set but a teardown couldn't

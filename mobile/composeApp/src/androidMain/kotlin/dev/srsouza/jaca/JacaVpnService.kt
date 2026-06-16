@@ -8,6 +8,7 @@ import android.content.Intent
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
+import android.util.Log
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
@@ -47,6 +48,7 @@ class JacaVpnService : VpnService() {
     /// static [stop] (the reliable path — a startService(ACTION_STOP) can be dropped by
     /// background-start rules on some OEMs).
     private fun stopFromUser() {
+        Log.i(TAG, "stopFromUser (tearing down VPN)")
         running = false
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -81,9 +83,11 @@ class JacaVpnService : VpnService() {
         // desktop advertises its proxy, drop it (back to direct) when the desktop drops.
         val db = CompanionServer.acquire(applicationContext)
         db.onProxyChanged = { host, port, bypass ->
+            Log.i(TAG, "onProxyChanged host=$host bridgePort=$bridgePort")
             if (host != null) {
                 tb.setProxy(host, port, bypass.toSet())
                 runCatching { nativeSetDnat(bridgePort) } // route TLS(443) through the bridge
+                    .onFailure { Log.e(TAG, "nativeSetDnat failed", it) }
             } else {
                 tb.clearProxy()
                 runCatching { nativeClearDnat() } // back to direct so the device stays online
@@ -159,6 +163,7 @@ class JacaVpnService : VpnService() {
 
     companion object {
         init { System.loadLibrary("jacacapture") }
+        private const val TAG = "JacaVpn"
         const val ACTION_STOP = "dev.srsouza.jaca.STOP"
         /// The running service instance, so the UI can stop capture directly and reliably.
         @Volatile private var active: JacaVpnService? = null

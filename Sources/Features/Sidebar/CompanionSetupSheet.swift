@@ -57,7 +57,7 @@ struct CompanionSetupSheet: View {
                 }
                 .fixedSize()
                 LemonadeUi.Button(label: model.isInstalling ? "Installing…" : "Install",
-                                  onClick: { model.installApk() }, variant: .primary, type: .solid, size: .xSmall,
+                                  onClick: { Task { await model.installApk() } }, variant: .primary, type: .solid, size: .xSmall,
                                   enabled: !model.isInstalling && model.selectedSerial != nil)
                     .fixedSize()
                 Button(action: { model.refreshAdbDevices() }) {

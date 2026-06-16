@@ -4,7 +4,23 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 CONFIG="${1:-Debug}"
-[ -d Jaca.xcodeproj ] || xcodegen generate
+
+# Bundle the in-process Android agent (built by scripts/all.sh) into Resources/ so the app finds
+# it inside its own bundle on any machine — no hardcoded source path, works for the installed app
+# too. arm64-v8a only (every dev is on Apple Silicon; device + emulator share the ABI). Copied
+# before generating so it's part of the Resources build phase; cleared if the agent isn't built.
+if [ -f agent/out/arm64-v8a/libsqueezeagent.so ]; then
+  cp -f agent/out/arm64-v8a/libsqueezeagent.so Resources/libsqueezeagent.so
+  cp -f agent/out/squeezeagent-boot.dex        Resources/squeezeagent-boot.dex
+  cp -f agent/out/squeezeagent-capture.dex     Resources/squeezeagent-capture.dex
+  echo "✓ bundled in-process agent (arm64-v8a) into Resources/"
+else
+  rm -f Resources/libsqueezeagent.so Resources/squeezeagent-boot.dex Resources/squeezeagent-capture.dex
+  echo "ℹ️  in-process agent not built (agent/out missing) — agent mode will show build instructions"
+fi
+
+# Always regenerate so the agent files (added/removed above) are reflected in the project.
+xcodegen generate
 xcodebuild \
   -project Jaca.xcodeproj \
   -scheme Jaca \

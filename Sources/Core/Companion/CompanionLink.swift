@@ -95,6 +95,13 @@ final class CompanionLink {
         }
     }
 
+    func stopBrowsing() {
+        queue.async {
+            self.browser?.cancel()
+            self.browser = nil
+        }
+    }
+
     // MARK: Connect
 
     /// Connect to an mDNS-discovered device. gRPC needs an explicit address, so the
@@ -235,7 +242,14 @@ final class CompanionLink {
     // MARK: mDNS endpoint -> host:port (gRPC needs an explicit address)
 
     private func resolve(_ endpoint: NWEndpoint, _ completion: @escaping ((String, UInt16)?) -> Void) {
-        let conn = NWConnection(to: endpoint, using: .tcp)
+        // Force IPv4: a Bonjour peer often resolves first to an IPv6 link-local (fe80::…%en0),
+        // and link-local IPv6 is unusable once the zone is stripped — so gRPC could never dial
+        // it. The phone always has a routable LAN IPv4, so prefer that.
+        let params = NWParameters.tcp
+        if let ip = params.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options {
+            ip.version = .v4
+        }
+        let conn = NWConnection(to: endpoint, using: params)
         var done = false
         conn.stateUpdateHandler = { state in
             switch state {
@@ -261,11 +275,32 @@ final class CompanionLink {
         switch host {
         case .ipv4(let a): raw = "\(a)"
         case .ipv6(let a): raw = "\(a)"
-        case .name(let n, _): raw = n
+        // A resolved Bonjour peer often comes back as its `.local` hostname, which gRPC/NIO
+        // can't dial (it resolves via DNS, not mDNS) — so the connection silently never opens.
+        // Resolve it to a concrete IPv4 ourselves (getaddrinfo uses mDNS on macOS).
+        case .name(let n, _): raw = resolveToIPv4(n) ?? n
         @unknown default: return nil
         }
         let clean = raw.split(separator: "%").first.map(String.init) ?? raw // drop %en0 zone
         return (clean, port.rawValue)
+    }
+
+    /// Resolve a hostname (incl. mDNS `.local`) to its first IPv4 address, or nil. Blocking, but
+    /// called on the link's private queue after the address is already in the resolver cache.
+    private static func resolveToIPv4(_ host: String) -> String? {
+        var hints = addrinfo()
+        hints.ai_family = AF_INET
+        hints.ai_socktype = SOCK_STREAM
+        var info: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(host, nil, &hints, &info) == 0, let info else { return nil }
+        defer { freeaddrinfo(info) }
+        guard let sa = info.pointee.ai_addr else { return nil }
+        var buf = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+        return sa.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { sin -> String? in
+            var addr = sin.pointee.sin_addr
+            guard inet_ntop(AF_INET, &addr, &buf, socklen_t(INET_ADDRSTRLEN)) != nil else { return nil }
+            return String(cString: buf)
+        }
     }
 }
 

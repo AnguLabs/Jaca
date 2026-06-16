@@ -16,33 +16,25 @@ enum CaptureMode: Sendable, Equatable {
     }
 }
 
-/// Locates the bundled Android agent artifacts (native .so + dex). Falls back to
-/// the dev build output (agent/out) when running unbundled from Xcode.
+/// Locates the Android agent artifacts (native .so + dexes) bundled into the app by the build
+/// (`scripts/build.sh` copies `agent/out` into `Resources/`). arm64-v8a only — every dev runs
+/// Apple-Silicon, and the device + emulator share that ABI, so there's no ABI matching to do.
 enum AgentArtifacts {
-    /// Native agent for the given device ABI (default arm64-v8a).
-    static func soURL(abi: String = "arm64-v8a") -> URL? {
-        if let u = Bundle.main.url(forResource: "libsqueezeagent", withExtension: "so",
-                                   subdirectory: "agent/\(abi)") { return u }
-        return devPath("agent/out/\(abi)/libsqueezeagent.so")
-    }
-
-    static var bootDexURL: URL? {
-        if let u = Bundle.main.url(forResource: "squeezeagent-boot", withExtension: "dex",
-                                   subdirectory: "agent") { return u }
-        return devPath("agent/out/squeezeagent-boot.dex")
-    }
-
-    static var captureDexURL: URL? {
-        if let u = Bundle.main.url(forResource: "squeezeagent-capture", withExtension: "dex",
-                                   subdirectory: "agent") { return u }
-        return devPath("agent/out/squeezeagent-capture.dex")
-    }
+    static func soURL() -> URL? { Bundle.main.url(forResource: "libsqueezeagent", withExtension: "so") }
+    static var bootDexURL: URL? { Bundle.main.url(forResource: "squeezeagent-boot", withExtension: "dex") }
+    static var captureDexURL: URL? { Bundle.main.url(forResource: "squeezeagent-capture", withExtension: "dex") }
 
     static var isAvailable: Bool { soURL() != nil && bootDexURL != nil && captureDexURL != nil }
 
-    private static func devPath(_ rel: String) -> URL? {
-        let p = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("workspace/jaca/\(rel)")
-        return FileManager.default.fileExists(atPath: p.path) ? p : nil
-    }
+    /// Shown when the agent isn't bundled — a dev tool, so it's explicit about how to build it.
+    static let missingMessage = """
+        The in-process agent isn't built into this app. Build it on macOS:
+
+          sdkmanager "ndk;27.2.12479018" "cmake;3.22.1" "platforms;android-36"
+          brew install kotlin
+          ./scripts/all.sh
+
+        Then relaunch Jaca. The agent needs the Android NDK/CMake + Kotlin; the app builds \
+        without it, which is why this option was unavailable.
+        """
 }

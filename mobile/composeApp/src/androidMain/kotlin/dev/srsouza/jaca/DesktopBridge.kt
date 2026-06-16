@@ -1,9 +1,14 @@
 package dev.srsouza.jaca
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
 import dev.srsouza.jaca.grpc.Ack
 import dev.srsouza.jaca.grpc.CaCert
 import dev.srsouza.jaca.grpc.CaptureMode
@@ -45,12 +50,24 @@ class DesktopBridge(
     /// disconnects so the tunnel is torn down and the device stays online. bypassHosts are the
     /// hosts to pass through without interception (their client rejects the cert). Null before
     /// capture starts — the control plane (Describe / InstallCa / flow stream) runs regardless.
+    private var lastProxy: ProxyConfig? = null
     var onProxyChanged: ((String?, Int, List<String>) -> Unit)? = null
+        set(value) {
+            field = value
+            // Apply a proxy that arrived BEFORE the VPN data-plane was ready: the desktop can
+            // advertise its decryption proxy before on-device capture starts, and the gRPC call
+            // is one-shot — without re-applying here the tunnel never engages and nothing decrypts.
+            lastProxy?.let { p -> value?.invoke(p.host, p.port, p.bypassHostsList) }
+        }
 
     private val subscribers = Collections.synchronizedList(mutableListOf<FlowSubscriber>())
     private var server: Server? = null
     private var nsd: NsdManager? = null
     private var regListener: NsdManager.RegistrationListener? = null
+    private var connectivity: ConnectivityManager? = null
+    private var netCallback: ConnectivityManager.NetworkCallback? = null
+    private val nsdHandler = Handler(Looper.getMainLooper())
+    private var currentNetwork: Network? = null
     @Volatile private var running = false
     var port: Int = PORT
         private set
@@ -65,6 +82,8 @@ class DesktopBridge(
         }
 
         override fun setProxy(request: ProxyConfig, responseObserver: StreamObserver<Ack>) {
+            Log.i(TAG, "setProxy host=${request.host} port=${request.port} bypass=${request.bypassHostsList.size}")
+            lastProxy = request   // remembered so it's (re)applied when the VPN data-plane comes up
             onProxyChanged?.invoke(request.host, request.port, request.bypassHostsList)
             responseObserver.onNext(Ack.getDefaultInstance())
             responseObserver.onCompleted()
@@ -103,6 +122,7 @@ class DesktopBridge(
         server = srv
         port = srv.port
         registerNsd(port)
+        registerNetworkCallback()
     }
 
     private fun buildServer(port: Int, creds: ServerCredentials): Server =
@@ -119,6 +139,8 @@ class DesktopBridge(
 
     fun stop() {
         running = false
+        unregisterNetworkCallback()
+        nsdHandler.removeCallbacksAndMessages(null)
         unregisterNsd()
         synchronized(subscribers) { subscribers.toList().forEach { it.die() } }
         runCatching { server?.shutdownNow() }
@@ -226,6 +248,42 @@ class DesktopBridge(
         nsd = null
     }
 
+    /// Watch the default network so we can re-advertise when it changes. The gRPC server is
+    /// bound to all interfaces, so it's already reachable on a new IP — but NSD can keep
+    /// advertising the stale address after a Wi-Fi reconnect, leaving the desktop stuck on a
+    /// dead endpoint. Re-announcing fixes the Wi-Fi-only path (USB/adb doesn't need it).
+    private fun registerNetworkCallback() {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+        connectivity = cm
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                val previous = currentNetwork
+                currentNetwork = network
+                // The first network (at registration) is the one we already advertised; only a
+                // switch to a different default network (e.g. rejoining Wi-Fi) means a new IP.
+                if (previous != null && previous != network) reannounceNsd()
+            }
+        }
+        netCallback = callback
+        runCatching { cm.registerDefaultNetworkCallback(callback) }
+    }
+
+    private fun unregisterNetworkCallback() {
+        runCatching { netCallback?.let { connectivity?.unregisterNetworkCallback(it) } }
+        netCallback = null
+        connectivity = null
+        currentNetwork = null
+    }
+
+    /// Re-register mDNS with a short debounce so the new address propagates promptly. Unregister
+    /// first, then register after the unregister settles (NsdManager dislikes overlapping ops).
+    private fun reannounceNsd() {
+        if (!running) return
+        nsdHandler.removeCallbacksAndMessages(null)
+        unregisterNsd()
+        nsdHandler.postDelayed({ if (running) registerNsd(port) }, 400)
+    }
+
     /// This device's LAN IPv4 (skips the VPN tun and loopback), for "connect by IP".
     fun deviceIp(): String? = runCatching {
         NetworkInterface.getNetworkInterfaces().toList()
@@ -236,6 +294,7 @@ class DesktopBridge(
     }.getOrNull()
 
     companion object {
+        private const val TAG = "JacaBridge"
         const val PORT = 8889
         const val SERVICE_TYPE = "_jaca._tcp."
         const val KEEPALIVE_MS = 5000L

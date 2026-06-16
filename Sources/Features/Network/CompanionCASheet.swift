@@ -10,11 +10,15 @@ import AppKit
 struct CompanionCASheet: View {
     let session: NetworkSession
     @Environment(\.dismiss) private var dismiss
-    @State private var linked = false
-    @State private var capturing = false
-    @State private var linkSlow = false   // not linked after a grace window → likely Local Network permission
 
+    // All live signals read straight from the shared state, so the sheet validates reactively
+    // (no polling): link + capture come from the companion registry, `caReady` from the session.
+    private var linked: Bool { session.companionLinked }
+    private var capturing: Bool { session.deviceCapturing }
     private var decrypting: Bool { session.caReady }
+    /// Not linked AND the registry says discovery is blocked → almost always Local Network
+    /// permission. Reuses the registry's grace/intent logic instead of a local timer.
+    private var linkSlow: Bool { !linked && session.companionNetworkBlocked }
     /// Show the walkthrough video column only when a clip is actually bundled (placeholder
     /// today, same as the proxy flow) — otherwise the steps + guidance stand on their own.
     private var showVideo: Bool { TutorialVideo.url != nil }
@@ -32,15 +36,6 @@ struct CompanionCASheet: View {
         }
         .frame(width: showVideo ? 801 : 540, height: 480)
         .background(LemonadeTheme.colors.background.bgDefault)
-        .task(id: session.id) {
-            var waited = 0
-            while !Task.isCancelled {
-                linked = session.companionLinked
-                capturing = session.deviceCapturing
-                if linked { linkSlow = false; waited = 0 } else { waited += 1; if waited >= 8 { linkSlow = true } }
-                try? await Task.sleep(for: .seconds(1))
-            }
-        }
         .accessibilityIdentifier("companionCASheet")
     }
 

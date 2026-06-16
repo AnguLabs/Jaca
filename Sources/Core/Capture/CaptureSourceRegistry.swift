@@ -13,7 +13,10 @@ enum CaptureSourceRegistry {
         id: "agent", kind: .agent,
         title: "In-process agent",
         detail: "Inspect one debuggable app in-process — no proxy or CA, with call stacks.",
-        isAvailable: { device, _ in device.platform == .android && !device.isCompanion && AgentArtifacts.isAvailable },
+        // Offered for any debuggable-capable Android device. Whether the agent is actually built
+        // into the app is checked in the precheck, so a missing agent fails with install steps
+        // instead of silently disappearing from the chooser.
+        isAvailable: { device, _ in device.platform == .android && !device.isCompanion },
         needsPackage: true,
         precheck: { ctx in await AgentCaptureSource.precheck(device: ctx.device, adbURL: ctx.adbURL, package: ctx.targetPackage) },
         make: { ctx in AgentCaptureSource(adbURL: ctx.adbURL, serial: ctx.device.id, package: ctx.targetPackage ?? "") },
@@ -28,9 +31,12 @@ enum CaptureSourceRegistry {
         make: { ctx in CompanionCaptureSource(device: ctx.device, hub: ctx.companion ?? CompanionHub(), ca: ctx.ca) },
     )
 
-    /// Options offered for a device, in display order.
+    /// Options offered for a device, in display order. The companion (device-wide HTTPS
+    /// decryption) source is gated behind the experimental feature flag — off by default, so
+    /// network inspection offers only the in-process Agent.
     static func options(for device: Device, context: DeviceContext?) -> [CaptureSourceDescriptor] {
-        all.filter { $0.isAvailable(device, context) }
+        let decryption = FeatureFlags.httpsDecryptionEnabled
+        return all.filter { $0.isAvailable(device, context) && (decryption || $0.kind == .agent) }
     }
 
     static func descriptor(id: String) -> CaptureSourceDescriptor? { all.first { $0.id == id } }

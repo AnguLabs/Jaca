@@ -60,28 +60,33 @@ final class CompanionSetupModel {
         }
     }
 
-    /// Install the bundled APK over adb, then launch it so it starts advertising.
-    func installApk() {
-        guard !isInstalling else { return }
+    /// Install the bundled APK over adb on `serial` (or the selected/first USB device), then
+    /// launch it so it starts advertising. Returns the failure message, or nil on success.
+    /// Shared by the sheet's "Install over USB" button and the one-click update on an
+    /// adb-connected device (which skips the QR step entirely).
+    @discardableResult
+    func installApk(on serial: String? = nil) async -> String? {
+        guard !isInstalling else { return nil }
         guard let apk = Bundle.main.url(forResource: "jaca-mobile", withExtension: "apk") else {
-            installStatus = "Bundled APK not found"; return
+            installStatus = "Bundled APK not found"; return installStatus
         }
-        guard let adb = adbURL, let serial = selectedSerial ?? adbDevices.first?.id else {
-            installStatus = "Connect a device via USB first"; return
+        guard let adb = adbURL, let target = serial ?? selectedSerial ?? adbDevices.first?.id else {
+            installStatus = "Connect a device via USB first"; return installStatus
         }
         isInstalling = true
-        installStatus = "Installing on \(serial)…"
-        Task {
-            let r = try? await CommandRunner.run(adb, ["-s", serial, "install", "-r", apk.path])
-            if r?.exitCode == 0 {
-                _ = try? await CommandRunner.run(adb, ["-s", serial, "shell", "monkey", "-p",
-                                                       "dev.srsouza.jaca", "-c",
-                                                       "android.intent.category.LAUNCHER", "1"])
-                installStatus = "Installed on \(serial) — open Jaca on the device and start capture."
-            } else {
-                installStatus = "Install failed: \(r?.stderr.trimmingCharacters(in: .whitespacesAndNewlines).prefix(140) ?? "unknown error")"
-            }
-            isInstalling = false
+        installStatus = "Installing on \(target)…"
+        defer { isInstalling = false }
+        let r = try? await CommandRunner.run(adb, ["-s", target, "install", "-r", apk.path])
+        guard r?.exitCode == 0 else {
+            installStatus = "Install failed: \(r?.stderr.trimmingCharacters(in: .whitespacesAndNewlines).prefix(140) ?? "unknown error")"
+            return installStatus
         }
+        // Relaunch so the freshly-installed app starts its server and reconnects (over adb the
+        // forward persists, so the desktop re-links automatically and the update flag clears).
+        _ = try? await CommandRunner.run(adb, ["-s", target, "shell", "monkey", "-p",
+                                               "dev.srsouza.jaca", "-c",
+                                               "android.intent.category.LAUNCHER", "1"])
+        installStatus = "Installed on \(target) — open Jaca on the device and start capture."
+        return nil
     }
 }

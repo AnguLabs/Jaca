@@ -21,6 +21,9 @@ final class CompanionHub {
     var onDeviceInfo: ((String, String, String) -> Void)?
     /// mDNS browsing is blocked (macOS Local Network permission not granted yet).
     var onBrowseBlocked: ((Bool) -> Void)?
+    /// (deviceID, capturing) on every capture-state heartbeat — doubles as a liveness tick so
+    /// the owner can notice a silently-dropped Wi-Fi link.
+    var onCaptureState: ((String, Bool) -> Void)?
     /// Device ids with a live stream right now.
     private(set) var connected: Set<String> = []
     /// Device ids whose on-device VPN capture is currently running (from the heartbeat).
@@ -47,6 +50,12 @@ final class CompanionHub {
         link.startBrowsing()
     }
 
+    /// Stop mDNS discovery (the feature flag was turned off). `startBrowsing` can run again later.
+    func stopBrowsing() {
+        browsing = false
+        link.stopBrowsing()
+    }
+
     func connect(id: String, to endpoint: NWEndpoint) { link.connect(id: id, to: endpoint) }
     func connect(id: String, host: String, port: UInt16) { link.connect(id: id, host: host, port: port) }
     /// Connect using the endpoint known for this id (mDNS or a remembered manual one).
@@ -54,6 +63,21 @@ final class CompanionHub {
         if let endpoint = manual[id]?.endpoint ?? mdns[id]?.endpoint { link.connect(id: id, to: endpoint) }
     }
     func disconnect(id: String) { link.disconnect(id: id) }
+
+    /// Force a fresh link when the current one looks half-open (e.g. the phone changed Wi-Fi/IP,
+    /// so the channel stalls without gRPC noticing): tear it down and reconnect using the latest
+    /// known address.
+    func reconnect(id: String) {
+        link.disconnect(id: id)
+        connect(id: id)
+    }
+
+    /// Reconnect to an explicit address — used by the adb fallback when it re-queries the
+    /// phone's (possibly changed) IP. Tears the old channel down so it dials the new address.
+    func reconnect(id: String, host: String, port: UInt16) {
+        link.disconnect(id: id)
+        link.connect(id: id, host: host, port: port)
+    }
 
     func subscribe(id: String, _ handler: @escaping (CompanionFlow) -> Void) { flowHandlers[id] = handler }
     func unsubscribe(id: String) { flowHandlers[id] = nil }
@@ -100,5 +124,6 @@ final class CompanionHub {
 
     private func setCapturing(_ id: String, _ active: Bool) {
         if active { capturing.insert(id) } else { capturing.remove(id) }
+        onCaptureState?(id, active)
     }
 }

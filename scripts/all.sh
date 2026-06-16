@@ -39,12 +39,17 @@ command -v xcodegen >/dev/null 2>&1 || { echo "✗ xcodegen not found — run: b
 if [ "$DO_AGENT" = 1 ]; then
   step "Building Android agent (.so + dexes)"
   if ( cd agent && ./build.sh && ./build-dex.sh ); then
-    echo "✓ agent artifacts -> agent/out/"
+    echo "✓ agent artifacts -> agent/out/ (bundled into the app by build.sh)"
   else
-    echo "⚠️  agent build skipped/failed — in-process capture won't be available."
-    echo "    Proxy capture still works. To enable the agent, install:"
-    echo "      sdkmanager \"ndk;27.2.12479018\" \"cmake;3.22.1\" \"platforms;android-36\""
-    echo "      brew install kotlin"
+    printf '\n\033[1;31m================================================================\033[0m\n'
+    printf '\033[1;31m  AGENT BUILD FAILED — in-process network capture will NOT work.\033[0m\n'
+    echo   "  Agent mode is the default network-inspection path. Install the"
+    echo   "  Android toolchain, then re-run ./scripts/all.sh:"
+    echo   '      sdkmanager "ndk;27.2.12479018" "cmake;3.22.1" "platforms;android-36"'
+    echo   "      brew install kotlin"
+    echo   "  The app still builds; agent mode shows these exact steps in-app"
+    echo   "  until the agent is built."
+    printf '\033[1;31m================================================================\033[0m\n\n'
   fi
 fi
 

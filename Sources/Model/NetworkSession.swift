@@ -43,7 +43,10 @@ final class NetworkSession: WorkspaceTab, CaptureSink {
 
     let ca: CertificateAuthority
     private let adbURL: URL?
-    private let companion: CompanionHub?
+    /// The single source of truth for companion link/capture state, and the transport the
+    /// companion capture source streams from. Read reactively (via `companions.devices`) — no polling.
+    let companions: CompanionRegistry?
+    private var companion: CompanionHub? { companions?.hub }
     private var current: CaptureSource?
     private var indexByID: [UUID: Int] = [:]
     private let bodyCache: NetworkBodyCache?
@@ -76,12 +79,16 @@ final class NetworkSession: WorkspaceTab, CaptureSink {
 
     /// The companion stream id for this device.
     var companionID: String { device.companionID ?? device.id }
-    /// Whether the companion gRPC link is connected right now (read live from the hub, so a
-    /// companion status banner can validate "device up" without a stale Device snapshot).
-    var companionLinked: Bool { companion?.connected.contains(companionID) ?? false }
+    /// Whether the companion gRPC link is connected right now. Read from the shared registry
+    /// (observable), so any view that reads it re-renders the moment it changes — no polling,
+    /// no stale Device snapshot.
+    var companionLinked: Bool { companions?.state(for: companionID)?.connected ?? false }
     /// Whether the on-device VPN capture is actually running (from the device heartbeat) — so
     /// the desktop can say "VPN not running" and notice when the user stops capture.
-    var deviceCapturing: Bool { companion?.capturing.contains(companionID) ?? false }
+    var deviceCapturing: Bool { companions?.state(for: companionID)?.capturing ?? false }
+    /// macOS is blocking mDNS discovery (Local Network permission) — drives the guided sheet's
+    /// "allow Local Network" hint. Shared with the sidebar's notice (one source of truth).
+    var companionNetworkBlocked: Bool { companions?.networkBlocked ?? false }
     /// One-shot guard so the guided companion setup sheet auto-presents once per session
     /// (when opened and not yet decrypting), not on every tab switch.
     var didAutoShowCompanionSetup = false
@@ -119,13 +126,13 @@ final class NetworkSession: WorkspaceTab, CaptureSink {
     }
 
     init(device: Device, ca: CertificateAuthority, adbURL: URL?, displayName: String? = nil,
-         bodyCache: NetworkBodyCache? = nil, companion: CompanionHub? = nil) {
+         bodyCache: NetworkBodyCache? = nil, companions: CompanionRegistry? = nil) {
         self.device = device
         self.ca = ca
         self.adbURL = adbURL
         self.displayName = displayName ?? "Network · \(device.displayModel)"
         self.bodyCache = bodyCache
-        self.companion = companion
+        self.companions = companions
     }
 
     // MARK: - Source selection (generic)

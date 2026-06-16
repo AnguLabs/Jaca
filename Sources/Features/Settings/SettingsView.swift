@@ -43,6 +43,30 @@ struct SettingsView: View {
                 )
             }
 
+            section("Network inspection") {
+                Toggle(isOn: Binding(get: { model.httpsDecryptionEnabled },
+                                     set: { model.httpsDecryptionEnabled = $0 })) {
+                    LemonadeUi.Text(
+                        "HTTPS decryption (experimental)",
+                        textStyle: LemonadeTypography.shared.bodySmallSemiBold,
+                        color: LemonadeTheme.colors.content.contentPrimary
+                    )
+                }
+                LemonadeUi.Text(
+                    "Off by default. Network inspection uses the in-process Agent — per-app, with " +
+                    "call stacks, no certificate needed — which covers most debugging.\n\n" +
+                    "Turn this on to also capture whole-device traffic via the companion app and " +
+                    "decrypt HTTPS. Limitations: it installs a CA on the device; apps that use " +
+                    "certificate pinning (many banking and secure apps) won't be decrypted and may " +
+                    "stop working; traffic over QUIC (HTTP/3) can't be decrypted. Experimental and " +
+                    "may be unreliable.",
+                    textStyle: LemonadeTypography.shared.bodyXSmallRegular,
+                    color: LemonadeTheme.colors.content.contentTertiary
+                )
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
             section("History") {
                 Stepper(value: $retentionDays, in: 1...365) {
                     LemonadeUi.Text(

@@ -18,6 +18,10 @@ final class CompanionCaptureSource: CaptureSource {
     private var caInstallRequested = false
     /// Hosts a client rejected (pins / distrusts the CA) — bypassed so that app keeps working.
     private var bypassHosts: Set<String> = []
+    /// Periodically re-advertises the proxy: the phone may connect, start capturing, or
+    /// reconnect on a new channel after our first advertise — re-sending (idempotent on the
+    /// phone) guarantees the decryption tunnel engages regardless of ordering.
+    private var reapplyTask: Task<Void, Never>?
 
     init(device: Device, hub: CompanionHub, ca: CertificateAuthority) {
         self.device = device
@@ -70,6 +74,15 @@ final class CompanionCaptureSource: CaptureSource {
         if (try? server.start()) != nil {
             proxy = server
             applyProxy()
+            // Keep re-advertising until decryption is confirmed: the phone might not be capturing
+            // yet (so its proxy handler isn't wired), or it may reconnect on a new channel.
+            reapplyTask = Task { @MainActor [weak self] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(3))
+                    guard let self, !self.decryptionConfirmed else { continue }
+                    self.applyProxy()
+                }
+            }
         }
         sink.capture(didChangeStatus: "Streaming from \(device.displayModel)")
     }
@@ -81,6 +94,8 @@ final class CompanionCaptureSource: CaptureSource {
     }
 
     func stop() {
+        reapplyTask?.cancel()
+        reapplyTask = nil
         hub.unsubscribe(id: companionID)
         hub.disconnect(id: companionID)
         proxy?.stop()

@@ -539,13 +539,13 @@ private struct NetworkRowView: View {
 }
 
 /// Live companion setup status. Tells the user, when they open a companion device, whether
-/// it's actually linked and whether HTTPS is decrypting — and what to do if not. The link
-/// state is polled (the session's `Device` is a snapshot); `caReady` is observed and flips
-/// the moment the first request is decrypted, so it validates automatically.
+/// it's actually linked and whether HTTPS is decrypting — and what to do if not. All three
+/// signals come straight from the shared state (the registry's link/capture state and the
+/// session's `caReady`), so the banner re-renders the moment any of them changes — no polling.
 private struct CompanionStatusBanner: View {
     let session: NetworkSession
-    @State private var linked = false
-    @State private var capturing = false
+    private var linked: Bool { session.companionLinked }
+    private var capturing: Bool { session.deviceCapturing }
 
     var body: some View {
         let decrypting = session.caReady
@@ -567,13 +567,6 @@ private struct CompanionStatusBanner: View {
         .animation(.easeInOut(duration: 0.2), value: linked)
         .animation(.easeInOut(duration: 0.2), value: capturing)
         .animation(.easeInOut(duration: 0.2), value: decrypting)
-        .task(id: session.id) {
-            while !Task.isCancelled {
-                linked = session.companionLinked
-                capturing = session.deviceCapturing
-                try? await Task.sleep(for: .seconds(1))
-            }
-        }
     }
 
     private func dot(_ decrypting: Bool) -> Color {

@@ -39,6 +39,7 @@ final class AgentCaptureSource: CaptureSource {
     /// Agent mode must reach the device to attach in-process, and the app must exist.
     /// Returns a clear error message to abort, or nil when ready.
     static func precheck(device: Device, adbURL: URL?, package: String?) async -> String? {
+        guard AgentArtifacts.isAvailable else { return AgentArtifacts.missingMessage }
         guard await deviceAvailable(device, adbURL) else { return unavailableMessage(device) }
         if device.platform == .android, let pkg = package, !pkg.isEmpty,
            await !packageInstalled(pkg, device: device, adbURL: adbURL) {

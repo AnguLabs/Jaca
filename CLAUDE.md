@@ -90,3 +90,17 @@ The pattern (reference implementation: `ProjectsModel` + `ProjectsCache`):
 5. **Compute slow per-item work (e.g. `du`) in the background**, patching rows as results land, so a list with many items stays responsive instead of blocking.
 
 When adding or revisiting an area whose data comes from the filesystem/processes (Gradle daemons and Xcode DerivedData currently rescan on appear), prefer this cache-first, background-refresh shape over scan-on-open.
+
+## Single source of truth & reactive state (IMPORTANT)
+
+State that more than one screen reads — device/link/capture status, discovery, connection health — lives in **one `@Observable @MainActor` owner**, and views render it. Don't scatter the same knowledge across views, and don't re-derive or re-validate it per screen. The recurring bug this prevents: three views each polling the same thing on a 1s timer, each with its own slightly-different copy of "is it connected?", so a fix in one place silently misses the others. Reference implementation: `CompanionRegistry` (the one source of truth for companion devices — discovery, gRPC links, CA push, capture heartbeats, the blocked-network hint), read by `AppModel`, `NetworkSession`, and every companion view.
+
+Rules to follow when this kind of state shows up:
+
+1. **One owner, many readers.** Put cross-cutting state in a single `@Observable` model and expose it (or a small derived view of it) to whoever needs it. New flows read the owner; they don't keep their own copy. A per-feature `FooModel` still owns its own area's state — this is about state that genuinely spans features.
+2. **Reactive, never polled.** A view reads the observable property directly in its `body` (or via a computed that reads it), so SwiftUI re-renders the moment it changes — across object boundaries too (`session.companionLinked` → `registry.devices`). Reach for a `.task { while … sleep }` loop only for time itself (a clock, a timeout), never to discover state that's already observable. If you're writing a poll loop to read model state, the state is in the wrong place.
+3. **Derive once, in the model.** Coarse display state (a `phase` enum, a "needs setup" flag) belongs on the model as a computed/struct field, not recomputed in each view. See `CompanionDeviceState.phase`.
+4. **Callbacks flow inward, then stop.** Transport/services (`Core/`) surface raw events via closures to the one model that owns the domain; that model updates its observable state and the UI follows. Views don't subscribe to services directly, and services don't know about views.
+5. **Clean layering still holds.** `Core/` (no SwiftUI: processes, sockets, parsing) → `Model/` (`@Observable` state + orchestration) → `Features/` (thin views). Keep pure logic in free functions/enums and unit-test it (per the Testability convention) rather than through the UI.
+
+When you catch yourself adding the same `@State` + poll + validation to a second view, stop and lift that state into its shared owner instead.

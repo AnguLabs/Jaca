@@ -4,3 +4,7 @@
 
 # Sidecar recording the bundled APK's commit hash (written by build-mobile.sh)
 *.apk.version
+
+# In-process Android agent, copied in by build.sh from agent/out (build artifact).
+libsqueezeagent.so
+*.dex
