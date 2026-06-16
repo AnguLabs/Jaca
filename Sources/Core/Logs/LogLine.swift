@@ -64,6 +64,11 @@ struct LogLine: Identifiable, Sendable, Hashable {
     var isMarker: Bool = false
     /// A marker that should stand out in red (e.g. a crash).
     var markerCritical: Bool = false
+    /// Captured from the app's stdout/stderr (simulator `--console-pty`, i.e.
+    /// `print()`/`println`) rather than the unified log. Such lines carry no pid,
+    /// so they're exempt from the package PID filter — they're app-scoped by
+    /// construction (we launched exactly that bundle).
+    var isConsoleOutput: Bool = false
 
     var id: UInt64 { seq }
 

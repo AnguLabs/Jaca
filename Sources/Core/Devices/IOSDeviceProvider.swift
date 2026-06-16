@@ -19,8 +19,15 @@ enum IOSDeviceParser {
                 ?? (hardware?["marketingName"] as? String)
                 ?? (hardware?["productType"] as? String)
                 ?? "iOS Device"
+            // devicectl establishes the device tunnel lazily: a plugged-in, paired
+            // device reports tunnelState "disconnected" until something actively
+            // talks to it. Log streaming goes through usbmuxd (idevicesyslog), which
+            // doesn't need that tunnel — so the device is usable unless devicectl
+            // reports it explicitly unavailable (gone) or unpaired (untrusted).
             let tunnel = (connection?["tunnelState"] as? String)?.lowercased()
-            let state: DeviceState = (tunnel == "connected" || tunnel == "available") ? .connected : .offline
+            let pairing = (connection?["pairingState"] as? String)?.lowercased()
+            let unusable = tunnel == "unavailable" || pairing == "unpaired"
+            let state: DeviceState = unusable ? .offline : .connected
 
             out.append(Device(id: udid, platform: .iosDevice, model: name, state: state))
         }

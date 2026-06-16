@@ -39,7 +39,7 @@ final class LiveAndroidTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: url) }
 
         let session = LogSession(
-            device: ready, makeSource: { AndroidLogSource(adbURL: adb, serial: ready.id) }, adbURL: adb,
+            device: ready, makeSource: { _ in AndroidLogSource(adbURL: adb, serial: ready.id) }, adbURL: adb,
             onPersist: { sid, lines in Task { await store.appendLines(sessionID: sid, lines) } }
         )
         await store.beginSession(id: session.id, device: ready, package: "", displayName: "live")

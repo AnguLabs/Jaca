@@ -79,6 +79,10 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.srsouza.Jaca
         PRODUCT_NAME: Jaca
+        # Small Objective-C bridge for physical-device structured logs (LoggingSupport
+        # private API). See Sources/Core/Logs/JacaOSLog.{h,m} + investigate-loggingsupport skill.
+        SWIFT_OBJC_BRIDGING_HEADER: Sources/Jaca-Bridging-Header.h
+        CLANG_ENABLE_OBJC_ARC: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.developer-tools"
@@ -90,6 +94,25 @@ targets:
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: "Jaca finds and connects to companion devices on your local network to capture their traffic."
         COMBINE_HIDPI_IMAGES: YES
     postBuildScripts:
+      # Compile the in-process iOS-Simulator network agent (arm64) into the app's
+      # Resources. It's an iphonesimulator dylib (different platform from this macOS
+      # app), so it's built with clang here rather than as a linked target. Injected
+      # into debug apps via DYLD_INSERT_LIBRARIES — see Sources/Core/Network/
+      # IOSSimulatorAgentController.swift + the reverse-engineer-apple-private-api skill.
+      # Runs before Xcode's final code-sign, so it's covered by the app signature.
+      - name: Build iOS Simulator network agent
+        basedOnDependencyAnalysis: false
+        script: |
+          SRC="$SRCROOT/agent/iOS/JacaNetAgent.m"
+          OUT="$BUILT_PRODUCTS_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/JacaNetAgent.dylib"
+          mkdir -p "$(dirname "$OUT")"
+          if ! xcrun -sdk iphonesimulator clang -dynamiclib -fobjc-arc \
+               -target arm64-apple-ios15.0-simulator -framework Foundation \
+               -o "$OUT" "$SRC"; then
+            echo "error: failed to build the iOS-Simulator network agent (JacaNetAgent.dylib)." >&2
+            echo "error: it needs the iOS Simulator SDK — install it in Xcode > Settings > Components (iOS platform), then rebuild." >&2
+            exit 1
+          fi
       # Records where this build came from + which commit it built, so the in-app
       # updater can compare against origin/main and pull/rebuild. Written to a
       # sidecar (not the bundle) so it never invalidates the ad-hoc code signature.

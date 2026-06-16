@@ -26,7 +26,7 @@ enum AgentArtifacts {
 
     static var isAvailable: Bool { soURL() != nil && bootDexURL != nil && captureDexURL != nil }
 
-    /// Shown when the agent isn't bundled — a dev tool, so it's explicit about how to build it.
+    /// Shown when the Android agent isn't bundled — a dev tool, so it's explicit about how to build it.
     static let missingMessage = """
         The in-process agent isn't built into this app. Build it on macOS:
 
@@ -36,5 +36,17 @@ enum AgentArtifacts {
 
         Then relaunch Jaca. The agent needs the Android NDK/CMake + Kotlin; the app builds \
         without it, which is why this option was unavailable.
+        """
+
+    /// The iOS-Simulator network agent dylib, built into Resources by the "Build iOS Simulator
+    /// network agent" build phase and injected via DYLD_INSERT_LIBRARIES. Bundle-only (no
+    /// hardcoded source path) — the build phase always produces it when building with Xcode.
+    static var iosNetworkAgentURL: URL? { Bundle.main.url(forResource: "JacaNetAgent", withExtension: "dylib") }
+    static var iosNetworkAgentAvailable: Bool { iosNetworkAgentURL != nil }
+
+    /// Shown when the iOS-Simulator agent dylib isn't bundled (it builds with the app via Xcode).
+    static let iosMissingMessage = """
+        The iOS-Simulator network agent isn't bundled. It builds with the app — rebuild with \
+        ./scripts/build.sh (a full Xcode is required), then relaunch Jaca.
         """
 }

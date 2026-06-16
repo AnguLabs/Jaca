@@ -1,11 +1,13 @@
 import Foundation
 
 /// Parses an `idevicesyslog` line into a `LogLine`.
-/// Format: `Mon DD HH:MM:SS DeviceName process(Lib)[pid] <Level>: message`
+/// Format: `Mon DD HH:MM:SS.ffffff process(Lib)[pid] <Level>: message`
+/// (current libimobiledevice emits a sub-second fraction and no hostname; the
+/// process name itself can contain spaces, e.g. `Teya Dev(Security)`).
 enum IOSSyslogParser {
-    // month(1) day(2) time(3) host(4) process(5) pid(6) level(7) message(8)
+    // month(1) day(2) time(3) [optional .fraction] process(4) pid(5) level(6) message(7)
     private static let regex = try! NSRegularExpression(
-        pattern: #"^(\w{3})\s+(\d+)\s+(\d{2}:\d{2}:\d{2})\s+(\S+)\s+(.+?)\[(\d+)\]\s+<(\w+)>:\s?(.*)$"#
+        pattern: #"^(\w{3})\s+(\d+)\s+(\d{2}:\d{2}:\d{2})(?:\.\d+)?\s+(.+?)\[(\d+)\]\s+<(\w+)>:\s?(.*)$"#
     )
 
     private static let formatter: DateFormatter = {
@@ -24,15 +26,15 @@ enum IOSSyslogParser {
         }
         let y = year ?? Calendar.current.component(.year, from: Date())
         let timestamp = formatter.date(from: "\(y) \(g(1)) \(g(2)) \(g(3))") ?? Date()
-        let process = g(5)
+        let process = g(4)
         return LogLine(
             seq: 0,
             timestamp: timestamp,
-            level: mapLevel(g(7)),
+            level: mapLevel(g(6)),
             tag: process,
-            pid: Int32(g(6)) ?? 0,
+            pid: Int32(g(5)) ?? 0,
             tid: 0,
-            message: g(8),
+            message: g(7),
             raw: raw,
             processName: process
         )

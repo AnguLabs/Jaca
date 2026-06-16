@@ -63,8 +63,12 @@ final class NetworkSession: WorkspaceTab, CaptureSink {
     /// The chosen source kind, defaulting to proxy before a choice is made.
     var captureMode: CaptureMode { currentDescriptor?.kind ?? .proxy }
 
-    /// In-process agent capture is Android-only and needs the bundled agent artifacts.
-    var agentAvailable: Bool { device.platform == .android && AgentArtifacts.isAvailable }
+    /// In-process agent capture: Android (bundled .so/.dex) or the iOS Simulator (injected
+    /// JacaNetAgent dylib) — no proxy/CA for either.
+    var agentAvailable: Bool {
+        (device.platform == .android && AgentArtifacts.isAvailable)
+            || (device.platform == .iosSimulator && AgentArtifacts.iosNetworkAgentAvailable)
+    }
     var isAndroid: Bool { device.platform == .android }
 
     /// A real ADB-connected Android device, not a companion-only entry. Proxy capture, the

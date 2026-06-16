@@ -13,13 +13,24 @@ enum CaptureSourceRegistry {
         id: "agent", kind: .agent,
         title: "In-process agent",
         detail: "Inspect one debuggable app in-process — no proxy or CA, with call stacks.",
-        // Offered for any debuggable-capable Android device. Whether the agent is actually built
-        // into the app is checked in the precheck, so a missing agent fails with install steps
-        // instead of silently disappearing from the chooser.
-        isAvailable: { device, _ in device.platform == .android && !device.isCompanion },
+        // Offered for a debuggable Android device or any iOS Simulator. Whether the agent is
+        // actually built/bundled is checked in the precheck, so a missing agent fails with build
+        // instructions instead of silently disappearing from the chooser.
+        isAvailable: { device, _ in
+            (device.platform == .android && !device.isCompanion) || device.platform == .iosSimulator
+        },
         needsPackage: true,
-        precheck: { ctx in await AgentCaptureSource.precheck(device: ctx.device, adbURL: ctx.adbURL, package: ctx.targetPackage) },
-        make: { ctx in AgentCaptureSource(adbURL: ctx.adbURL, serial: ctx.device.id, package: ctx.targetPackage ?? "") },
+        precheck: { ctx in
+            ctx.device.platform == .iosSimulator
+                ? await IOSSimulatorAgentCaptureSource.precheck(device: ctx.device, bundleID: ctx.targetPackage)
+                : await AgentCaptureSource.precheck(device: ctx.device, adbURL: ctx.adbURL, package: ctx.targetPackage)
+        },
+        make: { ctx -> CaptureSource in
+            if ctx.device.platform == .iosSimulator {
+                return IOSSimulatorAgentCaptureSource(device: ctx.device, bundleID: ctx.targetPackage ?? "")
+            }
+            return AgentCaptureSource(adbURL: ctx.adbURL, serial: ctx.device.id, package: ctx.targetPackage ?? "")
+        },
     )
 
     static let companion = CaptureSourceDescriptor(

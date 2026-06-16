@@ -349,16 +349,32 @@ final class AppModel {
         // A factory (not a fixed instance) so the session can re-spawn the tool to
         // auto-reconnect after a device/stream drop.
         let adb = adbURL
-        let makeSource: @Sendable () -> LogSource? = {
+        let makeSource: @Sendable (String) -> LogSource? = { bundleID in
             switch device.platform {
             case .android: return adb.map { AndroidLogSource(adbURL: $0, serial: device.id) }
             case .iosSimulator: return SimulatorLogSource(udid: device.id)
-            case .iosDevice: return IOSDeviceLogSource(udid: device.id)
+            case .iosDevice:
+                // Structured logs (level · subsystem · category) via Apple's private
+                // LoggingSupport engine (OSActivityStream) — the Xcode/Console-grade
+                // stream. `bundleID` here is the selected app's process/display name and
+                // narrows the whole-device stream to that app (empty = whole device).
+                // Falls back to idevicesyslog internally if the private API is unavailable.
+                return IOSDeviceOSLogSource(udid: device.id, processFilter: bundleID)
             }
         }
+        // Simulators can additionally stream the targeted app's stdout (`print()`),
+        // which OSLog can't see, by launching it under a PTY. Other platforms have
+        // no stdout tap, so they get no console source.
+        let simulatorConsole: @Sendable (String) -> LogSource? = { bundleID -> LogSource? in
+            guard !bundleID.isEmpty else { return nil }
+            return SimulatorConsoleLogSource(udid: device.id, bundleID: bundleID)
+        }
+        let makeConsoleSource: (@Sendable (String) -> LogSource?)? =
+            device.platform == .iosSimulator ? simulatorConsole : nil
         let session = LogSession(
             device: device, makeSource: makeSource, adbURL: toolURL,
             filter: filter, displayName: name,
+            makeConsoleSource: makeConsoleSource,
             onPersist: { sid, lines in
                 Task { await store?.appendLines(sessionID: sid, lines) }
             }

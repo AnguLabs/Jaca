@@ -88,8 +88,19 @@ final class LogSession: WorkspaceTab {
         return parts.joined(separator: " · ")
     }
 
-    private let makeSource: @Sendable () -> LogSource?
+    /// Builds the primary source for the current target. The bundle id matters only
+    /// for physical iOS, where an empty id streams the whole-device syslog and a
+    /// real id launches that app under devicectl's console (full, un-redacted logs).
+    private let makeSource: @Sendable (_ bundleID: String) -> LogSource?
     private var source: LogSource?
+    /// Set when the primary source is being swapped on purpose (iOS app-target
+    /// change), so the reconnect loop skips the "stream lost" warning.
+    private var swappingSource = false
+    /// Optional secondary source that captures the targeted app's stdout/print
+    /// (simulator `--console-pty`). Built per-bundle, so it's a factory taking the
+    /// current package; nil on platforms without a stdout tap (Android, real iOS).
+    private let makeConsoleSource: (@Sendable (_ bundleID: String) -> LogSource?)?
+    private var consoleSource: LogSource?
     private let seq = SeqCounter()
     let adbURL: URL
     private let onPersist: (@Sendable (UUID, [LogLine]) -> Void)?
@@ -113,17 +124,20 @@ final class LogSession: WorkspaceTab {
     private var consumeTask: Task<Void, Never>?
     private var flushTask: Task<Void, Never>?
     private var pidTask: Task<Void, Never>?
+    private var consoleTask: Task<Void, Never>?
 
     init(
         device: Device,
-        makeSource: @escaping @Sendable () -> LogSource?,
+        makeSource: @escaping @Sendable (_ bundleID: String) -> LogSource?,
         adbURL: URL,
         filter: LogFilter = LogFilter(),
         displayName: String? = nil,
+        makeConsoleSource: (@Sendable (_ bundleID: String) -> LogSource?)? = nil,
         onPersist: (@Sendable (UUID, [LogLine]) -> Void)? = nil
     ) {
         self.device = device
         self.makeSource = makeSource
+        self.makeConsoleSource = makeConsoleSource
         self.adbURL = adbURL
         self.filter = filter
         self.onPersist = onPersist
@@ -140,6 +154,7 @@ final class LogSession: WorkspaceTab {
         onStarted?()
         startFlushLoop()
         restartPIDPollingIfNeeded()
+        restartConsoleCaptureIfNeeded()
         consumeTask = Task.detached(priority: .utility) { [weak self] in
             await self?.consumeLoop()
         }
@@ -163,6 +178,9 @@ final class LogSession: WorkspaceTab {
             }
             // stream ended
             guard await isRunning, !Task.isCancelled else { break }
+            // A deliberate source swap (iOS app-target change) just stopped the old
+            // source — reconnect immediately with the new target, no "lost" warning.
+            if await takeSwappingSource() { continue }
             injectMarker("✕ log stream to \(device.displayModel) lost — reconnecting…")
             disconnected = true
             try? await Task.sleep(for: .seconds(1))
@@ -170,9 +188,15 @@ final class LogSession: WorkspaceTab {
     }
 
     private func openStream() -> AsyncStream<LogLine>? {
-        let s = makeSource()
+        let s = makeSource(filter.packageLabel)
         source = s
         return try? s?.start()
+    }
+
+    /// Consumes the intentional-swap flag (so the reconnect loop can tell a deliberate
+    /// source switch from a real disconnect). Main-actor; called via `await`.
+    private func takeSwappingSource() -> Bool {
+        let v = swappingSource; swappingSource = false; return v
     }
 
     /// Injects a synthetic, always-visible marker line (thread-safe; callable off-main).
@@ -209,9 +233,11 @@ final class LogSession: WorkspaceTab {
         guard isRunning else { return }
         isRunning = false
         source?.stop(); source = nil
+        consoleSource?.stop(); consoleSource = nil
         consumeTask?.cancel(); consumeTask = nil
         flushTask?.cancel(); flushTask = nil
         pidTask?.cancel(); pidTask = nil
+        consoleTask?.cancel(); consoleTask = nil
         flush(max: .max)  // drain everything that's left
     }
 
@@ -321,12 +347,27 @@ final class LogSession: WorkspaceTab {
                 $0.pids = package.isEmpty ? nil : []
                 $0.processNameQuery = ""
             case .iosDevice:
-                // No easy pid map for physical devices — substring on process/subsystem.
-                $0.processNameQuery = package
+                // The structured (LoggingSupport) source narrows to the targeted app's
+                // process itself, so no per-line LogFilter process query is needed; the
+                // label is the app's process/display name.
+                $0.processNameQuery = ""
                 $0.pids = nil
             }
         }
         restartPIDPollingIfNeeded()
+        restartConsoleCaptureIfNeeded()
+        restartPrimaryForTargetChange()
+    }
+
+    /// Physical iOS re-scopes its *primary* structured source when the targeted app
+    /// changes (unlike Android/simulator, which keep one source and filter/launch-console
+    /// on top): an empty target streams the whole device, a name scopes to that app's
+    /// process. Stopping the current source lets the reconnect loop respawn with the new
+    /// scope; the source emits its own "▶︎ structured device logs (…)" marker.
+    private func restartPrimaryForTargetChange() {
+        guard isRunning, device.platform == .iosDevice else { return }
+        swappingSource = true
+        source?.stop()
     }
 
     private func mutateFilter(_ change: (inout LogFilter) -> Void) {
@@ -445,6 +486,31 @@ final class LogSession: WorkspaceTab {
                     self.recomputeVisible()
                 }
                 try? await Task.sleep(for: .milliseconds(1500))
+            }
+        }
+    }
+
+    /// Simulator stdout/print capture: when a bundle is targeted, launch it under a
+    /// PTY (`simctl launch --console-pty`) and fold its stdout/stderr — the only place
+    /// `print()`/`println` output appears — into this session alongside the OSLog
+    /// stream. Re-targets when the package changes; (re)launches the app each time, by
+    /// design. No-op on platforms without a stdout tap (`makeConsoleSource == nil`).
+    private func restartConsoleCaptureIfNeeded() {
+        consoleTask?.cancel(); consoleTask = nil
+        consoleSource?.stop(); consoleSource = nil
+        guard isRunning, let make = makeConsoleSource else { return }
+        let bundle = filter.packageLabel
+        guard !bundle.isEmpty, let src = make(bundle) else { return }
+        guard let stream = try? src.start() else {
+            injectMarker("✕ couldn’t launch \(bundle) for stdout/print capture")
+            return
+        }
+        consoleSource = src
+        injectMarker("▶︎ capturing stdout/print from \(bundle) (app relaunched)")
+        let buffer = pending, counter = seq
+        consoleTask = Task.detached(priority: .utility) {
+            for await line in stream {
+                var l = line; l.seq = counter.next(); buffer.append(l)
             }
         }
     }

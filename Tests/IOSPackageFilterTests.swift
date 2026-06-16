@@ -55,8 +55,16 @@ final class IOSPackageFilterTests: XCTestCase {
         // The app's process logs continuously (incl. com.apple.network); filtered lines should appear.
         let got = await waitUntil(25) { session.visible.contains { !$0.isMarker } }
         XCTAssertTrue(got, "no logs shown for \(pkg) — the iOS pid filter isn't matching")
-        if let line = session.visible.first(where: { !$0.isMarker }) {
-            XCTAssertTrue(pids.contains(line.pid), "shown line pid \(line.pid) not in app pids \(pids)")
+
+        // Selecting a package on a simulator also starts stdout/print capture, which
+        // (re)launches the app under a PTY — so the pre-resolved `pids` may be stale.
+        // Re-resolve and assert every shown *OSLog* line belongs to the app's pid;
+        // console (stdout/print) lines are app output by construction (they carry no
+        // pid and are exempt from the pid filter), so they're allowed through.
+        let livePids = pids.union(await SimulatorLogSource.resolvePIDs(udid: sim.id, bundleID: pkg))
+        for line in session.visible where !line.isMarker && !line.isConsoleOutput {
+            XCTAssertTrue(livePids.contains(line.pid),
+                          "shown OSLog line pid \(line.pid) not in app pids \(livePids)")
         }
         model.closeSession(session.id)
     }

@@ -134,10 +134,19 @@ final class StreamingProcess: @unchecked Sendable {
         return stream
     }
 
-    /// Terminates the process (SIGTERM) and finishes the stream. Idempotent.
+    /// Terminates the process and finishes the stream. Idempotent.
+    /// SIGTERM, then SIGKILL after a short grace period: some tools (notably
+    /// `idevicesyslog`) can ignore SIGTERM, and a survivor keeps holding the
+    /// device's single syslog-relay connection — starving every later stream
+    /// until it's killed. The escalation is a no-op for tools that exit cleanly.
     func stop() {
-        if process.isRunning {
-            process.terminate()
+        let p = process
+        if p.isRunning {
+            p.terminate()
+            let pid = p.processIdentifier
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.5) {
+                if p.isRunning { kill(pid, SIGKILL) }
+            }
         }
         finish()
     }

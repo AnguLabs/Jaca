@@ -38,7 +38,9 @@ struct LogFilter: Sendable, Equatable {
         if !exclusions.isEmpty, exclusions.contains(where: { $0.excludes(line.message) }) { return false }
         if hideSystemLogs, line.tag.hasPrefix("com.apple") { return false }
         if line.level < minLevel { return false }
-        if let pids, !pids.contains(line.pid) { return false }
+        // Console (stdout/print) lines carry no pid but belong to the targeted app
+        // by construction, so the package PID filter never hides them.
+        if let pids, !line.isConsoleOutput, !pids.contains(line.pid) { return false }
         if !processNameQuery.isEmpty {
             let process = line.processName ?? ""
             if process.range(of: processNameQuery, options: .caseInsensitive) == nil,
