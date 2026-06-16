@@ -71,10 +71,20 @@ final class NetworkSession: WorkspaceTab, CaptureSink {
     }
     var isAndroid: Bool { device.platform == .android }
 
-    /// A real ADB-connected Android device, not a companion-only entry. Proxy capture, the
-    /// agent, the app picker, and adb-driven CA install only work here — a companion-only
-    /// device has no adb path, so none of those apply to it.
+    /// A real ADB-connected Android device, not a companion-only entry. Proxy capture and
+    /// adb-driven CA install only work here — a companion-only device has no adb path, so
+    /// none of those apply to it.
     var isADBDevice: Bool { device.platform == .android && !device.isCompanion && adbURL != nil }
+
+    /// Whether to offer the per-app in-process agent picker. True for a real ADB Android
+    /// device (run-as attach) and for an iOS Simulator (DYLD-injected agent) when the agent
+    /// is bundled — both pick one app to inspect in-process. A companion-only device has no
+    /// agent path, so it's excluded. Replaces the old Android-only `isADBDevice` gate so the
+    /// iOS-Simulator agent gets the picker too.
+    var canPickAgentApp: Bool {
+        guard agentAvailable else { return false }
+        return isADBDevice || device.platform == .iosSimulator
+    }
 
     /// Whether the toolbar's proxy "Setup" affordance is relevant: only for a real ADB
     /// device actively capturing via the MITM proxy. Companion and agent modes need no

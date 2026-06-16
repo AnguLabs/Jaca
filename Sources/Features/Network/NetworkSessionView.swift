@@ -141,7 +141,7 @@ struct NetworkSessionView: View {
                                     .frame(maxWidth: 420)
                             }
                         }
-                    } else if !session.agentAvailable {
+                    } else if !session.agentAvailable && session.device.platform != .iosSimulator {
                         LemonadeUi.Text("Install the Jaca mobile app on this device to capture its traffic, then it appears here automatically.",
                                         textStyle: LemonadeTypography.shared.bodySmallRegular,
                                         textAlign: .center,
@@ -149,7 +149,7 @@ struct NetworkSessionView: View {
                             .frame(maxWidth: 420)
                     }
 
-                    if session.agentAvailable && session.isADBDevice {
+                    if session.canPickAgentApp {
                         if hasCompanion {
                             LemonadeUi.Text("— or —",
                                             textStyle: LemonadeTypography.shared.bodyXSmallOverline,
@@ -214,7 +214,7 @@ struct NetworkSessionView: View {
 
             LemonadeUi.IconButton(icon: .trash, contentDescription: "Clear") { session.clear() }
 
-            if session.isADBDevice {
+            if session.canPickAgentApp {
                 NetworkAppPicker(session: session)
             }
 
@@ -397,7 +397,7 @@ private struct NetworkAppPicker: View {
                 .fill(LemonadeTheme.colors.background.bgNeutralSubtle))
         }
         .buttonStyle(.plain)
-        .help("Choose a debuggable app to inspect in-process (agent), or the whole device (proxy)")
+        .help("Choose an app to inspect in-process with the agent")
         .accessibilityIdentifier("netAppPicker")
         .popover(isPresented: $show, arrowEdge: .bottom) { popover }
     }
@@ -428,8 +428,13 @@ private struct NetworkAppPicker: View {
             Rectangle().fill(LemonadeTheme.colors.border.borderNeutralLow).frame(height: 1)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    row(title: "Whole device (companion)", subtitle: "capture all apps via the Jaca mobile app",
-                        debug: false, selected: session.targetPackage == nil) { select(nil) }
+                    // The whole-device fallback is the companion stream; only offer it when
+                    // companion is actually available (it respects the feature flag, and an iOS
+                    // Simulator has no companion — there the agent always needs a chosen app).
+                    if session.availableSources.contains(where: { $0.kind == .companion }) {
+                        row(title: "Whole device (companion)", subtitle: "capture all apps via the Jaca mobile app",
+                            debug: false, selected: session.targetPackage == nil) { select(nil) }
+                    }
                     if isLoading && appList.isEmpty {
                         ProgressView().padding(LemonadeTheme.spaces.spacing400).frame(maxWidth: .infinity)
                     }
