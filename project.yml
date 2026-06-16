@@ -67,6 +67,10 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.srsouza.Jaca
         PRODUCT_NAME: Jaca
+        # Small Objective-C bridge for physical-device structured logs (LoggingSupport
+        # private API). See Sources/Core/Logs/JacaOSLog.{h,m} + investigate-loggingsupport skill.
+        SWIFT_OBJC_BRIDGING_HEADER: Sources/Jaca-Bridging-Header.h
+        CLANG_ENABLE_OBJC_ARC: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.developer-tools"

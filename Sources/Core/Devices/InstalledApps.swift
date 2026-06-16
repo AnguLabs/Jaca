@@ -14,7 +14,7 @@ enum InstalledApps {
         switch device.platform {
         case .android:      return await android(adbURL: adbURL, serial: device.id)
         case .iosSimulator: return await simulator(udid: device.id)
-        case .iosDevice:    return []   // devicectl app listing isn't reliable across versions
+        case .iosDevice:    return await iosDevice(udid: device.id)
         }
     }
 
@@ -38,6 +38,44 @@ enum InstalledApps {
                 environment: AppleToolchain.environment()
               ) else { return [] }
         return SimulatorAppsParser.parse(Data(result.stdout.utf8))
+    }
+
+    // MARK: iOS Device
+
+    private static func iosDevice(udid: String) async -> [AppEntry] {
+        guard AppleToolchain.hasFullXcode else { return [] }
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("jaca-devicectl-apps-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        guard (try? await CommandRunner.run(
+            AppleToolchain.xcrun,
+            ["devicectl", "device", "info", "apps", "--device", udid, "--json-output", tmp.path],
+            environment: AppleToolchain.environment()
+        )) != nil, let data = try? Data(contentsOf: tmp) else { return [] }
+        return IOSAppsParser.parse(data)
+    }
+}
+
+/// Parses `devicectl device info apps --json-output` into app entries.
+/// devicectl lists only user-installed apps by default, so the list is already
+/// scoped to what you'd want to filter by.
+enum IOSAppsParser {
+    static func parse(_ data: Data) -> [AppEntry] {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [] }
+        let result = root["result"] as? [String: Any]
+        let list = (result?["apps"] as? [[String: Any]]) ?? (root["apps"] as? [[String: Any]]) ?? []
+
+        var seen = Set<String>()
+        var entries: [AppEntry] = []
+        for app in list {
+            guard let id = app["bundleIdentifier"] as? String, !id.isEmpty,
+                  seen.insert(id).inserted else { continue }
+            let name = app["name"] as? String
+            // Removable apps are user-installed; built-in/system apps aren't.
+            let isUser = (app["removable"] as? Bool) ?? true
+            entries.append(AppEntry(id: id, name: name, isUserApp: isUser))
+        }
+        return sortUserFirst(entries)
     }
 }
 
