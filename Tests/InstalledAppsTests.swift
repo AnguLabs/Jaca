@@ -40,4 +40,21 @@ final class InstalledAppsTests: XCTestCase {
         XCTAssertEqual(safari?.name, "Safari")
         XCTAssertEqual(safari?.isUserApp, false)
     }
+
+    func testIOSDeviceDevicectlAppsParsing() {
+        let json = #"""
+        {"result":{"apps":[
+          {"bundleIdentifier":"com.apple.Preferences","name":"Settings","removable":false},
+          {"bundleIdentifier":"com.teya.ac","name":"Teya","removable":true,"builtByDeveloper":true},
+          {"bundleIdentifier":"com.teya.ac","name":"Teya (dup)","removable":true}
+        ]}}
+        """#
+        let entries = IOSAppsParser.parse(Data(json.utf8))
+        XCTAssertEqual(entries.count, 2)                        // duplicate bundle id dropped
+        XCTAssertEqual(entries.first?.id, "com.teya.ac")        // user app sorts first
+        XCTAssertEqual(entries.first?.name, "Teya")
+        XCTAssertTrue(entries.first?.isUserApp == true)
+        let settings = entries.first { $0.id == "com.apple.Preferences" }
+        XCTAssertEqual(settings?.isUserApp, false)              // non-removable → system
+    }
 }

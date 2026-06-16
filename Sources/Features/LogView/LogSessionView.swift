@@ -358,11 +358,11 @@ private struct PackagePicker: View {
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
-                        row(title: "All processes", subtitle: nil, isUser: false) { select("") }
+                        row(title: "All processes", subtitle: nil, isUser: false) { select(nil) }
                         ForEach(filtered) { app in
                             row(title: app.display,
                                 subtitle: app.name != nil ? app.id : nil,
-                                isUser: app.isUserApp) { select(app.id) }
+                                isUser: app.isUserApp) { select(app) }
                         }
                     }
                 }
@@ -410,11 +410,20 @@ private struct PackagePicker: View {
         }
     }
 
-    private func select(_ id: String) {
+    private func select(_ app: AppEntry?) {
         // Dismiss the popover first, then apply the filter on the next runloop —
         // mutating ancestor state while the popover tears down can crash on macOS.
         show = false
-        DispatchQueue.main.async { onSelect(id) }
+        // Android & simulator resolve the package/bundle id to PIDs. Physical iOS
+        // streams structured os_log and scopes by the app's *process name* (the
+        // display name), so pass that there. `nil` = "All processes".
+        let value: String
+        if let app {
+            value = session.device.platform == .iosDevice ? app.display : app.id
+        } else {
+            value = ""
+        }
+        DispatchQueue.main.async { onSelect(value) }
     }
 }
 

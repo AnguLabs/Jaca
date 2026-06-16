@@ -14,7 +14,7 @@ final class LogConnectTests: XCTestCase {
 
     func testSetPackageTriggersImmediatePersist() {
         let device = Device(id: "dev", platform: .android, model: "M", state: .connected)
-        let session = LogSession(device: device, makeSource: { nil },
+        let session = LogSession(device: device, makeSource: { _ in nil },
                                  adbURL: URL(fileURLWithPath: "/usr/bin/true"))
         var saves = 0
         session.onStateChanged = { saves += 1 }
@@ -29,7 +29,7 @@ final class LogConnectTests: XCTestCase {
         let adb = try XCTUnwrap(AndroidToolchain.adbURL(), "adb not found")
         let device = Device(id: "no-such-device-zzz", platform: .android, model: "Ghost", state: .connected)
         let session = LogSession(device: device,
-                                 makeSource: { AndroidLogSource(adbURL: adb, serial: device.id) },
+                                 makeSource: { _ in AndroidLogSource(adbURL: adb, serial: device.id) },
                                  adbURL: adb)
 
         session.connect()

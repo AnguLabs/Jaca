@@ -84,8 +84,14 @@ final class LogSession: WorkspaceTab {
         return parts.joined(separator: " · ")
     }
 
-    private let makeSource: @Sendable () -> LogSource?
+    /// Builds the primary source for the current target. The bundle id matters only
+    /// for physical iOS, where an empty id streams the whole-device syslog and a
+    /// real id launches that app under devicectl's console (full, un-redacted logs).
+    private let makeSource: @Sendable (_ bundleID: String) -> LogSource?
     private var source: LogSource?
+    /// Set when the primary source is being swapped on purpose (iOS app-target
+    /// change), so the reconnect loop skips the "stream lost" warning.
+    private var swappingSource = false
     /// Optional secondary source that captures the targeted app's stdout/print
     /// (simulator `--console-pty`). Built per-bundle, so it's a factory taking the
     /// current package; nil on platforms without a stdout tap (Android, real iOS).
@@ -118,7 +124,7 @@ final class LogSession: WorkspaceTab {
 
     init(
         device: Device,
-        makeSource: @escaping @Sendable () -> LogSource?,
+        makeSource: @escaping @Sendable (_ bundleID: String) -> LogSource?,
         adbURL: URL,
         filter: LogFilter = LogFilter(),
         displayName: String? = nil,
@@ -168,6 +174,9 @@ final class LogSession: WorkspaceTab {
             }
             // stream ended
             guard await isRunning, !Task.isCancelled else { break }
+            // A deliberate source swap (iOS app-target change) just stopped the old
+            // source — reconnect immediately with the new target, no "lost" warning.
+            if await takeSwappingSource() { continue }
             injectMarker("✕ log stream to \(device.displayModel) lost — reconnecting…")
             disconnected = true
             try? await Task.sleep(for: .seconds(1))
@@ -175,9 +184,15 @@ final class LogSession: WorkspaceTab {
     }
 
     private func openStream() -> AsyncStream<LogLine>? {
-        let s = makeSource()
+        let s = makeSource(filter.packageLabel)
         source = s
         return try? s?.start()
+    }
+
+    /// Consumes the intentional-swap flag (so the reconnect loop can tell a deliberate
+    /// source switch from a real disconnect). Main-actor; called via `await`.
+    private func takeSwappingSource() -> Bool {
+        let v = swappingSource; swappingSource = false; return v
     }
 
     /// Injects a synthetic, always-visible marker line (thread-safe; callable off-main).
@@ -328,13 +343,27 @@ final class LogSession: WorkspaceTab {
                 $0.pids = package.isEmpty ? nil : []
                 $0.processNameQuery = ""
             case .iosDevice:
-                // No easy pid map for physical devices — substring on process/subsystem.
-                $0.processNameQuery = package
+                // The structured (LoggingSupport) source narrows to the targeted app's
+                // process itself, so no per-line LogFilter process query is needed; the
+                // label is the app's process/display name.
+                $0.processNameQuery = ""
                 $0.pids = nil
             }
         }
         restartPIDPollingIfNeeded()
         restartConsoleCaptureIfNeeded()
+        restartPrimaryForTargetChange()
+    }
+
+    /// Physical iOS re-scopes its *primary* structured source when the targeted app
+    /// changes (unlike Android/simulator, which keep one source and filter/launch-console
+    /// on top): an empty target streams the whole device, a name scopes to that app's
+    /// process. Stopping the current source lets the reconnect loop respawn with the new
+    /// scope; the source emits its own "▶︎ structured device logs (…)" marker.
+    private func restartPrimaryForTargetChange() {
+        guard isRunning, device.platform == .iosDevice else { return }
+        swappingSource = true
+        source?.stop()
     }
 
     private func mutateFilter(_ change: (inout LogFilter) -> Void) {
