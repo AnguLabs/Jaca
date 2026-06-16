@@ -39,13 +39,18 @@ final class NetworkSession: WorkspaceTab {
     /// shows the mode chooser instead of silently turning on the proxy.
     private(set) var hasSelectedMode = false
 
-    /// In-process agent capture is Android-only and needs the bundled agent artifacts.
-    var agentAvailable: Bool { device.platform == .android && AgentArtifacts.isAvailable }
+    /// In-process agent capture: Android (bundled .so/.dex) or iOS Simulator (injected
+    /// JacaNetAgent dylib). No proxy/CA for either.
+    var agentAvailable: Bool {
+        (device.platform == .android && AgentArtifacts.isAvailable)
+            || (device.platform == .iosSimulator && AgentArtifacts.iosNetworkAgentAvailable)
+    }
 
     let ca: CertificateAuthority
     private let adbURL: URL?
     private var proxy: ProxyServer?
     private var agent: AgentController?
+    private var iosAgent: IOSSimulatorAgentController?
     private var indexByID: [UUID: Int] = [:]
     private let bodyCache: NetworkBodyCache?
     /// Full request/response bodies stay in memory for the most recent N transactions;
@@ -169,12 +174,30 @@ final class NetworkSession: WorkspaceTab {
         case .proxy:
             startProxy()
         case .agent:
-            guard let adbURL, let pkg = targetPackage, !pkg.isEmpty, AgentArtifacts.isAvailable else {
+            guard let pkg = targetPackage, !pkg.isEmpty else {
                 isRunning = false
-                statusMessage = "The in-process agent isn’t available for this app."
+                statusMessage = "Pick an app to inspect."
                 return
             }
-            startAgent(adbURL: adbURL, package: pkg)
+            switch device.platform {
+            case .android:
+                guard let adbURL, AgentArtifacts.isAvailable else {
+                    isRunning = false
+                    statusMessage = "The in-process agent isn’t available for this app."
+                    return
+                }
+                startAgent(adbURL: adbURL, package: pkg)
+            case .iosSimulator:
+                guard let dylib = AgentArtifacts.iosNetworkAgentURL else {
+                    isRunning = false
+                    statusMessage = "The in-process network agent isn’t bundled."
+                    return
+                }
+                startIOSAgent(dylib: dylib, bundleID: pkg)
+            case .iosDevice:
+                isRunning = false
+                statusMessage = "In-process capture isn’t supported on physical devices yet."
+            }
         }
     }
 
@@ -209,6 +232,16 @@ final class NetworkSession: WorkspaceTab {
         controller.start()
     }
 
+    private func startIOSAgent(dylib: URL, bundleID: String) {
+        let controller = IOSSimulatorAgentController(
+            udid: device.id, bundleID: bundleID, agentDylib: dylib,
+            onTransaction: { [weak self] txn in Task { @MainActor in self?.upsert(txn) } },
+            onStatus: { [weak self] s in Task { @MainActor in self?.statusMessage = s } }
+        )
+        iosAgent = controller
+        controller.start()
+    }
+
     func stop() {
         guard isRunning else { return }
         isRunning = false
@@ -217,6 +250,7 @@ final class NetworkSession: WorkspaceTab {
             proxy?.stop(); proxy = nil
         } else {
             agent?.stop(); agent = nil
+            iosAgent?.stop(); iosAgent = nil
         }
     }
 
@@ -261,10 +295,18 @@ final class NetworkSession: WorkspaceTab {
         await InstalledApps.list(for: device, adbURL: adbURL)
     }
 
-    /// Whether `package` is debuggable (so the agent can attach without root).
+    /// Whether `package` can be captured in-process. Android: must be debuggable
+    /// (run-as). iOS Simulator: any installed app accepts DYLD_INSERT_LIBRARIES.
     func isDebuggable(_ package: String) async -> Bool {
-        guard let adbURL, device.platform == .android else { return false }
-        return await AgentController.isDebuggable(adbURL: adbURL, serial: device.id, package: package)
+        switch device.platform {
+        case .iosSimulator:
+            return true
+        case .android:
+            guard let adbURL else { return false }
+            return await AgentController.isDebuggable(adbURL: adbURL, serial: device.id, package: package)
+        case .iosDevice:
+            return false
+        }
     }
 
     /// Choose what to capture: a specific app (in-process agent) or the whole

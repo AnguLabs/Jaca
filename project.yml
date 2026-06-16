@@ -73,6 +73,21 @@ targets:
         INFOPLIST_KEY_NSHumanReadableCopyright: ""
         COMBINE_HIDPI_IMAGES: YES
     postBuildScripts:
+      # Compile the in-process iOS-Simulator network agent (arm64) into the app's
+      # Resources. It's an iphonesimulator dylib (different platform from this macOS
+      # app), so it's built with clang here rather than as a linked target. Injected
+      # into debug apps via DYLD_INSERT_LIBRARIES — see Sources/Core/Network/
+      # IOSSimulatorAgentController.swift + the reverse-engineer-apple-private-api skill.
+      # Runs before Xcode's final code-sign, so it's covered by the app signature.
+      - name: Build iOS Simulator network agent
+        basedOnDependencyAnalysis: false
+        script: |
+          SRC="$SRCROOT/agent/iOS/JacaNetAgent.m"
+          OUT="$BUILT_PRODUCTS_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/JacaNetAgent.dylib"
+          mkdir -p "$(dirname "$OUT")"
+          xcrun -sdk iphonesimulator clang -dynamiclib -fobjc-arc \
+            -target arm64-apple-ios15.0-simulator -framework Foundation \
+            -o "$OUT" "$SRC"
       # Records where this build came from + which commit it built, so the in-app
       # updater can compare against origin/main and pull/rebuild. Written to a
       # sidecar (not the bundle) so it never invalidates the ad-hoc code signature.
