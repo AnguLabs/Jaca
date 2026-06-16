@@ -7,7 +7,7 @@ ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
 NDK="${ANDROID_NDK:-$ANDROID_HOME/ndk/27.2.12479018}"
 CMAKE_BIN="$ANDROID_HOME/cmake/3.22.1/bin/cmake"
 NINJA="$ANDROID_HOME/cmake/3.22.1/bin/ninja"
-ABIS="${ABIS:-arm64-v8a x86_64}"
+ABIS="${ABIS:-arm64-v8a}"   # Apple-Silicon devices + emulators share this ABI; that's all we ship
 API="${API:-28}"
 
 [ -x "$CMAKE_BIN" ] || CMAKE_BIN="$(command -v cmake)"

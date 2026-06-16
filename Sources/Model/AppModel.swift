@@ -17,6 +17,17 @@ final class AppModel {
     /// Top-level area the app is showing: the device/session view or the worktrees area.
     var mode: WorkspaceMode = .devices
 
+    /// Experimental HTTPS decryption + companion capture, OFF by default and fully opt-in
+    /// (Settings). When off, the companion subsystem is never started and network inspection
+    /// offers only Agent mode (per-app, in-process, no CA). Persisted across launches.
+    var httpsDecryptionEnabled: Bool = FeatureFlags.httpsDecryptionEnabled {
+        didSet {
+            guard httpsDecryptionEnabled != oldValue else { return }
+            FeatureFlags.httpsDecryptionEnabled = httpsDecryptionEnabled
+            reconfigureCompanion()
+        }
+    }
+
     /// The unified Projects area state: auto-detected Claude projects + user-added
     /// folders, their worktrees, and per-checkout cache cleanup.
     let projects = ProjectsModel()
@@ -45,6 +56,19 @@ final class AppModel {
     private var discoveryTasks: [Task<Void, Never>] = []
     private var devicesByPlatform: [DevicePlatform: [Device]] = [:]
 
+    /// The single source of truth for companion devices — mDNS discovery, the gRPC control
+    /// links, CA push, capture heartbeats, and the blocked-network hint. Every flow reads this
+    /// (no per-screen polling or duplicated validation); the device list folds its `devices`
+    /// in below, and network sessions read link/capture state straight from it.
+    private(set) var companions: CompanionRegistry!
+    /// QR / web / adb onboarding for connecting a new device (set in init).
+    private(set) var companionSetup: CompanionSetupModel!
+
+    /// Per-device shared state (capabilities + installed-app polling), one per
+    /// `Device.id`, reused by every tab for that device. Created with the first
+    /// tab and torn down when the last tab for a device closes.
+    private var deviceContexts: [String: DeviceContext] = [:]
+
     /// Tabs persisted from a previous launch, restored as their devices appear.
     private var pendingRestores: [TabDescriptor] = []
     private var isRestoring = false
@@ -62,8 +86,20 @@ final class AppModel {
         if let days = UserDefaults.standard.object(forKey: "retentionDays") as? Int, days > 0 {
             retention = TimeInterval(days) * 86_400
         }
-        if !uiTestMode { pendingRestores = Self.loadPersistedTabs() }
+        if !uiTestMode {
+            pendingRestores = Self.loadPersistedTabs()
+        }
         buildProviders()
+        companions = CompanionRegistry(ca: { [weak self] in self?.ensureCA() },
+                                       adbURL: { [weak self] in self?.adbURL },
+                                       uiTestMode: uiTestMode)
+        // Fold companion devices into the unified list, and let the registry know when a
+        // companion is "expected" (a capture tab is open) so it can widen the blocked hint.
+        companions.onChange = { [weak self] in self?.recomputeDevices() }
+        companions.hasOpenCompanionSession = { [weak self] in
+            self?.sessions.contains { ($0 as? NetworkSession)?.captureMode == .companion } ?? false
+        }
+        companionSetup = CompanionSetupModel(hub: companions.hub, adbURL: adbURL)
         // Push global message-exclusion edits to every open log tab, live.
         LogExclusionStore.shared.onChange = { [weak self] in
             guard let self else { return }
@@ -106,17 +142,98 @@ final class AppModel {
                 for await list in provider.deviceStream() {
                     guard let self else { return }
                     self.devicesByPlatform[platform] = list
+                    // Feed adb-connected Android devices to the registry (only when the
+                    // experimental feature is on) so it can discover their companion IP.
+                    if platform == .android, !self.uiTestMode, self.httpsDecryptionEnabled {
+                        self.companions.setADBCompanionDevices(
+                            list.filter { $0.state.isReady }.map { (serial: $0.id, model: $0.model) })
+                    }
                     self.recomputeDevices()
                 }
             }
             discoveryTasks.append(task)
         }
+        // Companion discovery is owned by `companions` (the single source of truth). It folds
+        // its devices into the list via the `onChange` wired in init. Started only when the
+        // experimental HTTPS-decryption feature is on — otherwise the companion subsystem never
+        // initializes and network inspection stays Agent-only.
+        if !uiTestMode && httpsDecryptionEnabled { companions.start() }
+    }
+
+    /// Start or tear down the companion subsystem when the feature flag toggles at runtime.
+    private func reconfigureCompanion() {
+        if httpsDecryptionEnabled {
+            companions.start()
+            if let android = devicesByPlatform[.android] {
+                companions.setADBCompanionDevices(
+                    android.filter { $0.state.isReady }.map { (serial: $0.id, model: $0.model) })
+            }
+        } else {
+            companions.stop()
+        }
+        recomputeDevices()
+    }
+
+    /// Normalized device model, for matching a companion ("Jaca <MODEL>") to its adb device.
+    private static func normalizedModel(_ s: String) -> String {
+        s.replacingOccurrences(of: "Jaca", with: "").lowercased().filter { $0.isLetter || $0.isNumber }
+    }
+
+    /// Match a companion advertisement ("Jaca <MODEL>") to an adb device by model name.
+    private static func companionMatches(_ companionName: String, _ device: Device) -> Bool {
+        guard device.platform == .android, !device.isCompanion else { return false }
+        let n = normalizedModel(companionName), m = normalizedModel(device.model)
+        return !m.isEmpty && !n.isEmpty && (n.contains(m) || m.contains(n))
     }
 
     private func recomputeDevices() {
-        devices = devicesByPlatform
+        var merged = devicesByPlatform
             .sorted { $0.key.rawValue < $1.key.rawValue }
             .flatMap { $0.value }
+
+        // Companion is just another device source (owned by `companions`), but only when the
+        // experimental HTTPS-decryption feature is on. Off (the default) → no companion devices
+        // or annotations at all; the list is plain adb/iOS devices captured via the Agent.
+        if httpsDecryptionEnabled {
+            // Each phone is ONE row: an adb device's row is annotated with its companion link —
+            // preferring the stable USB link, else a matching mDNS link for the same model — so
+            // the same phone is never duplicated or shown "offline" next to its live adb row.
+            // Companions with no adb device of their own surface as their own entries.
+            let companionStates = companions.devices
+            let adbComps = companionStates.filter { $0.transport == .adb }
+            let netComps = companionStates.filter { $0.transport != .adb }   // mDNS / manual
+            var matchedNetIDs = Set<String>()
+
+            for i in merged.indices where merged[i].platform == .android && !merged[i].isCompanion {
+                let rawAdb = adbComps.first { $0.id == "adb:" + merged[i].id }
+                // An adb forward only counts as a companion once the app has actually answered
+                // over it (connected now, or seen before — `version` is set by Describe).
+                let adb = (rawAdb?.connected == true || rawAdb?.version != nil) ? rawAdb : nil
+                let net = netComps.first { Self.companionMatches($0.name, merged[i]) }
+                if let net { matchedNetIDs.insert(net.id) }
+                // Prefer whichever link is actually up, biased to USB; otherwise keep the adb id
+                // so a just-plugged phone still reads as a companion while the link settles.
+                let link = (adb?.connected == true ? adb : nil)
+                    ?? (net?.connected == true ? net : nil)
+                    ?? adb ?? net
+                if let link {
+                    merged[i].companionID = link.id
+                    merged[i].companionConnected = link.connected
+                    merged[i].companionUpdateAvailable = link.updateAvailable
+                }
+            }
+
+            // Companions with no adb device of their own: their own entries.
+            for comp in netComps where !matchedNetIDs.contains(comp.id) {
+                var device = Device(id: comp.id, platform: .android, model: comp.name,
+                                    state: comp.connected ? .connected : .offline,
+                                    isCompanion: true, companionID: comp.id, companionConnected: comp.connected)
+                device.companionUpdateAvailable = comp.updateAvailable
+                merged.append(device)
+            }
+        }
+
+        devices = merged
         restorePendingTabs()
 
         if let platform = autoSessionPlatform, sessions.isEmpty,
@@ -150,7 +267,11 @@ final class AppModel {
                 if !descriptor.packageLabel.isEmpty { session?.setPackage(descriptor.packageLabel) }
             case .network:
                 let session = startNetworkSession(for: device, name: descriptor.displayName, autoStart: false)
-                if !descriptor.packageLabel.isEmpty { session?.targetPackage = descriptor.packageLabel }
+                // Pre-configure the chosen mode so the tab restores ready-to-run:
+                // the user just presses play (no re-picking from the chooser).
+                let pkg = descriptor.packageLabel.isEmpty ? nil : descriptor.packageLabel
+                let kind = descriptor.captureMode.flatMap { CaptureSourceRegistry.descriptor(id: $0)?.kind } ?? .proxy
+                session?.restoreMode(kind, package: pkg)
             }
         }
         isRestoring = false
@@ -181,7 +302,8 @@ final class AppModel {
         if let net = tab as? NetworkSession {
             return TabDescriptor(kind: .network, platform: net.device.platform, deviceID: net.device.id,
                                  displayName: net.displayName, minLevel: 0, query: "",
-                                 isRegex: false, packageLabel: net.targetPackage ?? "")
+                                 isRegex: false, packageLabel: net.targetPackage ?? "",
+                                 captureMode: net.currentDescriptor?.id ?? "proxy")
         }
         return nil
     }
@@ -190,6 +312,25 @@ final class AppModel {
         guard let data = UserDefaults.standard.data(forKey: tabsKey),
               let descriptors = try? JSONDecoder().decode([TabDescriptor].self, from: data) else { return [] }
         return descriptors
+    }
+
+    // MARK: - Per-device shared context
+
+    /// Vends the shared `DeviceContext` for `device`, creating + starting it on
+    /// first use. Reused across all tabs targeting the same device.
+    private func context(for device: Device) -> DeviceContext {
+        if let existing = deviceContexts[device.id] { return existing }
+        let ctx = DeviceContext(device: device, adbURL: adbURL)
+        deviceContexts[device.id] = ctx
+        ctx.start()
+        return ctx
+    }
+
+    /// Tears down a device's context once no remaining tab targets it.
+    private func releaseContextIfUnused(_ deviceID: String) {
+        let stillUsed = sessions.contains { ($0 as? LogSession)?.device.id == deviceID
+            || ($0 as? NetworkSession)?.device.id == deviceID }
+        if !stillUsed, let ctx = deviceContexts.removeValue(forKey: deviceID) { ctx.stop() }
     }
 
     // MARK: - Sessions
@@ -239,6 +380,7 @@ final class AppModel {
             }
         )
         let id = session.id
+        session.deviceContext = context(for: device)
         session.onStateChanged = { [weak self] in self?.persistTabs() }
         // Record history on each (re)start, whether auto-started or started later.
         session.onStarted = { [weak session] in
@@ -262,19 +404,26 @@ final class AppModel {
     /// long-running capture sessions).
     private let bodyCache = NetworkBodyCache()
 
+    /// The shared CA, minted (and persisted, key in the Keychain) on first use. Also feeds
+    /// the onboarding web server so a phone can download and trust the cert.
+    private func ensureCA() -> CertificateAuthority? {
+        if let ca { return ca }
+        guard let made = try? CertificateAuthority() else { return nil }
+        ca = made
+        return made
+    }
+
     @discardableResult
     func startNetworkSession(for device: Device, name: String? = nil, autoStart: Bool = true) -> NetworkSession? {
         mode = .devices   // opening a session returns to the devices/sessions view
-        let authority: CertificateAuthority
-        if let ca { authority = ca }
-        else {
-            guard let made = try? CertificateAuthority() else { return nil }
-            ca = made
-            authority = made
-        }
+        guard let authority = ensureCA() else { return nil }
         let session = NetworkSession(device: device, ca: authority, adbURL: adbURL,
-                                     displayName: name, bodyCache: bodyCache)
+                                     displayName: name, bodyCache: bodyCache, companions: companions)
+        session.deviceContext = context(for: device)
         session.onStateChanged = { [weak self] in self?.persistTabs() }
+        // Companion-only devices have no proxy/agent path — pre-select companion so the
+        // tab is ready to stream (the network inspection "just knows").
+        if device.isCompanion { session.restoreMode(.companion, package: nil) }
         sessions.append(session)
         selectedSessionID = session.id
         if autoStart { session.start() }
@@ -282,18 +431,26 @@ final class AppModel {
         return session
     }
 
+    /// The result of a one-click companion update over USB.
+    enum CompanionUpdateOutcome: Equatable { case noUSBPath, success, failed(String) }
+
+    /// One-click companion update for an adb-connected device: push the bundled APK over USB and
+    /// relaunch, no QR step. Over adb the link re-establishes itself and the "update" flag clears
+    /// once the new build reports its commit. Returns `.noUSBPath` when there's no adb path (the
+    /// caller then falls back to the QR/connect sheet — e.g. a companion-only, Wi-Fi device).
+    func updateCompanionOverUSB(_ device: Device) async -> CompanionUpdateOutcome {
+        guard device.platform == .android, !device.isCompanion, adbURL != nil else { return .noUSBPath }
+        if let error = await companionSetup.installApk(on: device.id) { return .failed(error) }
+        return .success
+    }
+
     // MARK: - Stranded device proxy (cleanup backstop)
 
-    /// The device's current global HTTP proxy if it looks like one Jaca set (its
-    /// host is this Mac) and no live session is actively using it — i.e. a proxy
-    /// left behind by a kill/crash that the teardown couldn't revert. nil otherwise.
-    /// Drives the sidebar "Revert" affordance so a stranded proxy is a one-click fix.
+    /// The device's current global HTTP proxy if it points at this Mac — a proxy left
+    /// behind by an older proxy-mode Jaca. Drives the sidebar "Revert" one-click fix.
+    /// (Companion capture never sets a device proxy, so this only cleans up legacy state.)
     func strandedProxy(for device: Device) async -> String? {
         guard device.platform == .android, let adbURL else { return nil }
-        let activelyUsed = sessions.contains { tab in
-            (tab as? NetworkSession).map { $0.proxyConfigured && $0.device.id == device.id } ?? false
-        }
-        if activelyUsed { return nil }
         guard let current = await ProxyConfigurator.currentAndroidProxy(adbURL: adbURL, serial: device.id) else {
             return nil
         }
@@ -326,7 +483,10 @@ final class AppModel {
             let store = history
             Task { await store?.endSession(id: id) }
         }
+        let deviceID = (sessions[index] as? LogSession)?.device.id
+            ?? (sessions[index] as? NetworkSession)?.device.id
         sessions.remove(at: index)
+        if let deviceID { releaseContextIfUnused(deviceID) }
         if selectedSessionID == id {
             selectedSessionID = sessions[safe: index]?.id ?? sessions.last?.id
         }
@@ -366,6 +526,9 @@ struct TabDescriptor: Codable {
     var query: String
     var isRegex: Bool
     var packageLabel: String
+    /// Network tabs only: "proxy" or "agent". Optional so tabs persisted before
+    /// this field still decode (defaults to proxy on restore).
+    var captureMode: String?
 
     func matches(_ other: TabDescriptor) -> Bool {
         kind == other.kind && deviceID == other.deviceID && displayName == other.displayName

@@ -7,6 +7,10 @@ import AppKit
 /// capture (no call stack; cert-pinning / ATS can block interception).
 struct NetworkSetupSheet: View {
     let session: NetworkSession
+    /// Presents the automatic CA-install flow (owned by `NetworkSessionView`).
+    var onInstallCA: () -> Void = {}
+    /// Abandons proxy mode and returns to the chooser to pick in-process Agent.
+    var onSwitchToAgent: () -> Void = {}
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -26,11 +30,19 @@ struct NetworkSetupSheet: View {
             )
 
             HStack(spacing: LemonadeTheme.spaces.spacing200) {
-                LemonadeUi.Button(label: "Export CA certificate…", onClick: exportCA,
-                                  leadingIcon: .download, variant: .primary, type: .solid, size: .small)
                 if session.device.platform == .android {
-                    LemonadeUi.Button(label: "Push CA to device", onClick: { session.pushCAToDevice() },
-                                      leadingIcon: .smartphone, variant: .neutral, type: .subtle, size: .small)
+                    LemonadeUi.Button(label: "Install CA automatically", onClick: onInstallCA,
+                                      leadingIcon: .smartphone, variant: .primary, type: .solid, size: .small)
+                        .fixedSize()
+                }
+                LemonadeUi.Button(label: "Export CA…", onClick: exportCA,
+                                  leadingIcon: .download, variant: .neutral, type: .subtle, size: .small)
+                    .fixedSize()
+                Spacer()
+                if session.agentAvailable {
+                    LemonadeUi.Button(label: "Switch to Agent", onClick: onSwitchToAgent,
+                                      variant: .neutral, type: .subtle, size: .small)
+                        .fixedSize()
                 }
             }
 
@@ -52,8 +64,8 @@ struct NetworkSetupSheet: View {
         case .android:
             stepSection("Android", [
                 "Start proxy capture from the tab — Jaca then sets the device proxy while it runs (http_proxy = \(session.hostAddress):\(session.boundPort)) and reverts it when you stop.",
-                "Install the CA: tap “Push CA to device”, then on the device open Settings → Security → Encryption & credentials → Install a certificate → CA certificate, and pick JacaProxyCA from Downloads.",
-                "To capture an app's HTTPS, it must trust user CAs (debug builds via network-security-config). Release apps that pin certs or don't trust user CAs can't be intercepted.",
+                "Tap “Install CA automatically”. On an emulator or rooted device Jaca installs it into the system trust store with no further steps; otherwise it opens the on-device dialog for you to confirm, and detects when it's done.",
+                "On a non-rooted device only apps that trust user CAs (debug builds via network-security-config) can be intercepted. Rooted/emulator system-store installs are trusted by every app that doesn't pin certs.",
             ])
         case .iosSimulator:
             stepSection("iOS Simulator", [

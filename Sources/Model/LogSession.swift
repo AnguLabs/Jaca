@@ -50,6 +50,10 @@ final class LogSession: WorkspaceTab {
     /// snapshot is saved immediately rather than only on quit.
     var onStateChanged: (() -> Void)?
 
+    /// Shared per-device state (installed-app list), set by AppModel and reused
+    /// across all tabs for this device — see `DeviceContext`.
+    var deviceContext: DeviceContext?
+
     private(set) var filter: LogFilter
     private(set) var isRunning = false
     private(set) var isConnecting = false

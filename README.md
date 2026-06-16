@@ -36,7 +36,7 @@ SwiftUI and the [Lemonade design system](../lemonade-design-system).
 - Multi-line **copy** (message text only, no timestamps/tags), draggable tabs,
   `Shift`+`Tab` to cycle tabs, per-session **clear** and **export**.
 
-**Network inspection** — two ways to capture, picked automatically:
+**Network inspection** — three ways to capture:
 1. **In-process agent** (debuggable Android apps): injects into the app process
    and reads requests/responses *before* TLS — no proxy, no CA, immune to cert
    pinning, and it even captures the **call stack** that made each request. Hooks
@@ -46,8 +46,15 @@ SwiftUI and the [Lemonade design system](../lemonade-design-system).
 2. **MITM proxy** (everything else): a local HTTPS-intercepting proxy. Works for
    any app that trusts the proxy's CA; blocked by pinning. Captures full
    request/response, headers, bodies, and timing.
+3. **On-device companion app** (Android, no cable): a Compose Multiplatform app you
+   install on the phone captures *all* its traffic with a `VpnService` + a userspace
+   TCP/IP stack, attributes each flow to the owning app, and streams it to Jaca
+   desktop over gRPC/TLS on the LAN. TLS is decrypted on the **desktop** — the CA
+   private key never leaves the Mac; the phone tunnels intercepted TLS to the
+   desktop's proxy. Works over Wi-Fi without ADB, even on emulators, and the app
+   guides you through installing the CA (no manual download).
 
-Both modes share a detail view: method/URL/status/timing, request & response
+All modes share a detail view: method/URL/status/timing, request & response
 **headers with one-click copy**, bodies with a **JSON tree ⇄ raw** toggle, a
 drag-to-select request **timeline**, and HAR export (proxy).
 
@@ -136,6 +143,7 @@ IP for hardware) and the Setup sheet walks you through installing the CA.
 | Android devices/logs/proxy | **Android SDK platform-tools** (`adb`) on your `PATH`, or set its path in Jaca's Settings. |
 | iOS simulators/devices | Xcode's `simctl`; for **physical iOS logs**, `idevicesyslog` (`brew install libimobiledevice`). |
 | Rebuilding the in-process agent | Android **NDK 27.2.12479018** + **CMake 3.22.1** (`sdkmanager "ndk;27.2.12479018" "cmake;3.22.1"`), **Kotlin** (`brew install kotlin`), an installed **platform** (`android-36`) and **build-tools** (for `d8`). |
+| Building the companion mobile app | Android **NDK 27.2.12479018** + **CMake 3.22.1** (the on-device capture is a zdtun JNI library) and a **JDK 17+**; built with Gradle via `./scripts/build-mobile.sh`. Plus a device/emulator to install it on. |
 
 ### Quick start — one script for everything
 
@@ -183,6 +191,36 @@ open /Applications/Jaca.app
 > The app is intentionally **non-sandboxed** so it can shell out to `adb`/`xcrun`.
 > It's signed for local development; macOS Gatekeeper may ask you to allow it the
 > first time (right-click → Open, or System Settings → Privacy & Security).
+
+### One-time: stop the Keychain prompt (recommended)
+
+The MITM CA's private key lives in your macOS Keychain. Because ad-hoc debug builds get
+a new code signature on each rebuild, macOS re-asks *"Jaca wants to use … in your
+keychain"* on every launch. Fix it once:
+
+```bash
+./scripts/dev-signing.sh    # creates a stable "Jaca Dev" identity — authorize the one trust prompt
+```
+
+After that, `build.sh` re-signs the app with that stable identity, so the first **Always
+Allow** you click on the CA-key prompt sticks across rebuilds. It's optional — skip it and
+builds stay ad-hoc (you'll just keep getting the prompt).
+
+### Building the companion mobile app
+
+The on-device companion (Android) lives under `mobile/` (Compose Multiplatform). Build and
+bundle its APK into the desktop app — which serves it for QR onboarding — with:
+
+```bash
+./scripts/build-mobile.sh        # assembles the APK + copies it into Resources/
+./scripts/proto-gen.sh           # regenerate gRPC stubs after editing proto/companion.proto
+```
+
+Needs the Android **NDK 27.2.12479018** + **CMake 3.22.1** (the capture path is a zdtun JNI
+library) and a **JDK 17+**. Install it by scanning the QR in Jaca's **Connect a device**
+sheet, or `adb install Resources/jaca-mobile.apk`. Open the app, start capture, and it shows
+up in Jaca's device list automatically; the desktop pushes its CA over the link and the app
+walks you through trusting it — no manual download.
 
 ### Building the Android agent (optional — only for the in-process capture mode)
 

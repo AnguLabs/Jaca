@@ -1,0 +1,87 @@
+syntax = "proto3";
+
+package jaca;
+
+option java_package = "dev.srsouza.jaca.grpc";
+option java_multiple_files = true;
+option java_outer_classname = "CompanionProto";
+
+// Companion link contract between the Jaca desktop (gRPC client) and the Jaca
+// mobile app (gRPC server). Decryption stays on the desktop today; the phone
+// streams flow metadata and tunnels intercepted TLS to the desktop's proxy.
+// See docs/on-device-store-and-lazy-fetch.md for the deferred on-device-store
+// plan that the reserved fields below leave room for.
+
+// ---- Messages -------------------------------------------------------------
+
+// One captured connection attributed to an app: the lightweight metadata the
+// desktop shows in its list.
+message FlowMeta {
+  string id = 1;            // stable per-connection id (reserved for detail fetch)
+  string app = 2;           // human label, e.g. "Chrome"
+  string package_name = 3;  // android package, e.g. "com.android.chrome"
+  string host = 4;
+  uint32 port = 5;
+  string protocol = 6;      // "TCP" / "UDP"
+  int64 started_at_ms = 7;  // first seen, epoch millis
+}
+
+// The desktop's decryption-proxy address. The phone tunnels intercepted TLS
+// connections here so the CA private key never leaves the desktop.
+message ProxyConfig {
+  string host = 1;
+  uint32 port = 2;
+  // Hosts to pass through WITHOUT interception. The desktop adds a host here once its TLS
+  // handshake is rejected (the app pins or doesn't trust the CA), so that app keeps working
+  // instead of breaking. Best-effort decryption: intercept what cooperates, bypass the rest.
+  repeated string bypass_hosts = 3;
+}
+
+// Capture mode. STREAM_FULL is today's behavior (desktop decrypts the live
+// tunnel). METADATA_ONLY is reserved for the deferred on-device-store work.
+enum CaptureMode {
+  CAPTURE_MODE_UNSPECIFIED = 0;
+  STREAM_FULL = 1;
+  METADATA_ONLY = 2;
+}
+
+// The phone's self-description for the desktop's device list.
+message DeviceInfo {
+  string name = 1;        // Build.MODEL
+  string device_ip = 2;   // LAN ipv4
+  CaptureMode mode = 3;
+  string version = 4;     // git commit hash the APK was built from (for update detection)
+}
+
+// The desktop's root CA, pushed to the device so it can prompt the user to install/trust it.
+message CaCert {
+  bytes pem = 1;
+  string name = 2;
+}
+
+message Empty {}
+message Ack {}
+
+// ---- Service (phone = server, desktop = client) ---------------------------
+
+service Companion {
+  // The phone streams captured flow metadata as traffic happens. The stream
+  // staying open is also the desktop's liveness signal: when it ends, the phone
+  // clears the decryption tunnel and falls back to direct so the device stays
+  // online.
+  rpc StreamFlows(Empty) returns (stream FlowMeta);
+
+  // The desktop pushes its decryption-proxy address to the phone. Last writer
+  // wins when several desktops are connected.
+  rpc SetProxy(ProxyConfig) returns (Ack);
+
+  // Device self-description for the desktop's device list.
+  rpc Describe(Empty) returns (DeviceInfo);
+
+  // The desktop pushes its CA so the device can prompt the user to install/trust it
+  // (used by "auto mode" when the desktop detects the CA isn't trusted yet).
+  rpc InstallCa(CaCert) returns (Ack);
+
+  // RESERVED (deferred, see docs/on-device-store-and-lazy-fetch.md):
+  //   rpc GetTransactionDetail(TransactionId) returns (TransactionDetail);
+}

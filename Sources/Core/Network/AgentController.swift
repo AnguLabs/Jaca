@@ -64,6 +64,9 @@ final class AgentController: @unchecked Sendable {
     private var fd: Int32 = -1
     private var readerThread: Thread?
     private var stopped = false
+    /// Set once the reader connects to the agent's forwarded socket — i.e. the agent actually
+    /// loaded in-process. Drives the "attached but never loaded" diagnostic.
+    private var socketConnected = false
 
     init(adbURL: URL, serial: String, package: String, soPath: URL,
          bootDexPath: URL, captureDexPath: URL,
@@ -128,9 +131,18 @@ final class AgentController: @unchecked Sendable {
 
     private func pushArtifacts() async {
         _ = await adb(["shell", "mkdir", "-p", tmpDir])
-        _ = await adb(["push", soPath.path, "\(tmpDir)/libsqueezeagent.so"])
-        _ = await adb(["push", bootDexPath.path, "\(tmpDir)/squeezeagent-boot.dex"])
-        _ = await adb(["push", captureDexPath.path, "\(tmpDir)/squeezeagent-capture.dex"])
+        for (src, name) in [(soPath, "libsqueezeagent.so"),
+                            (bootDexPath, "squeezeagent-boot.dex"),
+                            (captureDexPath, "squeezeagent-capture.dex")] {
+            let r = await adb(["push", src.path, "\(tmpDir)/\(name)"])
+            if r?.exitCode != 0 { onStatus("agent: failed to push \(name) — \(Self.errText(r))") }
+        }
+    }
+
+    /// Best stderr/stdout from an adb result for a human-readable error (it's a dev tool).
+    private static func errText(_ r: CommandRunner.Result?) -> String {
+        let s = ((r?.stderr ?? "") + " " + (r?.stdout ?? "")).trimmingCharacters(in: .whitespacesAndNewlines)
+        return s.isEmpty ? "exit \(r?.exitCode ?? -1)" : s
     }
 
     private func currentPid() async -> String? {
@@ -152,13 +164,37 @@ final class AgentController: @unchecked Sendable {
                        "code_cache/libsqueezeagent.so", "code_cache/squeezeagent-boot.dex",
                        "code_cache/squeezeagent-capture.dex", "code_cache/squeeze_opt"])
         for file in ["libsqueezeagent.so", "squeezeagent-boot.dex", "squeezeagent-capture.dex"] {
-            _ = await adb(["shell", "run-as \(package) sh -c 'cat > \(cc)/\(file)' < \(tmpDir)/\(file)"])
+            let r = await adb(["shell", "run-as \(package) sh -c 'cat > \(cc)/\(file)' < \(tmpDir)/\(file)"])
+            if r?.exitCode != 0 {
+                onStatus("agent: couldn't stage \(file) into \(package) — is it a debuggable build? — \(Self.errText(r))")
+                return
+            }
         }
         _ = await adb(["shell", "run-as", package, "chmod", "444",
                        "code_cache/squeezeagent-boot.dex", "code_cache/squeezeagent-capture.dex"])  // ART rejects writable dex
         let spec = "\(cc)/libsqueezeagent.so=\(cc)/squeezeagent-boot.dex,\(cc)/squeezeagent-capture.dex,\(socketName)"
-        _ = await adb(["shell", "cmd activity attach-agent \(pid) '\(spec)'"])
+        let r = await adb(["shell", "cmd activity attach-agent \(pid) '\(spec)'"])
+        // attach-agent can print an error to stdout/stderr and still exit 0, so check both.
+        let out = ((r?.stdout ?? "") + (r?.stderr ?? "")).trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = out.lowercased()
+        if r?.exitCode != 0 || lower.contains("error") || lower.contains("exception") || lower.contains("fail") {
+            onStatus("agent: attach-agent failed for pid \(pid) — \(out.isEmpty ? "exit \(r?.exitCode ?? -1)" : out)")
+            return
+        }
         onStatus("agent: in-process (attached pid \(pid))")
+        scheduleAgentLoadCheck(pid: pid)
+    }
+
+    /// If the agent's socket never opens after attaching, it failed to load in-process — say so,
+    /// with where to look, instead of sitting silently on "attached".
+    private func scheduleAgentLoadCheck(pid: String) {
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(6))
+            guard let self, !self.stopped, !self.socketConnected else { return }
+            self.onStatus("agent: attached to pid \(pid) but its in-process socket never opened — it "
+                + "likely failed to load. Check `adb logcat | grep -i squeeze`; make sure the app is the "
+                + "arm64-v8a build.")
+        }
     }
 
     private func setupForward() async -> Bool {
@@ -182,6 +218,7 @@ final class AgentController: @unchecked Sendable {
         while !stopped {
             let s = connect(port: forwardedPort)
             if s < 0 { Thread.sleep(forTimeInterval: 0.3); continue }
+            socketConnected = true   // the agent loaded and opened its socket
             fd = s
             _ = streamFrom(fd: s)
             if fd >= 0 { close(fd); fd = -1 }

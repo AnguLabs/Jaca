@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-Jaca is a non-sandboxed SwiftUI macOS app (developer tools): device log streaming, network capture (in-process Android agent + MITM proxy), and local maintenance areas (Projects — auto-detected Claude projects + their worktrees + user-added folders, with per-checkout cache cleanup; Gradle daemons; Xcode DerivedData). See `README.md` for the product/network-capture deep dive.
+Jaca is a non-sandboxed SwiftUI macOS app (developer tools): device log streaming, network capture (in-process Android agent, MITM proxy, and an on-device **companion app** — Compose Multiplatform under `mobile/` — that captures per-app traffic and streams it over gRPC/TLS for desktop-side decryption), and local maintenance areas (Projects — auto-detected Claude projects + their worktrees + user-added folders, with per-checkout cache cleanup; Gradle daemons; Xcode DerivedData). See `README.md` for the product/network-capture deep dive.
 
 ## Build, run, test
 
@@ -10,10 +10,13 @@ The Xcode project is **not committed** — it's generated from `project.yml` by 
 
 ```bash
 ./scripts/run.sh            # generate + build (Debug) + launch
-./scripts/build.sh [Release]# build only
+./scripts/build.sh [Release]# build only (re-signs with the dev identity if set up)
 ./scripts/gen.sh            # regenerate Jaca.xcodeproj from project.yml
 ./scripts/uitest.sh         # XCUITest suite (kills stray instances first)
 ./scripts/all.sh [--release|--install|--no-agent|--no-run]  # agent + app + launch
+./scripts/dev-signing.sh    # one-time: stable code-signing so the Keychain CA prompt stops
+./scripts/build-mobile.sh   # build the companion APK + bundle it into Resources/
+./scripts/proto-gen.sh      # regenerate gRPC stubs from proto/companion.proto
 ```
 
 The scripts set `DEVELOPER_DIR` to Xcode (needed when `xcode-select` points at the CLT). To run **one test** (scripts don't expose this), invoke xcodebuild directly:
@@ -34,6 +37,18 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
 ```bash
 ln -sf "$HOME/workspace/lemonade-design-system" "$(git rev-parse --show-toplevel)/../lemonade-design-system"
 ```
+
+(If a `clean` removes it, just re-create the symlink — it's only needed at build time.)
+
+### Stable code-signing (stops the recurring Keychain prompt)
+
+The MITM CA private key lives in the macOS Keychain, and macOS binds a key's "Always Allow" to the requesting app's code signature. Ad-hoc debug builds (`CODE_SIGN_IDENTITY="-"`) get a new signature every rebuild, so the CA-key prompt returns on each launch. Run `./scripts/dev-signing.sh` **once** to create a stable self-signed `Jaca Dev` identity in a dedicated keychain (authorize the single trust prompt — codesign refuses an untrusted identity); `build.sh` then re-signs the app with it via `dev-resign.sh`, so one "Always Allow" sticks across rebuilds. Optional — without it the build stays ad-hoc.
+
+### The companion mobile app (`mobile/`)
+
+A Compose Multiplatform app (`mobile/composeApp`, package `dev.srsouza.jaca`) that captures on-device traffic with a `VpnService` + a userspace TCP/IP stack (zdtun JNI, `androidMain/jni/`) and streams per-app flow metadata to the desktop over **gRPC + TLS** (contract: `proto/companion.proto`; phone = server, desktop = client). TLS is decrypted on the **desktop** — the CA private key never reaches the phone; the phone tunnels intercepted TLS to the desktop's MITM proxy. The gRPC server runs from app open (`CompanionServer`) so the desktop can push its CA (`InstallCa`) and the app guides the user to install it before any capture. `./scripts/build-mobile.sh` assembles + bundles the APK (needs the NDK/CMake in the README table); the desktop serves it for QR onboarding and reads its commit hash for update detection.
+
+Full end-to-end flow + sequence/state diagrams: **`docs/companion-architecture.md`** — keep it current when the flow or the wire protocol changes.
 
 ## Architecture
 
@@ -75,3 +90,17 @@ The pattern (reference implementation: `ProjectsModel` + `ProjectsCache`):
 5. **Compute slow per-item work (e.g. `du`) in the background**, patching rows as results land, so a list with many items stays responsive instead of blocking.
 
 When adding or revisiting an area whose data comes from the filesystem/processes (Gradle daemons and Xcode DerivedData currently rescan on appear), prefer this cache-first, background-refresh shape over scan-on-open.
+
+## Single source of truth & reactive state (IMPORTANT)
+
+State that more than one screen reads — device/link/capture status, discovery, connection health — lives in **one `@Observable @MainActor` owner**, and views render it. Don't scatter the same knowledge across views, and don't re-derive or re-validate it per screen. The recurring bug this prevents: three views each polling the same thing on a 1s timer, each with its own slightly-different copy of "is it connected?", so a fix in one place silently misses the others. Reference implementation: `CompanionRegistry` (the one source of truth for companion devices — discovery, gRPC links, CA push, capture heartbeats, the blocked-network hint), read by `AppModel`, `NetworkSession`, and every companion view.
+
+Rules to follow when this kind of state shows up:
+
+1. **One owner, many readers.** Put cross-cutting state in a single `@Observable` model and expose it (or a small derived view of it) to whoever needs it. New flows read the owner; they don't keep their own copy. A per-feature `FooModel` still owns its own area's state — this is about state that genuinely spans features.
+2. **Reactive, never polled.** A view reads the observable property directly in its `body` (or via a computed that reads it), so SwiftUI re-renders the moment it changes — across object boundaries too (`session.companionLinked` → `registry.devices`). Reach for a `.task { while … sleep }` loop only for time itself (a clock, a timeout), never to discover state that's already observable. If you're writing a poll loop to read model state, the state is in the wrong place.
+3. **Derive once, in the model.** Coarse display state (a `phase` enum, a "needs setup" flag) belongs on the model as a computed/struct field, not recomputed in each view. See `CompanionDeviceState.phase`.
+4. **Callbacks flow inward, then stop.** Transport/services (`Core/`) surface raw events via closures to the one model that owns the domain; that model updates its observable state and the UI follows. Views don't subscribe to services directly, and services don't know about views.
+5. **Clean layering still holds.** `Core/` (no SwiftUI: processes, sockets, parsing) → `Model/` (`@Observable` state + orchestration) → `Features/` (thin views). Keep pure logic in free functions/enums and unit-test it (per the Testability convention) rather than through the UI.
+
+When you catch yourself adding the same `@State` + poll + validation to a second view, stop and lift that state into its shared owner instead.

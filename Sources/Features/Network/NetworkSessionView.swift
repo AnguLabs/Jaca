@@ -7,12 +7,23 @@ import AppKit
 struct NetworkSessionView: View {
     @Bindable var session: NetworkSession
     @State private var showSetup = false
+    @State private var showCAInstall = false
+    @State private var showCompanionCA = false
     @State private var searchText = ""
 
     var body: some View {
         VStack(spacing: 0) {
             toolbar
             divider
+            // Companion mode: always show the live setup status (linked? decrypting?) so opening
+            // a companion device tells you whether it's set up and what to do if not.
+            if session.captureMode == .companion {
+                CompanionStatusBanner(session: session)
+                    .contentShape(Rectangle())
+                    .onTapGesture { showCompanionCA = true }
+                    .help("Open HTTPS decryption setup")
+                divider
+            }
             if showCaptureChooser {
                 captureChooser
             } else {
@@ -32,18 +43,57 @@ struct NetworkSessionView: View {
         }
         .background(LemonadeTheme.colors.background.bgDefault)
         .accessibilityIdentifier("networkSessionView")
-        .onAppear { searchText = session.filterText }
-        .sheet(isPresented: $showSetup) { NetworkSetupSheet(session: session) }
+        .onAppear {
+            searchText = session.filterText
+            // Auto-present the guided companion setup once when opening a companion device that
+            // isn't decrypting yet — mirrors the proxy CA flow, focused on the companion app.
+            if session.captureMode == .companion, !session.caReady, !session.didAutoShowCompanionSetup {
+                session.didAutoShowCompanionSetup = true
+                showCompanionCA = true
+            }
+        }
+        // Proxy started but HTTPS isn't decrypting yet → guide the user to set up
+        // the CA (or switch to Agent). One-shot: cleared once consumed.
+        .onChange(of: session.proxyNeedsSetup) { _, needs in
+            if needs { showSetup = true; session.proxyNeedsSetup = false }
+        }
+        .sheet(isPresented: $showSetup) {
+            NetworkSetupSheet(
+                session: session,
+                onInstallCA: { showSetup = false; openCAInstall() },
+                onSwitchToAgent: { showSetup = false; session.reopenModeChooser() }
+            )
+        }
+        .sheet(isPresented: $showCAInstall) {
+            if let installer = session.caInstaller {
+                CAInstallSheet(installer: installer, onCancel: { session.cancelCAInstall() })
+            }
+        }
+        .sheet(isPresented: $showCompanionCA) {
+            CompanionCASheet(session: session)
+        }
+    }
+
+    /// Probes the device, builds the installer, then presents the blocking sheet
+    /// (which starts it on appear).
+    private func openCAInstall() {
+        Task {
+            await session.prepareCAInstall()
+            if session.caInstaller != nil { showCAInstall = true }
+        }
     }
 
     private var divider: some View {
         Rectangle().fill(LemonadeTheme.colors.border.borderNeutralLow).frame(height: 1)
     }
 
-    /// A fresh/stopped tab with no captured traffic shows the capture-mode chooser
-    /// instead of auto-starting — proxy mode must be picked deliberately because it
-    /// reconfigures the device.
-    private var showCaptureChooser: Bool { !session.isRunning && session.transactions.isEmpty }
+    /// A fresh/stopped tab with no captured traffic and no chosen mode shows the
+    /// capture-mode chooser instead of auto-starting — proxy mode must be picked
+    /// deliberately because it reconfigures the device. Once a mode is chosen (incl.
+    /// restored from a previous launch) the tab is ready and the user just presses play.
+    private var showCaptureChooser: Bool {
+        !session.hasSelectedMode && !session.isRunning && session.transactions.isEmpty
+    }
 
     private var captureChooser: some View {
         VStack(spacing: LemonadeTheme.spaces.spacing300) {
@@ -69,22 +119,45 @@ struct NetworkSessionView: View {
                 }
             } else {
                 VStack(spacing: LemonadeTheme.spaces.spacing200) {
-                    LemonadeUi.Button(label: "Start proxy capture", onClick: { session.startProxyCapture() },
-                                      leadingIcon: .arrowLeftRight, variant: .primary, type: .solid, size: .medium)
-                        .fixedSize()
-                    LemonadeUi.Text(proxyCaption,
-                                    textStyle: LemonadeTypography.shared.bodyXSmallRegular,
-                                    textAlign: .center,
-                                    color: LemonadeTheme.colors.content.contentTertiary)
-                        .frame(maxWidth: 420)
-
-                    if session.agentAvailable {
-                        LemonadeUi.Text("— or —",
-                                        textStyle: LemonadeTypography.shared.bodyXSmallOverline,
+                    let hasCompanion = session.availableSources.contains { $0.kind == .companion }
+                    if hasCompanion {
+                        LemonadeUi.Button(label: "Start companion capture", onClick: { session.startCompanionCapture() },
+                                          leadingIcon: .smartphone, variant: .primary, type: .solid, size: .medium)
+                            .fixedSize()
+                        LemonadeUi.Text("Capture the whole device through the Jaca mobile app, attributed per app.",
+                                        textStyle: LemonadeTypography.shared.bodyXSmallRegular,
+                                        textAlign: .center,
                                         color: LemonadeTheme.colors.content.contentTertiary)
-                            .padding(.top, LemonadeTheme.spaces.spacing100)
+                            .frame(maxWidth: 420)
+                        if session.isADBDevice {
+                            LemonadeUi.Button(label: "Install CA automatically", onClick: { openCAInstall() },
+                                              leadingIcon: .smartphone, variant: .neutral, type: .subtle, size: .small)
+                                .fixedSize()
+                            if let hint = rootHint {
+                                LemonadeUi.Text(hint,
+                                                textStyle: LemonadeTypography.shared.bodyXSmallRegular,
+                                                textAlign: .center,
+                                                color: LemonadeTheme.colors.content.contentTertiary)
+                                    .frame(maxWidth: 420)
+                            }
+                        }
+                    } else if !session.agentAvailable && session.device.platform != .iosSimulator {
+                        LemonadeUi.Text("Install the Jaca mobile app on this device to capture its traffic, then it appears here automatically.",
+                                        textStyle: LemonadeTypography.shared.bodySmallRegular,
+                                        textAlign: .center,
+                                        color: LemonadeTheme.colors.content.contentSecondary)
+                            .frame(maxWidth: 420)
+                    }
+
+                    if session.canPickAgentApp {
+                        if hasCompanion {
+                            LemonadeUi.Text("— or —",
+                                            textStyle: LemonadeTypography.shared.bodyXSmallOverline,
+                                            color: LemonadeTheme.colors.content.contentTertiary)
+                                .padding(.top, LemonadeTheme.spaces.spacing100)
+                        }
                         NetworkAppPicker(session: session)
-                        LemonadeUi.Text("Inspect one debuggable app in-process — no proxy or CA, and you get the call stack behind each request.",
+                        LemonadeUi.Text("Inspect one debuggable app in-process — call stacks behind each request, no CA.",
                                         textStyle: LemonadeTypography.shared.bodyXSmallRegular,
                                         textAlign: .center,
                                         color: LemonadeTheme.colors.content.contentTertiary)
@@ -107,10 +180,20 @@ struct NetworkSessionView: View {
         .accessibilityIdentifier("networkCaptureChooser")
     }
 
-    private var proxyCaption: String {
-        session.isAndroid
-            ? "Routes the whole device through Jaca's MITM proxy. Sets the device's HTTP proxy while capturing and reverts it on stop."
-            : "Routes traffic through Jaca's MITM proxy. Point the device/simulator at it via Setup."
+    /// Surfaces the device's root status so the user knows whether the CA installs
+    /// automatically or needs a tap on the device.
+    private var rootHint: String? {
+        guard session.isAndroid, let caps = session.deviceContext?.capabilities else { return nil }
+        switch caps.root {
+        case .rooted:
+            return "Rooted / emulator — the CA installs into the system trust store automatically."
+        case .notRooted:
+            return caps.hasScreenLock
+                ? "Not rooted — you'll confirm one certificate prompt on the device."
+                : "Not rooted — set a screen lock on the device first (Android requires one for CA certs)."
+        case .unknown:
+            return nil
+        }
     }
 
     private var toolbar: some View {
@@ -131,7 +214,7 @@ struct NetworkSessionView: View {
 
             LemonadeUi.IconButton(icon: .trash, contentDescription: "Clear") { session.clear() }
 
-            if session.isAndroid {
+            if session.canPickAgentApp {
                 NetworkAppPicker(session: session)
             }
 
@@ -152,8 +235,13 @@ struct NetworkSessionView: View {
                                 color: LemonadeTheme.colors.content.contentSecondary, maxLines: 1)
             }
             LemonadeUi.IconButton(icon: .download, contentDescription: "Export HAR") { exportHAR() }
-            LemonadeUi.Button(label: "Setup", onClick: { showSetup = true },
-                              leadingIcon: .circleInfo, variant: .neutral, type: .subtle, size: .small)
+            // Proxy/CA setup only applies to a real ADB device capturing via the proxy.
+            // Companion and agent modes need no proxy setup (the companion app installs its
+            // own CA), and a companion-only device has no adb to set up — so hide it there.
+            if session.showsProxySetup {
+                LemonadeUi.Button(label: "Setup", onClick: { showSetup = true },
+                                  leadingIcon: .circleInfo, variant: .neutral, type: .subtle, size: .small)
+            }
         }
         .padding(.horizontal, LemonadeTheme.spaces.spacing300)
         .padding(.vertical, LemonadeTheme.spaces.spacing200)
@@ -161,21 +249,22 @@ struct NetworkSessionView: View {
     }
 
     private var modeBadge: some View {
-        let isAgent = session.captureMode == .agent
+        let mode = session.captureMode
+        let color: Color = mode == .agent ? LemonadeTheme.colors.content.contentBrand
+            : (mode == .companion ? LemonadeTheme.colors.content.contentPositive
+                                  : LemonadeTheme.colors.content.contentTertiary)
         return HStack(spacing: 4) {
-            Circle()
-                .fill(isAgent ? LemonadeTheme.colors.content.contentBrand
-                              : LemonadeTheme.colors.content.contentTertiary)
-                .frame(width: 6, height: 6)
-            Text(isAgent ? "in-process" : "proxy")
+            Circle().fill(color).frame(width: 6, height: 6)
+            Text(mode.label)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(LemonadeTheme.colors.content.contentSecondary)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
         .background(Capsule().fill(LemonadeTheme.colors.background.bgNeutralSubtle))
-        .help(isAgent ? "Capturing in-process via the agent (no proxy/CA)"
-                      : "Capturing via the MITM proxy")
+        .help(mode == .agent ? "Capturing in-process via the agent (no proxy/CA)"
+              : (mode == .companion ? "Streaming from the Jaca mobile companion app"
+                                    : "Capturing via the MITM proxy"))
     }
 
     private func exportHAR() {
@@ -239,8 +328,8 @@ struct NetworkSessionView: View {
             LemonadeUi.Text(session.isRunning ? "Waiting for traffic…" : "Capture stopped",
                             textStyle: LemonadeTypography.shared.bodySmallRegular,
                             color: LemonadeTheme.colors.content.contentSecondary)
-            if session.captureMode == .proxy {
-                LemonadeUi.Text("Open Setup to point your device at the proxy and trust the CA.",
+            if session.captureMode == .companion {
+                LemonadeUi.Text("Open the Jaca app on \(session.device.displayModel) and start capture — it connects automatically. Install the certificate in the app to decrypt HTTPS.",
                                 textStyle: LemonadeTypography.shared.bodyXSmallRegular,
                                 textAlign: .center,
                                 color: LemonadeTheme.colors.content.contentTertiary)
@@ -258,8 +347,6 @@ struct NetworkSessionView: View {
                                         : LemonadeTheme.colors.content.contentTertiary)
                 .frame(width: 8, height: 8)
             metric("\(session.transactions.count) requests")
-            if session.boundPort > 0 { metric("proxy \(session.hostAddress):\(session.boundPort)") }
-            if session.proxyConfigured { metric("device configured") }
             Spacer()
             metric(session.device.displayModel)
         }
@@ -286,8 +373,17 @@ private struct NetworkAppPicker: View {
     @State private var loaded = false
     @State private var query = ""
 
+    /// Prefer the shared per-device list (polled once per device); fall back to
+    /// this tab's own one-shot load when no context is wired (e.g. in tests).
+    private var appList: [AppEntry] { session.deviceContext?.apps ?? apps }
+    private var debugSet: Set<String> { session.deviceContext?.debuggable ?? debuggable }
+    private var isLoading: Bool {
+        if let ctx = session.deviceContext { return !ctx.appsLoaded }
+        return loading
+    }
+
     var body: some View {
-        Button(action: { show = true; if !loaded { load() } }) {
+        Button(action: { show = true; onOpen() }) {
             HStack(spacing: 5) {
                 Image(systemName: "ladybug").font(.system(size: 11, weight: .semibold))
                 Text(buttonLabel).font(.system(size: 11, weight: .medium)).lineLimit(1)
@@ -301,7 +397,7 @@ private struct NetworkAppPicker: View {
                 .fill(LemonadeTheme.colors.background.bgNeutralSubtle))
         }
         .buttonStyle(.plain)
-        .help("Choose a debuggable app to inspect in-process (agent), or the whole device (proxy)")
+        .help("Choose an app to inspect in-process with the agent")
         .accessibilityIdentifier("netAppPicker")
         .popover(isPresented: $show, arrowEdge: .bottom) { popover }
     }
@@ -312,11 +408,11 @@ private struct NetworkAppPicker: View {
     }
 
     private var sorted: [AppEntry] {
-        let f = query.isEmpty ? apps : apps.filter {
+        let f = query.isEmpty ? appList : appList.filter {
             $0.id.localizedCaseInsensitiveContains(query) || ($0.name ?? "").localizedCaseInsensitiveContains(query)
         }
         return f.sorted { a, b in
-            let da = debuggable.contains(a.id), db = debuggable.contains(b.id)
+            let da = debugSet.contains(a.id), db = debugSet.contains(b.id)
             if da != db { return da }                        // debuggable first
             if a.isUserApp != b.isUserApp { return a.isUserApp }
             return a.display.localizedCaseInsensitiveCompare(b.display) == .orderedAscending
@@ -332,14 +428,19 @@ private struct NetworkAppPicker: View {
             Rectangle().fill(LemonadeTheme.colors.border.borderNeutralLow).frame(height: 1)
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    row(title: "Whole device (proxy)", subtitle: "capture all apps via MITM proxy",
-                        debug: false, selected: session.targetPackage == nil) { select(nil) }
-                    if loading && apps.isEmpty {
+                    // The whole-device fallback is the companion stream; only offer it when
+                    // companion is actually available (it respects the feature flag, and an iOS
+                    // Simulator has no companion — there the agent always needs a chosen app).
+                    if session.availableSources.contains(where: { $0.kind == .companion }) {
+                        row(title: "Whole device (companion)", subtitle: "capture all apps via the Jaca mobile app",
+                            debug: false, selected: session.targetPackage == nil) { select(nil) }
+                    }
+                    if isLoading && appList.isEmpty {
                         ProgressView().padding(LemonadeTheme.spaces.spacing400).frame(maxWidth: .infinity)
                     }
                     ForEach(sorted) { app in
                         row(title: app.display, subtitle: app.name != nil ? app.id : nil,
-                            debug: debuggable.contains(app.id),
+                            debug: debugSet.contains(app.id),
                             selected: session.targetPackage == app.id) { select(app.id) }
                     }
                 }
@@ -378,6 +479,13 @@ private struct NetworkAppPicker: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("netAppRow")
+    }
+
+    /// On open: nudge the shared per-device list to refresh, or do a one-shot
+    /// load if there's no context.
+    private func onOpen() {
+        if let ctx = session.deviceContext { ctx.refreshApps() }
+        else if !loaded { load() }
     }
 
     private func load() {
@@ -432,5 +540,55 @@ private struct NetworkRowView: View {
         .padding(.horizontal, LemonadeTheme.spaces.spacing300)
         .padding(.vertical, LemonadeTheme.spaces.spacing100)
         .background(selected ? LemonadeTheme.colors.interaction.bgSubtleInteractive : .clear)
+    }
+}
+
+/// Live companion setup status. Tells the user, when they open a companion device, whether
+/// it's actually linked and whether HTTPS is decrypting — and what to do if not. All three
+/// signals come straight from the shared state (the registry's link/capture state and the
+/// session's `caReady`), so the banner re-renders the moment any of them changes — no polling.
+private struct CompanionStatusBanner: View {
+    let session: NetworkSession
+    private var linked: Bool { session.companionLinked }
+    private var capturing: Bool { session.deviceCapturing }
+
+    var body: some View {
+        let decrypting = session.caReady
+        return HStack(spacing: LemonadeTheme.spaces.spacing200) {
+            Circle().fill(dot(decrypting)).frame(width: 8, height: 8)
+            VStack(alignment: .leading, spacing: 1) {
+                LemonadeUi.Text(title(decrypting),
+                                textStyle: LemonadeTypography.shared.bodyXSmallSemiBold,
+                                color: LemonadeTheme.colors.content.contentPrimary, maxLines: 1)
+                LemonadeUi.Text(detail(decrypting),
+                                textStyle: LemonadeTypography.shared.bodyXSmallRegular,
+                                color: LemonadeTheme.colors.content.contentTertiary, maxLines: 2)
+            }
+            Spacer(minLength: 6)
+        }
+        .padding(.horizontal, LemonadeTheme.spaces.spacing300)
+        .padding(.vertical, LemonadeTheme.spaces.spacing200)
+        .background(LemonadeTheme.colors.background.bgElevated)
+        .animation(.easeInOut(duration: 0.2), value: linked)
+        .animation(.easeInOut(duration: 0.2), value: capturing)
+        .animation(.easeInOut(duration: 0.2), value: decrypting)
+    }
+
+    private func dot(_ decrypting: Bool) -> Color {
+        if !linked { return LemonadeTheme.colors.content.contentCritical }
+        if !capturing || !decrypting { return LemonadeTheme.colors.content.contentCaution }
+        return LemonadeTheme.colors.content.contentPositive
+    }
+    private func title(_ decrypting: Bool) -> String {
+        if !linked { return "Companion offline" }
+        if !capturing { return "Capture not running" }
+        if !decrypting { return "Capturing — HTTPS not decrypted" }
+        return "Decrypting HTTPS ✓"
+    }
+    private func detail(_ decrypting: Bool) -> String {
+        if !linked { return "Open the Jaca app on \(session.device.displayModel) and start capture — it connects automatically." }
+        if !capturing { return "The VPN isn't running — open the Jaca app on the device and start capture." }
+        if !decrypting { return "Open the Jaca app and tap Install certificate to decrypt HTTPS — it confirms here automatically." }
+        return "Capturing decrypted traffic from \(session.device.displayModel)."
     }
 }

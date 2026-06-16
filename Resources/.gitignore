@@ -1,0 +1,10 @@
+# The Jaca mobile APK is a build artifact copied in before the desktop build
+# (it powers the one-step "Install Jaca mobile" action). Don't commit the binary.
+*.apk
+
+# Sidecar recording the bundled APK's commit hash (written by build-mobile.sh)
+*.apk.version
+
+# In-process Android agent, copied in by build.sh from agent/out (build artifact).
+libsqueezeagent.so
+*.dex
