@@ -32,6 +32,16 @@ enum AgentArtifacts {
 
     static var isAvailable: Bool { soURL() != nil && bootDexURL != nil && captureDexURL != nil }
 
+    /// The iOS-Simulator network agent dylib (built into Resources by the
+    /// "Build iOS Simulator network agent" build phase), injected via
+    /// DYLD_INSERT_LIBRARIES. Falls back to the dev build output when unbundled.
+    static var iosNetworkAgentURL: URL? {
+        if let u = Bundle.main.url(forResource: "JacaNetAgent", withExtension: "dylib") { return u }
+        return devPath("Agent/out/JacaNetAgent.dylib")
+    }
+
+    static var iosNetworkAgentAvailable: Bool { iosNetworkAgentURL != nil }
+
     private static func devPath(_ rel: String) -> URL? {
         let p = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("workspace/jaca/\(rel)")
