@@ -5,9 +5,15 @@ import Foundation
 /// threadtime format: `MM-DD HH:MM:SS.mmm  PID  TID LEVEL TAG: message`
 /// e.g. `06-07 12:34:56.789  1234  1250 I ActivityManager: Start proc`
 enum LogcatParser {
-    // date(1) time(2) pid(3) tid(4) level(5) tag(6, non-greedy to ": ") message(7)
+    // date(1) time(2) pid(3) tid(4) level(5) tag(6, non-greedy to ":") message(7)
+    // `: ?` removes *only* the standard `"TAG: "` separator (the colon + its single
+    // space). Everything after is the message verbatim — any further leading whitespace
+    // is the message's own indentation and must survive: pretty-printed JSON bodies
+    // (space-indented) and Java stack frames (`"\tat …"`, tab-indented) both rely on it.
+    // (`?` not `*`, so a message that pads with extra spaces keeps them — faithful, the
+    // way Android Studio's Logcat shows it.)
     private static let regex = try! NSRegularExpression(
-        pattern: #"^(\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2}\.\d{3})\s+(\d+)\s+(\d+)\s+([VDIWEFAS])\s+(.*?):\s?(.*)$"#
+        pattern: #"^(\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2}\.\d{3})\s+(\d+)\s+(\d+)\s+([VDIWEFAS])\s+(.*?): ?(.*)$"#
     )
 
     private static let formatter: DateFormatter = {

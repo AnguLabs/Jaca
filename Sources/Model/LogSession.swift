@@ -58,6 +58,13 @@ final class LogSession: WorkspaceTab {
     private(set) var isRunning = false
     private(set) var isConnecting = false
     private(set) var visible: [LogLine] = []
+    /// Maps the virtualized list's fixed-height **display rows** to `visible` entries:
+    /// a log with embedded `\n`s spans several rows. Kept in lockstep with `visible`
+    /// so the table can render multi-line logs without losing the uniform-row fast path.
+    private(set) var displayMap = DisplayLineMap()
+    /// Cumulative display rows trimmed off the front (the row-unit analogue of
+    /// `droppedCount`), so the list can shift the viewport to stay put through a trim.
+    private(set) var droppedDisplayRows = 0
     private(set) var totalCount = 0
     private(set) var droppedCount = 0
     /// Bumped whenever `visible` is replaced wholesale (clear / filter change) — as
@@ -86,6 +93,37 @@ final class LogSession: WorkspaceTab {
         if !filter.query.isEmpty { parts.append("“\(filter.query)”") }
         if filter.minLevel != .verbose { parts.append("≥\(filter.minLevel.short)") }
         return parts.joined(separator: " · ")
+    }
+
+    // MARK: - Display rows (multi-line)
+
+    /// Total fixed-height rows the list renders (≥ `visible.count`; multi-line logs
+    /// contribute more than one).
+    var displayRowCount: Int { displayMap.totalRows }
+
+    /// The `(logIndex, subLine)` a display row maps to. Callers gate on `displayRowCount`.
+    func locate(displayRow row: Int) -> (log: Int, sub: Int) { displayMap.locate(row: row) }
+
+    /// First display row of a `visible` entry (for crash scroll-to).
+    func firstDisplayRow(ofLog i: Int) -> Int { displayMap.firstRow(ofLog: i) }
+
+    /// The contiguous display-row range a `visible` entry occupies (for selection).
+    func displayRowRange(ofLog i: Int) -> ClosedRange<Int> { displayMap.rows(ofLog: i) }
+
+    /// The `visible` index of a line by its seq (crash navigation), or nil.
+    func logIndex(forSeq seq: UInt64) -> Int? { visible.firstIndex { $0.seq == seq } }
+
+    /// Maps a set of selected display rows back to the unique `visible` entries they
+    /// belong to, in order — so selecting any sub-line of a multi-line log copies the
+    /// whole entry exactly once.
+    func logIndices(forDisplayRows rows: IndexSet) -> [Int] {
+        var seen = Set<Int>()
+        var out: [Int] = []
+        for r in rows where r < displayMap.totalRows {
+            let li = displayMap.locate(row: r).log
+            if seen.insert(li).inserted { out.append(li) }
+        }
+        return out
     }
 
     /// Builds the primary source for the current target. The bundle id matters only
@@ -304,8 +342,10 @@ final class LogSession: WorkspaceTab {
         recomputeToken &+= 1   // invalidate any in-flight background recompute
         ring.removeAll(keepingCapacity: true)
         visible.removeAll(keepingCapacity: true)
+        displayMap.removeAll()
         totalCount = 0
         droppedCount = 0
+        droppedDisplayRows = 0
         crashSeqs.removeAll()
         crashCursor = nil
         listEpoch &+= 1
@@ -402,6 +442,7 @@ final class LogSession: WorkspaceTab {
                     out = self.ring.filter { self.filter.matches($0, regex: self.compiledRegex) }
                 }
                 self.visible = out
+                self.displayMap.rebuild(lineCounts: out.map { LogTextLines.count($0.message) })
                 self.listEpoch &+= 1
             }
         }
@@ -433,10 +474,14 @@ final class LogSession: WorkspaceTab {
             let minSeq = ring.first?.seq ?? 0
             var drop = 0
             while drop < visible.count && visible[drop].seq < minSeq { drop += 1 }
-            if drop > 0 { visible.removeFirst(drop) }
+            if drop > 0 {
+                visible.removeFirst(drop)
+                droppedDisplayRows += displayMap.removeFirst(drop)
+            }
         }
         for line in batch where filter.matches(line, regex: compiledRegex) {
             visible.append(line)
+            displayMap.append(lineCount: LogTextLines.count(line.message))
             if CrashDetector.isCrash(line) {
                 crashSeqs.append(line.seq)
                 injectMarker("💥 \(CrashDetector.label(line))", critical: true)
