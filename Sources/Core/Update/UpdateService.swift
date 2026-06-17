@@ -22,6 +22,24 @@ struct UpdateService: Sendable {
 
     // MARK: - Detection
 
+    /// When the build's checkout is a *linked* git worktree, the path of the **primary**
+    /// (non-worktree) checkout — the one that holds `main`. Returns nil when the build is
+    /// already in the primary worktree.
+    ///
+    /// This matters because `main` can only be checked out in one worktree at a time, so
+    /// an in-app update from a linked worktree fails with "'main' is already used by
+    /// worktree …" — the update must instead run against this primary path.
+    func primaryWorktreeIfLinked(_ repo: String) async -> String? {
+        guard let out = try? await git(repo, ["worktree", "list", "--porcelain"]),
+              out.exitCode == 0 else { return nil }
+        // `git worktree list` always lists the primary (main) worktree first.
+        guard let line = out.stdout.split(separator: "\n").first(where: { $0.hasPrefix("worktree ") })
+        else { return nil }
+        let primary = String(line.dropFirst("worktree ".count))
+        let norm: (String) -> String = { URL(fileURLWithPath: $0).standardizedFileURL.path }
+        return norm(primary) == norm(repo) ? nil : primary
+    }
+
     /// Fetches `origin/main` and reports whether the installed commit is behind it.
     func status(_ info: BuildInfo) async -> UpdateStatus {
         let repo = info.repoPath

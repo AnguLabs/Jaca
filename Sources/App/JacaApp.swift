@@ -77,6 +77,11 @@ final class JacaAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             if let phase = update.phase {
                 item = NSMenuItem(title: "Updating — \(phase.label)", action: nil, keyEquivalent: "")
                 item.isEnabled = false
+            } else if update.isWorktreeBuild {
+                // Can't update from a linked worktree (main is held elsewhere) — offer to
+                // switch to the primary checkout, with a confirm.
+                item = NSMenuItem(title: "Switch to Main Checkout & Update…", action: #selector(switchAndUpdate), keyEquivalent: "")
+                item.target = self
             } else if update.updateAvailable {
                 item = NSMenuItem(title: "Update Jaca", action: #selector(runUpdate), keyEquivalent: "")
                 item.target = self
@@ -99,6 +104,21 @@ final class JacaAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @objc private func runUpdate() {
         MainActor.assumeIsolated { UpdateModel.shared.runUpdate() }
+    }
+
+    /// Worktree build: confirm, then rebuild/reinstall from the primary (main) checkout.
+    @objc private func switchAndUpdate() {
+        MainActor.assumeIsolated {
+            let update = UpdateModel.shared
+            let alert = NSAlert()
+            alert.messageText = "Switch to the main checkout?"
+            alert.informativeText = "This build runs from the worktree “\(update.worktreeName ?? "")”. In-app updates can't run there because main is checked out elsewhere. Jaca will rebuild and reinstall from the main checkout, then relaunch."
+            alert.addButton(withTitle: "Switch & Update")
+            alert.addButton(withTitle: "Cancel")
+            if alert.runModal() == .alertFirstButtonReturn {
+                update.runUpdate(switchToPrimary: true)
+            }
+        }
     }
 
     @objc private func checkUpdate() {
