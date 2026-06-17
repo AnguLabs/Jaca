@@ -37,6 +37,7 @@ struct XcodeSidebarHeader: View {
         .onTapGesture { model.mode = .xcode }
         .padding(.horizontal, LemonadeTheme.spaces.spacing300)
         .padding(.top, LemonadeTheme.spaces.spacing200)
+        .padding(.bottom, LemonadeTheme.spaces.spacing200)
         .accessibilityIdentifier("xcodeHeader")
     }
 }
