@@ -314,7 +314,9 @@ private struct PackagePicker: View {
     @State private var query = ""
 
     var body: some View {
-        Button(action: { show = true; if !loaded { load() } }) {
+        // Re-fetch when we have nothing to show (first open, or a previous attempt came
+        // back empty) so a flaky devicectl gets another shot just by reopening.
+        Button(action: { show = true; if !loaded || apps.isEmpty { load() } }) {
             Image(systemName: "chevron.down")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(LemonadeTheme.colors.content.contentSecondary)
@@ -350,11 +352,16 @@ private struct PackagePicker: View {
                 ProgressView().padding(LemonadeTheme.spaces.spacing400)
                     .frame(maxWidth: .infinity)
             } else if apps.isEmpty {
-                LemonadeUi.Text("No apps found on this device.",
-                                textStyle: LemonadeTypography.shared.bodySmallRegular,
-                                color: LemonadeTheme.colors.content.contentTertiary)
-                    .padding(LemonadeTheme.spaces.spacing400)
-                    .frame(maxWidth: .infinity)
+                VStack(spacing: LemonadeTheme.spaces.spacing200) {
+                    LemonadeUi.Text("No apps found on this device.",
+                                    textStyle: LemonadeTypography.shared.bodySmallRegular,
+                                    color: LemonadeTheme.colors.content.contentTertiary)
+                    LemonadeUi.Button(label: "Retry", onClick: { load() },
+                                      variant: .neutral, type: .subtle, size: .small)
+                        .fixedSize()
+                }
+                .padding(LemonadeTheme.spaces.spacing400)
+                .frame(maxWidth: .infinity)
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
@@ -400,12 +407,14 @@ private struct PackagePicker: View {
     }
 
     private func load() {
-        loading = true
+        // Show the last-known list instantly (iOS cache); only spin if we have nothing yet.
+        if apps.isEmpty { apps = session.cachedApps() }
+        loading = apps.isEmpty
         // @MainActor so the @State mutations below never happen off the main thread.
         Task { @MainActor in
             let result = await session.installedApps()
-            apps = result
-            loaded = true
+            if !result.isEmpty { apps = result }   // keep the cache shown if a refresh fails
+            loaded = !apps.isEmpty                  // stay un-loaded while empty so reopen retries
             loading = false
         }
     }

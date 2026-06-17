@@ -37,6 +37,12 @@ enum InstalledApps {
         }
     }
 
+    /// Last good list for a device, read synchronously, so UI can show it instantly
+    /// while `list(for:)` refreshes. Empty for non-iOS-device or no cache yet.
+    static func cached(for device: Device) -> [AppEntry] {
+        device.platform == .iosDevice ? IOSAppCache.load(device.id) : []
+    }
+
     // MARK: Android
 
     private static func android(adbURL: URL?, serial: String) async -> [AppEntry] {
@@ -63,23 +69,31 @@ enum InstalledApps {
 
     private static func iosDevice(udid: String) async -> [AppEntry] {
         guard AppleToolchain.hasFullXcode else { return IOSAppCache.load(udid) }
+        // devicectl's first call after a cold start often stalls while it warms the device
+        // tunnel, then a retry returns fast — so try twice before giving up. On any
+        // slow/empty/failed result, fall back to the last good list so the picker never
+        // blanks to "No apps found".
+        for attempt in 0..<2 {
+            if let fresh = await queryIOSApps(udid: udid), !fresh.isEmpty {
+                IOSAppCache.save(fresh, udid: udid)
+                return fresh
+            }
+            if attempt == 0 { try? await Task.sleep(for: .seconds(1)) }
+        }
+        return IOSAppCache.load(udid)
+    }
+
+    private static func queryIOSApps(udid: String) async -> [AppEntry]? {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("jaca-devicectl-apps-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: tmp) }
-        var fresh: [AppEntry] = []
-        if (try? await CommandRunner.run(
+        guard (try? await CommandRunner.run(
             AppleToolchain.xcrun,
             ["devicectl", "device", "info", "apps", "--device", udid, "--json-output", tmp.path],
             environment: AppleToolchain.environment(),
-            timeout: 25
-        )) != nil, let data = try? Data(contentsOf: tmp) {
-            fresh = IOSAppsParser.parse(data)
-        }
-        // devicectl is flaky (CoreDevice stalls): on a slow/empty/failed query, fall back to
-        // the last good list so the picker never blanks to "No apps found".
-        guard !fresh.isEmpty else { return IOSAppCache.load(udid) }
-        IOSAppCache.save(fresh, udid: udid)
-        return fresh
+            timeout: 20
+        )) != nil, let data = try? Data(contentsOf: tmp) else { return nil }
+        return IOSAppsParser.parse(data)
     }
 }
 
