@@ -48,8 +48,10 @@ final class ProjectsModel {
         return ws.icon(forFile: url.path)
     }()
 
-    /// Whether the `herdr` CLI is installed — gates the "Open in Herdr" action.
-    let herdrInstalled = HerdrService.binaryURL() != nil
+    /// Whether the `herdr` CLI is installed — gates the "Open in Herdr" action. Seeded
+    /// synchronously, then refined via the login-shell PATH (see `resolveHerdr()`), so the
+    /// button appears even when `herdr` lives only on the user's shell PATH.
+    var herdrInstalled = HerdrService.binaryURL() != nil
     /// The Herdr logo (bundled asset), for the "Open in Herdr" button. nil hides the action.
     let herdrIcon = NSImage(named: "HerdrIcon")
     /// Presents the Herdr config sheet via the Projects-header gear (command settings only).
@@ -82,6 +84,17 @@ final class ProjectsModel {
             .flatMap(ProjectsViewMode.init(rawValue:)) ?? .tree
         if let cached = cache.load() { projects = cached }
         startWatching()
+        resolveHerdr()
+    }
+
+    /// Re-checks `herdr` availability via the login-shell PATH (off-main), flipping
+    /// `herdrInstalled` so the action appears even when the binary isn't in a well-known
+    /// dir. The synchronous seed above already covers the common locations.
+    private func resolveHerdr() {
+        Task { [weak self] in
+            let url = await HerdrService.resolveBinaryURL()
+            self?.herdrInstalled = (url != nil)
+        }
     }
 
     // MARK: - Derived

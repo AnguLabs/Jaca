@@ -45,19 +45,45 @@ struct HerdrService {
         }
     }
 
-    /// Common install locations for the `herdr` binary (Homebrew, /usr/local, cargo).
+    /// Common install locations for the `herdr` binary (Homebrew, /usr/local, ~/.local,
+    /// ~/bin, cargo), checked before scanning PATH.
     private static let candidatePaths = [
         "/opt/homebrew/bin/herdr",
         "/usr/local/bin/herdr",
+        "\(NSHomeDirectory())/.local/bin/herdr",
+        "\(NSHomeDirectory())/bin/herdr",
         "\(NSHomeDirectory())/.cargo/bin/herdr",
     ]
 
-    /// Resolves the `herdr` binary on disk, or nil if it isn't installed. Cheap + sync, so
-    /// callers can use it to decide whether to show the Herdr action at all.
+    /// Resolves the `herdr` binary on disk, or nil if it isn't installed. Cheap + sync
+    /// (no subprocess): checks the well-known install dirs, then every dir on the
+    /// inherited PATH. Use `resolveBinaryURL()` for the login-shell PATH fallback.
     static func binaryURL() -> URL? {
-        candidatePaths
-            .first { FileManager.default.isExecutableFile(atPath: $0) }
-            .map { URL(fileURLWithPath: $0) }
+        let fm = FileManager.default
+        if let hit = candidatePaths.first(where: { fm.isExecutableFile(atPath: $0) }) {
+            return URL(fileURLWithPath: hit)
+        }
+        let pathDirs = (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":")
+        for dir in pathDirs {
+            let candidate = "\(dir)/herdr"
+            if fm.isExecutableFile(atPath: candidate) { return URL(fileURLWithPath: candidate) }
+        }
+        return nil
+    }
+
+    /// Like `binaryURL()`, but falls back to resolving `herdr` against the user's
+    /// login-shell PATH (`zsh -lc 'command -v herdr'`). A GUI app doesn't inherit the
+    /// shell PATH, so a binary in e.g. `~/.local/bin` can be invisible to the sync check
+    /// — this catches any install location. Async (spawns a shell), so resolve it off
+    /// the render path (e.g. once when the Projects area loads), not per row.
+    static func resolveBinaryURL() async -> URL? {
+        if let url = binaryURL() { return url }
+        guard let result = try? await CommandRunner.run(
+            URL(fileURLWithPath: "/bin/zsh"), ["-lc", "command -v herdr"]
+        ), result.exitCode == 0 else { return nil }
+        let path = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !path.isEmpty, FileManager.default.isExecutableFile(atPath: path) else { return nil }
+        return URL(fileURLWithPath: path)
     }
 
     /// Runs the full launch sequence against the running herdr server, reporting each step
@@ -67,7 +93,7 @@ struct HerdrService {
         claudeCommand: String,
         onProgress: @Sendable (String) async -> Void = { _ in }
     ) async throws -> LaunchResult {
-        guard let herdr = Self.binaryURL() else { throw LaunchError.notInstalled }
+        guard let herdr = await Self.resolveBinaryURL() else { throw LaunchError.notInstalled }
         let tabLabel = target.tabName.isEmpty ? target.folder.lastPathComponent : target.tabName
 
         // 1. Find-or-create the project's Space (one Space per project).
