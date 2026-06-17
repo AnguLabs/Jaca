@@ -71,8 +71,14 @@ xcodegen generate >/dev/null
 step "Building Jaca ($CONFIG)"
 ./scripts/build.sh "$CONFIG"
 
-APP=$(ls -d ~/Library/Developer/Xcode/DerivedData/Jaca-*/Build/Products/"$CONFIG"/Jaca.app 2>/dev/null | head -1)
-[ -n "$APP" ] || { echo "✗ could not locate the built Jaca.app"; exit 1; }
+# Resolve the build product for *this* project/config via showBuildSettings — not a
+# `ls DerivedData/Jaca-*` glob: with multiple worktrees there are several Jaca-* derived
+# data dirs, and `head -1` would grab the alphabetically-first (often a stale build),
+# installing the wrong binary. (build.sh resolves it the same way.)
+APP="$(xcodebuild -project Jaca.xcodeproj -scheme Jaca -configuration "$CONFIG" \
+  -destination 'platform=macOS' -showBuildSettings 2>/dev/null \
+  | awk '/ BUILT_PRODUCTS_DIR =/{d=$3} / FULL_PRODUCT_NAME =/{n=$3} END{print d"/"n}')"
+[ -n "$APP" ] && [ -d "$APP" ] || { echo "✗ could not locate the built Jaca.app"; exit 1; }
 echo "✓ built: $APP"
 
 # --- 3. Install (optional) -------------------------------------------------
