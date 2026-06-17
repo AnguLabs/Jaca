@@ -572,6 +572,12 @@ final class LogSession: WorkspaceTab {
         await InstalledApps.list(for: device, adbURL: adbURL)
     }
 
+    /// Last good app list (synchronous), so the picker shows something instantly while
+    /// `installedApps()` refreshes — never a blank "No apps found" when we have a cache.
+    func cachedApps() -> [AppEntry] {
+        InstalledApps.cached(for: device)
+    }
+
     // MARK: - Export
 
     func exportText() -> String {
