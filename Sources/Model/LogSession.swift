@@ -327,7 +327,7 @@ final class LogSession: WorkspaceTab {
             let r = try? await CommandRunner.run(AppleToolchain.xcrun, ["simctl", "list", "devices", "booted"])
             return r?.stdout.contains(device.id) ?? false
         case .iosDevice:
-            let r = try? await CommandRunner.run(AppleToolchain.xcrun, ["devicectl", "list", "devices"])
+            let r = try? await CommandRunner.run(AppleToolchain.xcrun, ["devicectl", "list", "devices"], timeout: 12)
             return r?.stdout.contains(device.id) ?? false
         }
     }

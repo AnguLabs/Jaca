@@ -1,11 +1,30 @@
 import Foundation
 
 /// An installed app/package available to filter by.
-struct AppEntry: Identifiable, Hashable, Sendable {
+struct AppEntry: Identifiable, Hashable, Sendable, Codable {
     let id: String          // package id (Android) / bundle id (iOS)
     let name: String?       // human name (iOS); nil on Android
     let isUserApp: Bool     // user-installed vs system
     var display: String { name ?? id }
+}
+
+/// Disk cache of the last good iOS-device app list, so a slow/wedged `devicectl`
+/// (CoreDevice stalls) shows the last-known apps instead of an empty "No apps found".
+private enum IOSAppCache {
+    private static func file(_ udid: String) -> URL {
+        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Jaca", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("ios-apps-\(udid).json")
+    }
+    static func load(_ udid: String) -> [AppEntry] {
+        guard let data = try? Data(contentsOf: file(udid)) else { return [] }
+        return (try? JSONDecoder().decode([AppEntry].self, from: data)) ?? []
+    }
+    static func save(_ apps: [AppEntry], udid: String) {
+        guard let data = try? JSONEncoder().encode(apps) else { return }
+        try? data.write(to: file(udid))
+    }
 }
 
 /// Enumerates installed apps for the package/app-id filter dropdown.
@@ -43,16 +62,24 @@ enum InstalledApps {
     // MARK: iOS Device
 
     private static func iosDevice(udid: String) async -> [AppEntry] {
-        guard AppleToolchain.hasFullXcode else { return [] }
+        guard AppleToolchain.hasFullXcode else { return IOSAppCache.load(udid) }
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("jaca-devicectl-apps-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: tmp) }
-        guard (try? await CommandRunner.run(
+        var fresh: [AppEntry] = []
+        if (try? await CommandRunner.run(
             AppleToolchain.xcrun,
             ["devicectl", "device", "info", "apps", "--device", udid, "--json-output", tmp.path],
-            environment: AppleToolchain.environment()
-        )) != nil, let data = try? Data(contentsOf: tmp) else { return [] }
-        return IOSAppsParser.parse(data)
+            environment: AppleToolchain.environment(),
+            timeout: 25
+        )) != nil, let data = try? Data(contentsOf: tmp) {
+            fresh = IOSAppsParser.parse(data)
+        }
+        // devicectl is flaky (CoreDevice stalls): on a slow/empty/failed query, fall back to
+        // the last good list so the picker never blanks to "No apps found".
+        guard !fresh.isEmpty else { return IOSAppCache.load(udid) }
+        IOSAppCache.save(fresh, udid: udid)
+        return fresh
     }
 }
 
