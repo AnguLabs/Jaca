@@ -71,6 +71,11 @@ final class NetworkSession: WorkspaceTab, CaptureSink {
     }
     var isAndroid: Bool { device.platform == .android }
 
+    /// Whether the experimental companion-capture feature is enabled (Settings →
+    /// HTTPS decryption). When off the companion subsystem never starts, so its
+    /// onboarding prompt ("install the Jaca mobile app…") must stay hidden.
+    var companionCaptureEnabled: Bool { FeatureFlags.httpsDecryptionEnabled }
+
     /// A real ADB-connected Android device, not a companion-only entry. Proxy capture and
     /// adb-driven CA install only work here — a companion-only device has no adb path, so
     /// none of those apply to it.

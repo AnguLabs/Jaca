@@ -141,7 +141,7 @@ struct NetworkSessionView: View {
                                     .frame(maxWidth: 420)
                             }
                         }
-                    } else if !session.agentAvailable && session.device.platform != .iosSimulator {
+                    } else if session.companionCaptureEnabled && !session.agentAvailable && session.device.platform != .iosSimulator {
                         LemonadeUi.Text("Install the Jaca mobile app on this device to capture its traffic, then it appears here automatically.",
                                         textStyle: LemonadeTypography.shared.bodySmallRegular,
                                         textAlign: .center,
