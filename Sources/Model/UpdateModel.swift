@@ -15,6 +15,17 @@ final class UpdateModel {
     private(set) var isChecking = false
     let enabled: Bool
 
+    /// Set when this build was made from a *linked git worktree* (so a normal update would
+    /// fail — `main` is held by the primary checkout). Holds the primary checkout's path,
+    /// which the user can switch updates to.
+    private(set) var primaryRepoPath: String?
+    var isWorktreeBuild: Bool { primaryRepoPath != nil }
+    /// The worktree's folder name, for the notice ("Running from a worktree …").
+    var worktreeName: String? {
+        guard isWorktreeBuild, let repo = info?.repoPath else { return nil }
+        return URL(fileURLWithPath: repo).lastPathComponent
+    }
+
     var updateAvailable: Bool {
         if case .available = status { return true }
         return false
@@ -38,6 +49,7 @@ final class UpdateModel {
     /// Checks once now, then re-checks every 30 minutes (git fetch is cheap).
     func start() {
         guard enabled else { return }
+        detectWorktree()
         check()
         poll?.cancel()
         poll = Task { [weak self] in
@@ -61,13 +73,28 @@ final class UpdateModel {
         }
     }
 
+    /// Resolves once whether this build runs from a linked worktree (so the UI can
+    /// notify and offer to switch to the primary checkout).
+    private func detectWorktree() {
+        guard let info else { return }
+        let service = service
+        Task { [weak self] in
+            let primary = await service.primaryWorktreeIfLinked(info.repoPath)
+            await MainActor.run { self?.primaryRepoPath = primary }
+        }
+    }
+
     /// Pulls main, rebuilds, relaunches the new build, and quits this instance.
-    func runUpdate() {
+    /// `switchToPrimary` retargets the update at the primary (non-worktree) checkout —
+    /// used when this build runs from a linked worktree, after the user confirms.
+    func runUpdate(switchToPrimary: Bool = false) {
         guard enabled, let info, phase == nil else { return }
+        let target: BuildInfo = (switchToPrimary ? primaryRepoPath : nil)
+            .map { BuildInfo(repoPath: $0, buildCommit: info.buildCommit) } ?? info
         let service = service
         Task { [weak self] in
             do {
-                let appPath = try await service.performUpdate(info) { ph in
+                let appPath = try await service.performUpdate(target) { ph in
                     Task { @MainActor in self?.phase = ph }
                 }
                 await Self.relaunch(at: appPath)

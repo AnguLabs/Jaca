@@ -7,12 +7,17 @@ import Lemonade
 struct UpdateBanner: View {
     @State private var update = UpdateModel.shared
     @State private var confirming = false
+    @State private var confirmingWorktree = false
 
     var body: some View {
         Group {
             if update.enabled {
                 if let phase = update.phase {
                     progressRow(phase)
+                } else if update.isWorktreeBuild {
+                    // Running from a linked worktree: a normal update can't `git checkout
+                    // main` (it's held by the primary checkout), so notify + offer to switch.
+                    worktreeRow
                 } else if case let .available(behind, subject) = update.status {
                     availableRow(behind: behind, subject: subject)
                 } else {
@@ -23,6 +28,47 @@ struct UpdateBanner: View {
         .animation(.easeOut(duration: 0.2), value: update.phase)
         .animation(.easeOut(duration: 0.2), value: update.updateAvailable)
         .animation(.easeOut(duration: 0.2), value: update.isChecking)
+        .animation(.easeOut(duration: 0.2), value: update.isWorktreeBuild)
+    }
+
+    // MARK: - Worktree build (offer to switch to the primary checkout)
+
+    private var worktreeRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                LemonadeUi.Icon(
+                    icon: .circleInfo, contentDescription: nil, size: .small,
+                    tint: LemonadeTheme.colors.content.contentCaution
+                )
+                LemonadeUi.Text(
+                    "Running from a worktree",
+                    textStyle: LemonadeTypography.shared.bodySmallSemiBold,
+                    color: LemonadeTheme.colors.content.contentPrimary
+                )
+                Spacer(minLength: 0)
+            }
+            LemonadeUi.Text(
+                "This build tracks the worktree “\(update.worktreeName ?? "")”. In-app updates run against the main checkout — switch to it to update and reinstall normally.",
+                textStyle: LemonadeTypography.shared.bodyXSmallRegular,
+                color: LemonadeTheme.colors.content.contentSecondary,
+                maxLines: 4
+            )
+            LemonadeUi.Button(
+                label: confirmingWorktree ? "Reinstall from main checkout?" : "Switch to main checkout",
+                onClick: { handleWorktreeTap() },
+                leadingIcon: .download,
+                variant: .primary,
+                type: confirmingWorktree ? .solid : .subtle,
+                size: .xSmall
+            )
+            .fixedSize()
+            .accessibilityIdentifier("updateWorktreeSwitchButton")
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(card)
+        .padding(.horizontal, 8)
+        .padding(.bottom, 8)
     }
 
     // MARK: - Idle (up to date / checking)
@@ -151,6 +197,21 @@ struct UpdateBanner: View {
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(4))
                 confirming = false
+            }
+        }
+    }
+
+    /// Two-click confirm to switch the install off the worktree and onto the primary
+    /// (main) checkout — rebuilds & reinstalls from there, then relaunches.
+    private func handleWorktreeTap() {
+        if confirmingWorktree {
+            confirmingWorktree = false
+            update.runUpdate(switchToPrimary: true)
+        } else {
+            confirmingWorktree = true
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(4))
+                confirmingWorktree = false
             }
         }
     }
