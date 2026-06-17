@@ -10,6 +10,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HASH="$(git -C "$ROOT" rev-parse --short HEAD)"
 
+# Self-default the Android toolchain env so this works from a GUI/login shell that
+# doesn't source ~/.zshrc (e.g. the in-app updater shelling `all.sh --install`).
+# Without these, Gradle's Android plugin can't find the SDK and fails at configuration.
+export ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
+export JAVA_HOME="${JAVA_HOME:-$(/usr/libexec/java_home 2>/dev/null || true)}"
+
 echo "==> Building companion APK at $HASH"
 # --rerun-tasks: Gradle's incremental + native up-to-date checks miss edits here (a changed
 # .c or .kt can produce a no-op "BUILD SUCCESSFUL in 1s" with a stale APK), so force every
