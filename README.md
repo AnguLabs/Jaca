@@ -139,7 +139,7 @@ IP for hardware) and the Setup sheet walks you through installing the CA.
 | For | You need |
 |-----|----------|
 | Building the macOS app | A full **Xcode** (not just Command Line Tools) — macOS 14+ deployment target — and **XcodeGen** (`brew install xcodegen`). |
-| The project's Swift packages | Fetched automatically by Xcode on first build (Lemonade is a local package at `../lemonade-design-system`, so keep it checked out next to this repo). |
+| The project's Swift packages | The **remote** packages (swift-nio, swift-certificates, …) are fetched automatically by Xcode on first build. **Lemonade is a *local* package and is *not* fetched automatically** — clone it next to this repo so `../lemonade-design-system` resolves: `git clone git@github.com:saltpay/lemonade-design-system.git`. Keep it on an up-to-date `main`: a stale checkout can fail to compile against the current app (it must build for macOS). |
 | Android devices/logs/proxy | **Android SDK platform-tools** (`adb`) on your `PATH`, or set its path in Jaca's Settings. |
 | iOS simulators/devices | Xcode's `simctl`; for **physical iOS logs**, `idevicesyslog` (`brew install libimobiledevice`). |
 | Rebuilding the in-process agent | Android **NDK 27.2.12479018** + **CMake 3.22.1** (`sdkmanager "ndk;27.2.12479018" "cmake;3.22.1"`), **Kotlin** (`brew install kotlin`), an installed **platform** (`android-36`) and **build-tools** (for `d8`). |
@@ -148,6 +148,9 @@ IP for hardware) and the Setup sheet walks you through installing the CA.
 ### Quick start — one script for everything
 
 ```bash
+# Lemonade (the design system) is a LOCAL package — clone it next to jaca first.
+# Keep it on an up-to-date `main`.
+git clone git@github.com:saltpay/lemonade-design-system.git
 git clone <repo-url> jaca && cd jaca
 ./scripts/all.sh                  # build the agent + the app, then launch
 ```
@@ -266,7 +269,7 @@ jaca/
 
 ### Notable dependencies
 
-- **Lemonade** — the design system (local SwiftUI package).
+- **Lemonade** — the design system (local SwiftUI package, `saltpay/lemonade-design-system`; clone as a sibling directory).
 - **swift-nio / swift-nio-ssl / swift-certificates / swift-crypto** — the MITM proxy.
 - **libsqlite3** — history store (system library, no wrapper).
 - **AOSP slicer** — vendored dex rewriter for the agent (`agent/native/third_party`).
