@@ -25,10 +25,15 @@ enum CommandRunner {
     /// Runs `executable args…` to completion off the calling actor.
     /// Throws `ProcessError` only on launch failure; a non-zero exit is returned
     /// in `Result.exitCode` (callers decide whether that's fatal).
+    /// `timeout` (seconds) SIGKILLs a child that runs too long, so a wedged tool —
+    /// notably `devicectl` when CoreDevice stalls — can't block this call forever or
+    /// let callers (device polling, app listing) pile up zombie processes that wedge
+    /// CoreDevice further. A killed child returns its signal exit code + partial output.
     static func run(
         _ executable: URL,
         _ arguments: [String],
-        environment: [String: String]? = nil
+        environment: [String: String]? = nil,
+        timeout: TimeInterval? = nil
     ) async throws -> Result {
         guard FileManager.default.isExecutableFile(atPath: executable.path) else {
             throw ProcessError.executableNotFound(executable.path)
@@ -49,10 +54,21 @@ enum CommandRunner {
                     continuation.resume(throwing: ProcessError.launchFailed(error.localizedDescription))
                     return
                 }
+                var timer: DispatchSourceTimer?
+                if let timeout {
+                    let pid = process.processIdentifier
+                    let t = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+                    t.schedule(deadline: .now() + timeout)
+                    t.setEventHandler { if process.isRunning { kill(pid, SIGKILL) } }
+                    t.resume()
+                    timer = t
+                }
                 // Read fully before waitUntilExit to avoid deadlock on large output.
+                // A SIGKILL on timeout closes the pipes, so these reads unblock.
                 let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
                 let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
                 process.waitUntilExit()
+                timer?.cancel()
                 continuation.resume(returning: Result(
                     exitCode: process.terminationStatus,
                     stdout: String(decoding: outData, as: UTF8.self),

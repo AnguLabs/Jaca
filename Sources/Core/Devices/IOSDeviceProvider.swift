@@ -69,10 +69,13 @@ final class IOSDeviceProvider: DeviceProvider {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("squeeze-devicectl-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: tmp) }
+        // Bounded: this runs on a discovery poll loop, so a hung devicectl must self-kill
+        // rather than accumulate (a pile of stuck `list devices` wedges CoreDevice itself).
         guard (try? await CommandRunner.run(
             AppleToolchain.xcrun,
             ["devicectl", "list", "devices", "--json-output", tmp.path],
-            environment: AppleToolchain.environment()
+            environment: AppleToolchain.environment(),
+            timeout: 12
         )) != nil, let data = try? Data(contentsOf: tmp) else { return [] }
         return IOSDeviceParser.parse(data)
     }

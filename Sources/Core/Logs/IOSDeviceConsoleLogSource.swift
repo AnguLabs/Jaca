@@ -122,7 +122,8 @@ enum IOSDeviceLock {
         guard (try? await CommandRunner.run(
             AppleToolchain.xcrun,
             ["devicectl", "device", "info", "lockState", "--device", udid, "--json-output", tmp.path],
-            environment: AppleToolchain.environment()
+            environment: AppleToolchain.environment(),
+            timeout: 8   // polled in a loop — never let a wedged devicectl stack up
         )) != nil,
             let data = try? Data(contentsOf: tmp),
             let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
