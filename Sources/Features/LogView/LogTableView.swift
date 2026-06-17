@@ -36,10 +36,13 @@ struct LogTableView: NSViewRepresentable {
         table.usesAutomaticRowHeights = false
         table.usesAlternatingRowBackgroundColors = false
         table.intercellSpacing = NSSize(width: 0, height: 0)
-        table.columnAutoresizingStyle = .firstColumnOnlyAutoresizingStyle
+        // We size the single column ourselves (to the widest line seen) so an over-long
+        // line becomes horizontally scrollable instead of clipped — auto-resizing would
+        // pin it to the viewport width and there'd be nothing to scroll.
+        table.columnAutoresizingStyle = .noColumnAutoresizing
         let col = NSTableColumn(identifier: .init("log"))
         col.minWidth = 200
-        col.resizingMask = .autoresizingMask
+        col.resizingMask = []
         table.addTableColumn(col)
         table.dataSource = context.coordinator
         table.delegate = context.coordinator
@@ -47,7 +50,8 @@ struct LogTableView: NSViewRepresentable {
         let scroll = NSScrollView()
         scroll.documentView = table
         scroll.hasVerticalScroller = true
-        scroll.hasHorizontalScroller = false
+        scroll.hasHorizontalScroller = true        // appears only when a line overflows
+        scroll.autohidesScrollers = true
         scroll.drawsBackground = true
         scroll.backgroundColor = NSColor(LemonadeTheme.colors.background.bgDefault)
         scroll.automaticallyAdjustsContentInsets = false
@@ -59,6 +63,13 @@ struct LogTableView: NSViewRepresentable {
             forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: .main
         ) { [weak coord = context.coordinator] _ in
             MainActor.assumeIsolated { coord?.userScrolled() }
+        }
+        // Keep the column at least viewport-wide as the window resizes.
+        scroll.contentView.postsFrameChangedNotifications = true
+        context.coordinator.frameObserver = NotificationCenter.default.addObserver(
+            forName: NSView.frameDidChangeNotification, object: scroll.contentView, queue: .main
+        ) { [weak coord = context.coordinator] _ in
+            MainActor.assumeIsolated { coord?.applyColumnWidth() }
         }
 
         context.coordinator.reloadAll()
@@ -75,6 +86,7 @@ struct LogTableView: NSViewRepresentable {
 
     static func dismantleNSView(_ nsView: NSScrollView, coordinator: Coordinator) {
         if let o = coordinator.boundsObserver { NotificationCenter.default.removeObserver(o) }
+        if let o = coordinator.frameObserver { NotificationCenter.default.removeObserver(o) }
     }
 
     // MARK: - Coordinator
@@ -86,17 +98,22 @@ struct LogTableView: NSViewRepresentable {
         weak var scroll: NSScrollView?
         var isActive = true
         var boundsObserver: Any?
+        var frameObserver: Any?
 
         private var lastCount = 0
         private var lastEpoch = -1
         private var lastDropped = 0
         private var programmaticScroll = false
+        /// Widest rendered row (including the metadata columns) seen so far — the column
+        /// grows to this so the widest line is fully reachable by horizontal scroll.
+        private var widestContent: CGFloat = 0
 
         init(session: LogSession) { self.session = session }
 
         // MARK: data
 
-        func numberOfRows(in tableView: NSTableView) -> Int { session.visible.count }
+        // One table row per *display* line — a log with embedded newlines spans several.
+        func numberOfRows(in tableView: NSTableView) -> Int { session.displayRowCount }
 
         func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
             let id = NSUserInterfaceItemIdentifier("logRow")
@@ -108,8 +125,41 @@ struct LogTableView: NSViewRepresentable {
             let id = NSUserInterfaceItemIdentifier("logCell")
             let cell = (tableView.makeView(withIdentifier: id, owner: self) as? LogCellNSView)
                 ?? { let v = LogCellNSView(); v.identifier = id; return v }()
-            cell.line = row < session.visible.count ? session.visible[row] : nil
+            if row < session.displayRowCount {
+                let loc = session.locate(displayRow: row)
+                cell.configure(line: session.visible[loc.log], subLine: loc.sub)
+                growColumn(forContentWidth: LogRowLayout.messageX + cell.messageLineWidth + LogRowLayout.pad)
+            } else {
+                cell.configure(line: nil, subLine: 0)
+            }
             return cell
+        }
+
+        /// Grows the column so a newly-seen wide line is fully reachable. The column
+        /// never shrinks below the viewport (so it always fills the width) and only
+        /// shrinks back when the list is cleared/refiltered. Deferred so we never mutate
+        /// the column width while the table is mid-vending its row views.
+        func growColumn(forContentWidth w: CGFloat) {
+            guard w > widestContent else { return }
+            widestContent = w
+            DispatchQueue.main.async { [weak self] in self?.applyColumnWidth() }
+        }
+
+        func applyColumnWidth() {
+            guard let table, let col = table.tableColumns.first, let scroll else { return }
+            let target = max(scroll.contentView.bounds.width, widestContent)
+            if abs(col.width - target) > 0.5 { col.width = target }
+        }
+
+        /// Clicking/dragging any sub-line selects the whole log it belongs to, so a
+        /// multi-line entry highlights as one block and copies as one entry.
+        func tableView(_ tableView: NSTableView,
+                       selectionIndexesForProposedSelection proposed: IndexSet) -> IndexSet {
+            var expanded = IndexSet()
+            for r in proposed where r < session.displayRowCount {
+                expanded.insert(integersIn: session.displayRowRange(ofLog: session.locate(displayRow: r).log))
+            }
+            return expanded
         }
 
         // MARK: updates
@@ -118,10 +168,14 @@ struct LogTableView: NSViewRepresentable {
         /// scroll-to-target.
         func apply(epoch: Int, target: UInt64?, following: Bool) {
             guard let table else { return }
-            let count = session.visible.count
-            let dropped = session.droppedCount
+            // Work in display-row units: multi-line logs make rows ≠ logs, but rows stay
+            // uniform-height, so the trim/append math below is unchanged in shape.
+            let count = session.displayRowCount
+            let dropped = session.droppedDisplayRows
 
             if epoch != lastEpoch {
+                widestContent = 0                        // new content → re-measure widths
+                applyColumnWidth()
                 table.reloadData()                       // wholesale change (clear/filter)
             } else {
                 let frontTrim = dropped - lastDropped
@@ -163,21 +217,22 @@ struct LogTableView: NSViewRepresentable {
 
         func reloadAll() {
             table?.reloadData()
-            lastCount = session.visible.count
+            lastCount = session.displayRowCount
             lastEpoch = session.listEpoch
-            lastDropped = session.droppedCount
+            lastDropped = session.droppedDisplayRows
             if session.followTail { scrollToBottom() }
         }
 
         func scrollToBottom() {
-            guard let table, !session.visible.isEmpty else { return }
+            guard let table, session.displayRowCount > 0 else { return }
             programmaticScroll = true
-            table.scrollRowToVisible(session.visible.count - 1)
+            table.scrollRowToVisible(session.displayRowCount - 1)
             DispatchQueue.main.async { [weak self] in self?.programmaticScroll = false }
         }
 
         func scrollToSeq(_ seq: UInt64) {
-            guard let table, let idx = session.visible.firstIndex(where: { $0.seq == seq }) else { return }
+            guard let table, let logIdx = session.logIndex(forSeq: seq) else { return }
+            let idx = session.firstDisplayRow(ofLog: logIdx)
             programmaticScroll = true
             // Center it: scroll the row, then nudge so it sits mid-viewport.
             table.scrollRowToVisible(idx)
@@ -194,6 +249,13 @@ struct LogTableView: NSViewRepresentable {
         /// they move away. Guarded against our own programmatic scrolls.
         func userScrolled() {
             guard isActive, !programmaticScroll, let scroll, let table else { return }
+            // Marker dividers are centred on the viewport, so re-draw them when the
+            // visible rect shifts (notably a horizontal scroll of a long line).
+            table.enumerateAvailableRowViews { rowView, _ in
+                for sub in rowView.subviews where (sub as? LogCellNSView)?.isMarkerRow == true {
+                    sub.needsDisplay = true
+                }
+            }
             let atBottom = scroll.contentView.bounds.maxY >= table.bounds.height - LogTableView.rowHeight * 0.5
             if atBottom {
                 if !session.followTail { session.followTail = true }
@@ -220,19 +282,22 @@ final class LogNSTableView: NSTableView {
 
     func copyRows(messagesOnly: Bool) {
         guard let session else { return }
-        let lines = selectedRowIndexes.compactMap { $0 < session.visible.count ? session.visible[$0] : nil }
+        let lines = session.logIndices(forDisplayRows: selectedRowIndexes)
+            .compactMap { $0 < session.visible.count ? session.visible[$0] : nil }
         guard !lines.isEmpty else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(LogClipboard.text(for: lines, messagesOnly: messagesOnly), forType: .string)
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
+        guard let session else { return nil }
         let row = self.row(at: convert(event.locationInWindow, from: nil))
-        if row >= 0, !selectedRowIndexes.contains(row) {
-            selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        if row >= 0, row < session.displayRowCount, !selectedRowIndexes.contains(row) {
+            let range = session.displayRowRange(ofLog: session.locate(displayRow: row).log)
+            selectRowIndexes(IndexSet(integersIn: range), byExtendingSelection: false)
         }
         guard !selectedRowIndexes.isEmpty else { return nil }
-        let n = selectedRowIndexes.count
+        let n = session.logIndices(forDisplayRows: selectedRowIndexes).count
         let menu = NSMenu()
         menu.addItem(withTitle: n > 1 ? "Copy \(n) Messages" : "Copy Message",
                      action: #selector(copyMessages), keyEquivalent: "")
@@ -259,48 +324,101 @@ final class LogSelectionRowView: NSTableRowView {
     override var isEmphasized: Bool { get { false } set {} }   // no blue system tint
 }
 
+// MARK: - Row geometry (shared by drawing + horizontal-scroll measuring)
+
+enum LogRowLayout {
+    static let pad: CGFloat = 12
+    static let gap: CGFloat = 8
+    static let timeW: CGFloat = 92
+    static let badgeW: CGFloat = 16
+    static let tagW: CGFloat = 168
+    /// x where the message column starts (after timestamp + level badge + tag).
+    static let messageX: CGFloat = pad + timeW + gap + badgeW + gap + tagW + gap
+}
+
 // MARK: - Row content drawing
 
+/// Draws one **display row**: a single line of a (possibly multi-line) log entry.
+/// Sub-line 0 carries the timestamp/level/tag; continuation rows draw only their
+/// text, aligned under the message column. The message is drawn at its full natural
+/// width — an over-long line stays reachable via the horizontal scroller (the column
+/// grows to the widest line) rather than being truncated with a "…".
 final class LogCellNSView: NSView {
-    var line: LogLine? { didSet { needsDisplay = true } }
+    private(set) var line: LogLine?
+    private var subLine = 0
+    private var displayLines: [String] = [""]
+    private var truncated = false
+    private var cachedMessage: String?
+    /// True when this row renders a synthetic marker (centred on the viewport).
+    private(set) var isMarkerRow = false
+    /// Width of this row's message text, used by the table to size the column so the
+    /// widest line is fully reachable by horizontal scroll.
+    private(set) var messageLineWidth: CGFloat = 0
+
     override var isFlipped: Bool { true }
-    override func draw(_ dirtyRect: NSRect) {
-        guard let line else { return }
-        if line.isMarker { drawMarker(line) } else { drawLog(line) }
+
+    func configure(line: LogLine?, subLine: Int) {
+        if line?.message != cachedMessage {
+            cachedMessage = line?.message
+            if let message = line?.message {
+                displayLines = LogTextLines.displayLines(message)
+                truncated = LogTextLines.isTruncated(message)
+            } else {
+                displayLines = [""]
+                truncated = false
+            }
+        }
+        self.line = line
+        self.subLine = subLine
+        self.isMarkerRow = line?.isMarker ?? false
+        let text = subLine < displayLines.count ? displayLines[subLine] : ""
+        messageLineWidth = (text as NSString).size(withAttributes: LogColors.attr(LogColors.timestamp)).width
+        needsDisplay = true
     }
 
-    private func drawLog(_ line: LogLine) {
-        let h = bounds.height, w = bounds.width
-        let ty = (h - LogColors.lineHeight) / 2
-        let pad: CGFloat = 12, gap: CGFloat = 8
-        let timeW: CGFloat = 92, badgeW: CGFloat = 16, tagW: CGFloat = 168
-
-        var x = pad
-        line.timestamp.logClock.draw(in: NSRect(x: x, y: ty, width: timeW, height: LogColors.lineHeight),
-                                     withAttributes: LogColors.attr(LogColors.timestamp))
-        x += timeW + gap
-
-        // level badge
-        let badge = NSRect(x: x, y: (h - 14) / 2, width: badgeW, height: 14)
-        let path = NSBezierPath(roundedRect: badge, xRadius: 3, yRadius: 3)
-        LogColors.badgeBG[line.level.rawValue].setFill(); path.fill()
-        let lvl = line.level.short
-        let lvlSize = (lvl as NSString).size(withAttributes: LogColors.attrBold(LogColors.level[line.level.rawValue]))
-        lvl.draw(at: NSPoint(x: badge.midX - lvlSize.width / 2, y: ty),
-                 withAttributes: LogColors.attrBold(LogColors.level[line.level.rawValue]))
-        x += badgeW + gap
-
-        // tag (reserved width, truncated) — keeps the message column aligned
-        if !line.tag.isEmpty {
-            tagLabel(line).draw(in: NSRect(x: x, y: ty, width: tagW, height: LogColors.lineHeight),
-                                withAttributes: LogColors.attrTruncating(LogColors.tag))
+    override func draw(_ dirtyRect: NSRect) {
+        guard let line else { return }
+        if line.isMarker {
+            if subLine == 0 { drawMarker(line) }
+        } else {
+            drawLog(line, sub: subLine)
         }
-        x += tagW + gap
+    }
 
-        // message (one line, truncated)
-        let msgW = max(0, w - x - pad)
-        line.message.draw(in: NSRect(x: x, y: ty, width: msgW, height: LogColors.lineHeight),
-                          withAttributes: LogColors.attrTruncating(LogColors.level[line.level.rawValue]))
+    private func drawLog(_ line: LogLine, sub: Int) {
+        let h = bounds.height
+        let ty = (h - LogColors.lineHeight) / 2
+
+        // Metadata columns only on the first line; continuation lines are message-only.
+        if sub == 0 {
+            var x = LogRowLayout.pad
+            line.timestamp.logClock.draw(
+                in: NSRect(x: x, y: ty, width: LogRowLayout.timeW, height: LogColors.lineHeight),
+                withAttributes: LogColors.attr(LogColors.timestamp))
+            x += LogRowLayout.timeW + LogRowLayout.gap
+
+            let badge = NSRect(x: x, y: (h - 14) / 2, width: LogRowLayout.badgeW, height: 14)
+            LogColors.badgeBG[line.level.rawValue].setFill()
+            NSBezierPath(roundedRect: badge, xRadius: 3, yRadius: 3).fill()
+            let lvl = line.level.short
+            let lvlAttrs = LogColors.attrBold(LogColors.level[line.level.rawValue])
+            let lvlSize = (lvl as NSString).size(withAttributes: lvlAttrs)
+            lvl.draw(at: NSPoint(x: badge.midX - lvlSize.width / 2, y: ty), withAttributes: lvlAttrs)
+            x += LogRowLayout.badgeW + LogRowLayout.gap
+
+            if !line.tag.isEmpty {
+                tagLabel(line).draw(in: NSRect(x: x, y: ty, width: LogRowLayout.tagW, height: LogColors.lineHeight),
+                                    withAttributes: LogColors.attrTruncating(LogColors.tag))
+            }
+        }
+
+        // message line — drawn at its natural width; an over-long line is reached via the
+        // horizontal scroller (the column grows to fit the widest line).
+        guard sub < displayLines.count else { return }
+        let isIndicator = truncated && sub == displayLines.count - 1
+        let color = isIndicator ? LogColors.timestamp : LogColors.level[line.level.rawValue]
+        (displayLines[sub] as NSString).draw(at: NSPoint(x: LogRowLayout.messageX, y: ty),
+                                             withAttributes: LogColors.attr(color))
     }
 
     private func tagLabel(_ line: LogLine) -> String {
@@ -309,17 +427,22 @@ final class LogCellNSView: NSView {
 
     private func drawMarker(_ line: LogLine) {
         let color = line.markerCritical ? LogColors.markerCritical : LogColors.marker
-        let h = bounds.height, w = bounds.width
+        let h = bounds.height
         let attrs = LogColors.attrBold(color)
         let size = (line.message as NSString).size(withAttributes: attrs)
-        let tx = (w - size.width) / 2
+        // Centre on the *visible* viewport, not the (possibly very wide) column, so the
+        // divider stays put while a long line is scrolled horizontally.
+        let vis = enclosingScrollView?.documentVisibleRect ?? bounds
+        let originX = vis.minX, visW = vis.width
+        let tx = originX + (visW - size.width) / 2
         let ty = (h - LogColors.lineHeight) / 2
         line.message.draw(at: NSPoint(x: tx, y: ty), withAttributes: attrs)
         // rules either side of the centred label
         color.withAlphaComponent(0.45).setFill()
         let ruleY = h / 2
-        NSRect(x: 12, y: ruleY, width: max(0, tx - 12 - 10), height: 1).fill()
-        NSRect(x: tx + size.width + 10, y: ruleY, width: max(0, w - (tx + size.width) - 10 - 12), height: 1).fill()
+        NSRect(x: originX + 12, y: ruleY, width: max(0, tx - (originX + 12) - 10), height: 1).fill()
+        NSRect(x: tx + size.width + 10, y: ruleY,
+               width: max(0, (originX + visW) - (tx + size.width) - 10 - 12), height: 1).fill()
     }
 }
 
