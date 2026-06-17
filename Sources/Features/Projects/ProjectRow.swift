@@ -74,6 +74,7 @@ struct ProjectNodeView: View {
                     .truncationMode(.middle)
             }
             .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+            .textSelection(.enabled)
 
             if hovering, project.source == .user { removeButton }
 
@@ -200,6 +201,7 @@ struct ProjectCheckoutRow: View {
                     .truncationMode(.middle)
             }
             .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+            .textSelection(.enabled)
 
             if model.herdrInstalled, project.isClaudeProject, let herdrIcon = model.herdrIcon {
                 OpenInAppButton(icon: herdrIcon, help: herdrHelp, iconCornerRadius: 4) {
@@ -212,6 +214,7 @@ struct ProjectCheckoutRow: View {
             if let zed = model.zed {
                 OpenInAppButton(icon: zed.icon, help: "Open in \(zed.name)") { model.openInZed(checkout.url) }
             }
+            CopyButton(value: checkout.name, help: "Copy name")
             OpenInAppButton(icon: model.finderIcon, help: "Open in Finder") { model.openInFinder(checkout.url) }
 
             Text(sizeText)
@@ -289,5 +292,50 @@ struct ProjectCheckoutRow: View {
     /// The main checkout starts a fresh worktree; a linked worktree opens in place.
     private var herdrHelp: String {
         checkout.isMain ? "Open in Herdr (new worktree)" : "Open in Herdr"
+    }
+}
+
+/// Copies a string (e.g. a worktree name) to the clipboard, with a brief check-mark
+/// confirmation. Sits alongside the launch buttons in a row, sized to match them.
+private struct CopyButton: View {
+    let value: String
+    let help: String
+
+    @State private var hovering = false
+    @State private var copied = false
+
+    var body: some View {
+        Button(action: copy) {
+            LemonadeUi.Icon(
+                icon: copied ? .circleCheck : .copy,
+                contentDescription: help,
+                size: .small,
+                tint: copied
+                    ? LemonadeTheme.colors.content.contentPositive
+                    : LemonadeTheme.colors.content.contentSecondary
+            )
+            .frame(width: 18, height: 18)
+            .padding(5)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(hovering
+                          ? LemonadeTheme.colors.interaction.bgSubtleInteractive
+                          : .clear)
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(.easeInOut(duration: 0.15), value: hovering)
+        .help(help)
+    }
+
+    private func copy() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
+        copied = true
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.2))
+            copied = false
+        }
     }
 }
