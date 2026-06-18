@@ -162,6 +162,16 @@ struct NetworkSessionView: View {
                                         textAlign: .center,
                                         color: LemonadeTheme.colors.content.contentTertiary)
                             .frame(maxWidth: 420)
+                    } else if let reason = session.agentUnavailableReason {
+                        // The in-process agent must never silently vanish: when a device that
+                        // should support it can't (artifacts not built, adb missing, …), say why.
+                        if hasCompanion {
+                            LemonadeUi.Text("— or —",
+                                            textStyle: LemonadeTypography.shared.bodyXSmallOverline,
+                                            color: LemonadeTheme.colors.content.contentTertiary)
+                                .padding(.top, LemonadeTheme.spaces.spacing100)
+                        }
+                        agentUnavailableNotice(reason)
                     }
                 }
             }
@@ -178,6 +188,31 @@ struct NetworkSessionView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(LemonadeTheme.colors.background.bgDefault)
         .accessibilityIdentifier("networkCaptureChooser")
+    }
+
+    /// Explains why the in-process agent option is unavailable, with the remedy (build
+    /// commands / adb hint). Selectable so the user can copy the commands.
+    private func agentUnavailableNotice(_ reason: String) -> some View {
+        VStack(alignment: .leading, spacing: LemonadeTheme.spaces.spacing100) {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                LemonadeUi.Text("In-process agent unavailable",
+                                textStyle: LemonadeTypography.shared.bodySmallRegular,
+                                color: LemonadeTheme.colors.content.contentCaution)
+            }
+            .foregroundStyle(LemonadeTheme.colors.content.contentCaution)
+            Text(reason)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(LemonadeTheme.colors.content.contentSecondary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(LemonadeTheme.spaces.spacing300)
+        .background(RoundedRectangle(cornerRadius: LemonadeTheme.radius.radius150)
+            .fill(LemonadeTheme.colors.background.bgCautionSubtle))
+        .frame(maxWidth: 520)
+        .accessibilityIdentifier("agentUnavailableNotice")
     }
 
     /// Surfaces the device's root status so the user knows whether the CA installs

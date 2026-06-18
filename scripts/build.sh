@@ -5,18 +5,55 @@ cd "$(dirname "$0")/.."
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 CONFIG="${1:-Debug}"
 
-# Bundle the in-process Android agent (built by scripts/all.sh) into Resources/ so the app finds
-# it inside its own bundle on any machine — no hardcoded source path, works for the installed app
-# too. arm64-v8a only (every dev is on Apple Silicon; device + emulator share the ABI). Copied
-# before generating so it's part of the Resources build phase; cleared if the agent isn't built.
-if [ -f agent/out/arm64-v8a/libsqueezeagent.so ]; then
-  cp -f agent/out/arm64-v8a/libsqueezeagent.so Resources/libsqueezeagent.so
-  cp -f agent/out/squeezeagent-boot.dex        Resources/squeezeagent-boot.dex
-  cp -f agent/out/squeezeagent-capture.dex     Resources/squeezeagent-capture.dex
+# --- In-process Android agent (.so + dexes) -------------------------------
+# The agent IS part of the product — agent mode is the default network-inspection path — so
+# building it lives here, in build.sh, not just in all.sh: a plain `build.sh` must never produce
+# an incomplete app (the same guarantee the iOS-Simulator agent already gets from its xcodebuild
+# build phase). Built only when missing or when its sources changed, so the inner app-rebuild
+# loop doesn't pay the NDK/kotlinc cost every time. arm64-v8a only (every dev is on Apple
+# Silicon; device + emulator share the ABI).
+AGENT_SO=agent/out/arm64-v8a/libsqueezeagent.so
+AGENT_BOOT=agent/out/squeezeagent-boot.dex
+AGENT_CAP=agent/out/squeezeagent-capture.dex
+
+agent_needs_build() {
+  [ -f "$AGENT_SO" ] && [ -f "$AGENT_BOOT" ] && [ -f "$AGENT_CAP" ] || return 0   # any artifact missing
+  [ -n "$(find agent/native agent/build.sh -type f -newer "$AGENT_SO" 2>/dev/null | head -1)" ] && return 0
+  [ -n "$(find agent/java agent/kotlin agent/build-dex.sh -type f -newer "$AGENT_CAP" 2>/dev/null | head -1)" ] && return 0
+  return 1   # up to date
+}
+
+if agent_needs_build; then
+  if [ "${JACA_SKIP_AGENT:-0}" = 1 ]; then
+    echo "⚠️  JACA_SKIP_AGENT=1 — skipping the in-process Android agent (agent network capture will be unavailable)."
+  else
+    echo "== building in-process Android agent (.so + dexes) =="
+    if ! ( cd agent && ./build.sh && ./build-dex.sh ); then
+      {
+        echo ""
+        echo "error: the in-process Android agent failed to build — the app would be incomplete"
+        echo "       (agent mode is the default network-inspection path). Install the Android toolchain:"
+        echo '         sdkmanager "ndk;27.2.12479018" "cmake;3.22.1" "platforms;android-36" "build-tools;34.0.0"'
+        echo "         brew install kotlin"
+        echo "       then re-run ./scripts/build.sh. To build the app WITHOUT the agent on purpose:"
+        echo "         JACA_SKIP_AGENT=1 ./scripts/build.sh"
+      } >&2
+      exit 1
+    fi
+  fi
+fi
+
+# Bundle the agent into Resources/ so the app finds it inside its own bundle (works for the
+# installed app too — no hardcoded source path). Copied before generating so it's part of the
+# Resources build phase; cleared only when the build was deliberately run without the agent.
+if [ -f "$AGENT_SO" ]; then
+  cp -f "$AGENT_SO"   Resources/libsqueezeagent.so
+  cp -f "$AGENT_BOOT" Resources/squeezeagent-boot.dex
+  cp -f "$AGENT_CAP"  Resources/squeezeagent-capture.dex
   echo "✓ bundled in-process agent (arm64-v8a) into Resources/"
 else
   rm -f Resources/libsqueezeagent.so Resources/squeezeagent-boot.dex Resources/squeezeagent-capture.dex
-  echo "ℹ️  in-process agent not built (agent/out missing) — agent mode will show build instructions"
+  echo "ℹ️  in-process agent not bundled (skipped) — agent mode will show build instructions in-app"
 fi
 
 # Always regenerate so the agent files (added/removed above) are reflected in the project.

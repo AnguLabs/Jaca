@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# One-shot build of EVERYTHING: the Android in-process agent (.so + dexes), the
-# macOS app, then launch it. The agent step is best-effort — if its toolchain
-# (NDK/CMake/Kotlin) isn't installed, it's skipped with a warning and the app
-# still builds (proxy capture works without the agent).
+# One-shot build of EVERYTHING: the macOS app + both in-process agents, then launch it.
+# The Android agent (.so + dexes) and the iOS-Simulator agent are now built by build.sh
+# itself (the agent is part of the product), so this script just adds the optional
+# companion APK + install/launch convenience. A missing Android toolchain makes the
+# build FAIL (the app would be incomplete) — pass --no-agent to opt out on purpose.
 #
 # Usage:
-#   ./scripts/all.sh                 # build agent + app (Debug), then launch
+#   ./scripts/all.sh                 # build app + agents (Debug), then launch
 #   ./scripts/all.sh --release       # optimized build
 #   ./scripts/all.sh --install       # build Release + copy into /Applications + launch
-#   ./scripts/all.sh --no-agent      # skip the agent build
+#   ./scripts/all.sh --no-agent      # build the app WITHOUT the in-process Android agent
 #   ./scripts/all.sh --no-run        # build only, don't launch
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -35,23 +36,10 @@ step() { printf '\n\033[1;36m== %s ==\033[0m\n' "$1"; }
 command -v xcodegen >/dev/null 2>&1 || { echo "✗ xcodegen not found — run: brew install xcodegen"; exit 1; }
 [ -d "$DEVELOPER_DIR" ] || { echo "✗ Xcode not found at $DEVELOPER_DIR (a full Xcode is required, not just CLT)"; exit 1; }
 
-# --- 1. Android agent (best-effort) ---------------------------------------
-if [ "$DO_AGENT" = 1 ]; then
-  step "Building Android agent (.so + dexes)"
-  if ( cd agent && ./build.sh && ./build-dex.sh ); then
-    echo "✓ agent artifacts -> agent/out/ (bundled into the app by build.sh)"
-  else
-    printf '\n\033[1;31m================================================================\033[0m\n'
-    printf '\033[1;31m  AGENT BUILD FAILED — in-process network capture will NOT work.\033[0m\n'
-    echo   "  Agent mode is the default network-inspection path. Install the"
-    echo   "  Android toolchain, then re-run ./scripts/all.sh:"
-    echo   '      sdkmanager "ndk;27.2.12479018" "cmake;3.22.1" "platforms;android-36"'
-    echo   "      brew install kotlin"
-    echo   "  The app still builds; agent mode shows these exact steps in-app"
-    echo   "  until the agent is built."
-    printf '\033[1;31m================================================================\033[0m\n\n'
-  fi
-fi
+# --- 1. Android agent --------------------------------------------------------
+# Built (when missing/stale) and bundled by build.sh below; --no-agent opts out via the
+# same env var build.sh reads, so the build doesn't fail without the Android toolchain.
+[ "$DO_AGENT" = 0 ] && export JACA_SKIP_AGENT=1
 
 # --- 1b. Companion APK (install builds ship it inside the .app) ------------
 # The bundled APK is what the installed app serves for QR onboarding, so build + bundle it

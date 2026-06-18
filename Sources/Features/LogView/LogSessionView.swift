@@ -111,6 +111,13 @@ struct LogSessionView: View {
                     selected: session.filter.isRegex,
                     onChipClicked: { session.setRegex(!session.filter.isRegex) }
                 )
+                LemonadeUi.Chip(
+                    label: "Prettify JSON",
+                    selected: LogBodyPrettifyStore.shared.enabled,
+                    onChipClicked: { LogBodyPrettifyStore.shared.enabled.toggle() }
+                )
+                .help("Auto-prettify endpoint response bodies (double-click a body to collapse it)")
+                .accessibilityIdentifier("prettifyJSON")
                 if session.device.platform != .android {
                     LemonadeUi.Chip(
                         label: "System logs",

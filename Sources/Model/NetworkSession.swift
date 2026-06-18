@@ -91,6 +91,32 @@ final class NetworkSession: WorkspaceTab, CaptureSink {
         return isADBDevice || device.platform == .iosSimulator
     }
 
+    /// Why the in-process agent isn't offered on a device that *should* support it — so the
+    /// capture chooser can explain the absence instead of silently dropping the option (a
+    /// missing agent must never look like "no capture modes at all"). `nil` when the agent
+    /// is available, or when the device legitimately has no in-process path (a
+    /// companion-only entry, or a physical iOS device — both use proxy/companion instead).
+    var agentUnavailableReason: String? {
+        guard !canPickAgentApp else { return nil }
+        switch device.platform {
+        case .android:
+            if device.isCompanion { return nil }                  // companion-only: no adb path, by design
+            if !AgentArtifacts.isAvailable { return AgentArtifacts.missingMessage }
+            if adbURL == nil {
+                return """
+                    Android platform-tools weren’t found, so Jaca can’t attach the in-process \
+                    agent over adb. Install the Android SDK platform-tools and make sure `adb` \
+                    is on your PATH, then relaunch Jaca.
+                    """
+            }
+            return nil
+        case .iosSimulator:
+            return AgentArtifacts.iosNetworkAgentAvailable ? nil : AgentArtifacts.iosMissingMessage
+        case .iosDevice:
+            return nil                                            // no in-process attach on a real device
+        }
+    }
+
     /// Whether the toolbar's proxy "Setup" affordance is relevant: only for a real ADB
     /// device actively capturing via the MITM proxy. Companion and agent modes need no
     /// proxy/CA setup (the companion app installs the CA itself), so it's hidden there.
