@@ -63,17 +63,17 @@ final class GradleDaemonsModel {
         }
     }
 
-    /// Deletes a version's cache dir (`~/.gradle/caches/<version>`) and drops it from the list.
-    func deleteCache(_ version: String) {
+    /// Deletes a cache dir (`~/.gradle/caches/<name>`) and drops it from the list.
+    func deleteCache(_ name: String) {
         let service = self.service
         Task { [weak self] in
-            let ok = await service.deleteCache(version: version)
+            let ok = await service.deleteCache(name: name)
             guard let self else { return }
             if ok {
-                self.cacheEntries.removeAll { $0.version == version }
-                self.flash("Deleted cache \(version)", fallback: "eraser")
+                self.cacheEntries.removeAll { $0.name == name }
+                self.flash("Deleted cache \(name)", fallback: "eraser")
             } else {
-                self.flash("Couldn't delete \(version)", fallback: "eraser")
+                self.flash("Couldn't delete \(name)", fallback: "eraser")
             }
         }
     }

@@ -130,7 +130,7 @@ private struct GradleCacheCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             LemonadeUi.Text(
-                entry.version,
+                entry.name,
                 textStyle: LemonadeTypography.shared.bodySmallSemiBold,
                 color: LemonadeTheme.colors.content.contentPrimary
             )
@@ -158,7 +158,7 @@ private struct GradleCacheCard: View {
     private func handleTap() {
         if confirming {
             confirming = false
-            model.deleteCache(entry.version)
+            model.deleteCache(entry.name)
         } else {
             confirming = true
             Task { @MainActor in
