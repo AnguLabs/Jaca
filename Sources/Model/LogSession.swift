@@ -32,7 +32,14 @@ final class LineBuffer: @unchecked Sendable {
 final class SeqCounter: @unchecked Sendable {
     private let lock = NSLock()
     private var value: UInt64 = 0
-    func next() -> UInt64 { lock.lock(); defer { lock.unlock() }; let v = value; value &+= 1; return v }
+    private let stride: UInt64
+    /// `stride` leaves room between consecutive lines so a line the prettifier splits into
+    /// several entries (metadata head / JSON body / trailing) can get distinct, in-order
+    /// sub-seqs (`base, base+1, …`) without colliding with the next line — keeping `seq`
+    /// strictly increasing for the front-trim and persistence ordering. Far more than the
+    /// ≤ 3 parts a split ever produces.
+    init(stride: UInt64 = 8) { self.stride = stride }
+    func next() -> UInt64 { lock.lock(); defer { lock.unlock() }; let v = value; value &+= stride; return v }
 }
 
 /// One tab: a single running (or stopped) log stream bound to a device + filter,
@@ -82,6 +89,14 @@ final class LogSession: WorkspaceTab {
     var followTail = true
     var statusMessage: String?
 
+    /// Seqs of prettified response bodies the user has collapsed to a single line
+    /// (double-click toggles). Default is expanded; only huge payloads are usually
+    /// folded. Read by the render path via `displayMessage`/`effectiveLineCount`.
+    private(set) var collapsedBodies: Set<UInt64> = []
+    /// Stateful detector that prettifies JSON response bodies as lines stream past.
+    /// Fed every line in `flush` (in arrival order) so the two-log "split" shape pairs.
+    private var bodyPrettifier = LogBodyPrettifier()
+
     /// Invoked each time the stream starts (so history recording works whether the
     /// tab is auto-started or started later by the user).
     var onStarted: (() -> Void)?
@@ -112,6 +127,30 @@ final class LogSession: WorkspaceTab {
 
     /// The `visible` index of a line by its seq (crash navigation), or nil.
     func logIndex(forSeq seq: UInt64) -> Int? { visible.firstIndex { $0.seq == seq } }
+
+    /// The text a `visible` entry currently renders as: the compact one-liner when a
+    /// prettified body is collapsed, otherwise the full (expanded) message.
+    func displayMessage(_ line: LogLine) -> String {
+        if let compact = line.bodyCompact, collapsedBodies.contains(line.seq) { return compact }
+        return line.message
+    }
+
+    /// Display-row count for a `visible` entry, honouring a collapsed body.
+    private func effectiveLineCount(_ line: LogLine) -> Int {
+        LogTextLines.count(displayMessage(line))
+    }
+
+    /// Toggles a prettified body between expanded (multi-line) and collapsed (one line).
+    /// No-op for non-body lines. The entry's first row keeps its position, so a collapse
+    /// just folds the rows below it upward like a disclosure; a rebuilt display map +
+    /// epoch bump tells the list to reload.
+    func toggleBodyCollapsed(logIndex i: Int) {
+        guard i >= 0, i < visible.count, visible[i].bodyCompact != nil else { return }
+        let seq = visible[i].seq
+        if !collapsedBodies.insert(seq).inserted { collapsedBodies.remove(seq) }
+        displayMap.rebuild(lineCounts: visible.map { effectiveLineCount($0) })
+        listEpoch &+= 1
+    }
 
     /// Maps a set of selected display rows back to the unique `visible` entries they
     /// belong to, in order — so selecting any sub-line of a multi-line log copies the
@@ -277,6 +316,13 @@ final class LogSession: WorkspaceTab {
         pidTask?.cancel(); pidTask = nil
         consoleTask?.cancel(); consoleTask = nil
         flush(max: .max)  // drain everything that's left
+        // Emit any response body still being reassembled across chunks (the stream ended
+        // mid-body) so held fragments aren't lost.
+        let leftover = bodyPrettifier.finalize()
+        if !leftover.isEmpty {
+            for var l in leftover { l.seq = seq.next(); pending.append(l) }
+            flush(max: .max)
+        }
     }
 
     func toggle() { isRunning ? stop() : connect() }
@@ -348,6 +394,8 @@ final class LogSession: WorkspaceTab {
         droppedDisplayRows = 0
         crashSeqs.removeAll()
         crashCursor = nil
+        collapsedBodies.removeAll()
+        bodyPrettifier = LogBodyPrettifier()   // forget any half-seen BODY START pair
         listEpoch &+= 1
     }
 
@@ -442,7 +490,7 @@ final class LogSession: WorkspaceTab {
                     out = self.ring.filter { self.filter.matches($0, regex: self.compiledRegex) }
                 }
                 self.visible = out
-                self.displayMap.rebuild(lineCounts: out.map { LogTextLines.count($0.message) })
+                self.displayMap.rebuild(lineCounts: out.map { self.effectiveLineCount($0) })
                 self.listEpoch &+= 1
             }
         }
@@ -460,8 +508,27 @@ final class LogSession: WorkspaceTab {
     }
 
     private func flush(max: Int = 4_000) {
-        let batch = pending.drain(max: max)
-        guard !batch.isEmpty else { return }
+        let drained = pending.drain(max: max)
+        guard !drained.isEmpty else { return }
+        // Auto-prettify detected JSON response bodies before they're stored, so the ring,
+        // re-filtering and history all see the expanded form. Gated per flush, so turning
+        // the toggle off only affects subsequent lines (already-stored lines stay as-is).
+        // An inline body splits into several entries (so the JSON is its own copyable
+        // line); each split part gets a distinct sub-seq within the slot the SeqCounter
+        // reserved for the original, keeping seq order intact for trim + persistence.
+        var batch: [LogLine]
+        if LogBodyPrettifyStore.shared.enabled {
+            batch = []
+            batch.reserveCapacity(drained.count)
+            for original in drained {
+                let parts = bodyPrettifier.transform(original)
+                for (k, p) in parts.enumerated() {
+                    var pp = p; pp.seq = original.seq &+ UInt64(k); batch.append(pp)
+                }
+            }
+        } else {
+            batch = drained
+        }
         onPersist?(id, batch)
 
         ring.append(contentsOf: batch)
@@ -481,7 +548,7 @@ final class LogSession: WorkspaceTab {
         }
         for line in batch where filter.matches(line, regex: compiledRegex) {
             visible.append(line)
-            displayMap.append(lineCount: LogTextLines.count(line.message))
+            displayMap.append(lineCount: effectiveLineCount(line))
             if CrashDetector.isCrash(line) {
                 crashSeqs.append(line.seq)
                 injectMarker("💥 \(CrashDetector.label(line))", critical: true)

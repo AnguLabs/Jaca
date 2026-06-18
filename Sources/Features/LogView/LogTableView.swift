@@ -46,6 +46,10 @@ struct LogTableView: NSViewRepresentable {
         table.addTableColumn(col)
         table.dataSource = context.coordinator
         table.delegate = context.coordinator
+        // Double-click a prettified JSON body to collapse it to one line (and back) —
+        // the escape hatch for a giant payload. No-op on any other row.
+        table.target = table
+        table.doubleAction = #selector(LogNSTableView.handleDoubleClick)
 
         let scroll = NSScrollView()
         scroll.documentView = table
@@ -127,10 +131,11 @@ struct LogTableView: NSViewRepresentable {
                 ?? { let v = LogCellNSView(); v.identifier = id; return v }()
             if row < session.displayRowCount {
                 let loc = session.locate(displayRow: row)
-                cell.configure(line: session.visible[loc.log], subLine: loc.sub)
+                let line = session.visible[loc.log]
+                cell.configure(line: line, displayText: session.displayMessage(line), subLine: loc.sub)
                 growColumn(forContentWidth: LogRowLayout.messageX + cell.messageLineWidth + LogRowLayout.pad)
             } else {
-                cell.configure(line: nil, subLine: 0)
+                cell.configure(line: nil, displayText: "", subLine: 0)
             }
             return cell
         }
@@ -280,6 +285,15 @@ final class LogNSTableView: NSTableView {
 
     @objc func copy(_ sender: Any?) { copyRows(messagesOnly: true) }   // Edit ▸ Copy
 
+    /// Double-click toggles a prettified JSON body between its expanded (multi-line) and
+    /// collapsed (single-line) forms; harmless on every other row.
+    @objc func handleDoubleClick() {
+        guard let session else { return }
+        let row = clickedRow
+        guard row >= 0, row < session.displayRowCount else { return }
+        session.toggleBodyCollapsed(logIndex: session.locate(displayRow: row).log)
+    }
+
     func copyRows(messagesOnly: Bool) {
         guard let session else { return }
         let lines = session.logIndices(forDisplayRows: selectedRowIndexes)
@@ -357,16 +371,14 @@ final class LogCellNSView: NSView {
 
     override var isFlipped: Bool { true }
 
-    func configure(line: LogLine?, subLine: Int) {
-        if line?.message != cachedMessage {
-            cachedMessage = line?.message
-            if let message = line?.message {
-                displayLines = LogTextLines.displayLines(message)
-                truncated = LogTextLines.isTruncated(message)
-            } else {
-                displayLines = [""]
-                truncated = false
-            }
+    /// `displayText` is the (possibly collapsed) text to draw for this entry — the
+    /// session resolves a prettified body to its expanded or compact form before us, so
+    /// the cell stays a dumb renderer. `nil` line ⇒ an out-of-range recycled row.
+    func configure(line: LogLine?, displayText: String, subLine: Int) {
+        if displayText != cachedMessage {
+            cachedMessage = displayText
+            displayLines = LogTextLines.displayLines(displayText)
+            truncated = LogTextLines.isTruncated(displayText)
         }
         self.line = line
         self.subLine = subLine

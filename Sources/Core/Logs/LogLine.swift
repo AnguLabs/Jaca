@@ -69,6 +69,11 @@ struct LogLine: Identifiable, Sendable, Hashable {
     /// so they're exempt from the package PID filter — they're app-scoped by
     /// construction (we launched exactly that bundle).
     var isConsoleOutput: Bool = false
+    /// Set when this line is a detected endpoint response body whose JSON has been
+    /// prettified: `message` holds the expanded, indented form, and `bodyCompact` the
+    /// one-line form shown when the user double-clicks to collapse a huge body. `nil`
+    /// for every other line. See `LogBodyPrettifier`.
+    var bodyCompact: String?
 
     var id: UInt64 { seq }
 
