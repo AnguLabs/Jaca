@@ -50,8 +50,12 @@ struct GradleDaemonService: Sendable {
         return false
     }
 
-    /// Per-version sizes of `~/.gradle/caches/<version>` (the version-specific build caches),
-    /// largest first. (`du` can be slow on big caches, so this is computed on demand, not polled.)
+    /// Sizes of every reclaimable directory under `~/.gradle/caches` — version dirs
+    /// ("9.4.1"), the build cache ("build-cache-1"), the dependency cache ("modules-2"),
+    /// etc., largest first. Previously this listed only version-named dirs, hiding
+    /// (and making un-deletable) the build/dependency caches, which are often the
+    /// biggest. Everything here is a cache Gradle regenerates on the next build.
+    /// (`du` can be slow on big caches, so this is computed on demand, not polled.)
     func cacheSizes() async -> [GradleCacheEntry] {
         let caches = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".gradle/caches")
@@ -61,19 +65,19 @@ struct GradleDaemonService: Sendable {
 
         var entries: [GradleCacheEntry] = []
         for dir in dirs {
-            let name = dir.lastPathComponent
-            // Only version-named dirs (e.g. "9.4.1", "8.10") — skip modules-2/transforms-*/etc.
-            guard name.range(of: #"^\d+\.\d+"#, options: .regularExpression) != nil else { continue }
-            let kb = await duKB(dir.path)
-            entries.append(GradleCacheEntry(version: name, sizeMB: kb / 1024))
+            let isDir = (try? dir.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+            guard isDir else { continue }   // skip files like CACHEDIR.TAG
+            let sizeMB = await duKB(dir.path) / 1024
+            guard sizeMB > 0 else { continue }   // skip negligible dirs (journal markers, jars-9, …)
+            entries.append(GradleCacheEntry(name: dir.lastPathComponent, sizeMB: sizeMB))
         }
         return entries.sorted { $0.sizeMB > $1.sizeMB }
     }
 
-    /// Deletes `~/.gradle/caches/<version>`. Returns true on success.
-    func deleteCache(version: String) async -> Bool {
+    /// Deletes `~/.gradle/caches/<name>`. Returns true on success.
+    func deleteCache(name: String) async -> Bool {
         let dir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".gradle/caches/\(version)")
+            .appendingPathComponent(".gradle/caches/\(name)")
         do { try FileManager.default.removeItem(at: dir); return true }
         catch { return false }
     }

@@ -16,9 +16,10 @@ struct GradleDaemon: Identifiable, Hashable {
     var isBusy: Bool { cpu > 20 }
 }
 
-/// A per-version slice of `~/.gradle/caches` (e.g. "9.4.1" → 1.2 GB).
+/// A reclaimable directory under `~/.gradle/caches` — a version dir ("9.4.1"), the
+/// build cache ("build-cache-1"), the dependency cache ("modules-2"), etc.
 struct GradleCacheEntry: Identifiable, Hashable {
-    var id: String { version }
-    let version: String
+    var id: String { name }
+    let name: String
     let sizeMB: Int
 }
