@@ -256,7 +256,8 @@ final class ProjectsModel {
 
     // MARK: - Cache cleaning
 
-    /// Clears build caches for a checkout (`./gradlew clean` + matching iOS DerivedData).
+    /// Clears build caches for a checkout (the per-worktree `.gradle/` + every `build/`
+    /// + matching iOS DerivedData).
     func clearCache(project pid: String, checkout cid: String) {
         guard let c = checkout(pid, cid), !c.cleaning else { return }
         let oldSize = c.sizeMB

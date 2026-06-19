@@ -1,30 +1,41 @@
 import Foundation
 
-/// Clears build caches for a KMP worktree: `./gradlew clean` (Android/Gradle) and the matching
-/// iOS Xcode DerivedData (which lives outside the worktree, keyed by WorkspacePath).
+/// Clears build caches for a KMP/Android worktree: the per-worktree Gradle cache
+/// (`.gradle/`), every module's build outputs (`build/`), and the matching iOS Xcode
+/// DerivedData (which lives outside the worktree, keyed by WorkspacePath). All of these
+/// are gitignored and regenerated on the next build, so deleting them never touches
+/// source or uncommitted changes.
 struct CacheCleaner: Sendable {
     /// - Returns: the worktree's size after cleaning, MB freed from iOS DerivedData (outside the
-    ///   worktree), and an optional error message from the gradle clean.
+    ///   worktree), and an optional error message.
     func clearCache(worktree: URL) async -> (newSizeMB: Int, derivedFreedMB: Int, error: String?) {
         // iOS: measure + delete DerivedData whose WorkspacePath points inside this worktree.
         let derivedFreedKB = await deleteIOSDerivedData(for: worktree)
 
-        // Android/Gradle: `./gradlew clean` via a login shell so it inherits PATH/JAVA_HOME
-        // (a GUI app's spawned process otherwise has a minimal env without the JDK). There's no
-        // cwd parameter on CommandRunner, so cd into the worktree inside the shell command.
-        var error: String?
-        let gradlew = worktree.appendingPathComponent("gradlew")
-        if FileManager.default.fileExists(atPath: gradlew.path) {
-            let cmd = "cd '\(worktree.path)' && export JAVA_HOME=\"$(/usr/libexec/java_home 2>/dev/null)\"; export ANDROID_HOME=\"${ANDROID_HOME:-$HOME/Library/Android/sdk}\"; ./gradlew clean"
-            let r = try? await CommandRunner.run(URL(fileURLWithPath: "/bin/zsh"), ["-lc", cmd])
-            if r == nil || r!.exitCode != 0 {
-                let msg = (r?.stderr ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                error = msg.isEmpty ? "gradlew clean failed" : msg
-            }
+        // Android/Gradle: delete the per-worktree Gradle cache (.gradle/) and every build/
+        // output directory. We remove these directly instead of running `./gradlew clean`,
+        // which is slow, needs a working JDK, spawns a daemon, and — crucially — leaves the
+        // per-worktree `.gradle/` behind (it can be many GB; `clean` only removes `build/`).
+        var errorMessage: String?
+        let fm = FileManager.default
+
+        let dotGradle = worktree.appendingPathComponent(".gradle")
+        if fm.fileExists(atPath: dotGradle.path) {
+            do { try fm.removeItem(at: dotGradle) }
+            catch { errorMessage = "couldn't remove .gradle: \(error.localizedDescription)" }
+        }
+
+        // Remove every `build/` directory under the worktree (don't descend into matched ones).
+        if let result = try? await CommandRunner.run(
+            URL(fileURLWithPath: "/usr/bin/find"),
+            [worktree.path, "-type", "d", "-name", "build", "-prune", "-exec", "/bin/rm", "-rf", "{}", "+"]
+        ), result.exitCode != 0, errorMessage == nil {
+            let msg = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !msg.isEmpty { errorMessage = msg }
         }
 
         let newSizeKB = await duKB(worktree.path)
-        return (newSizeMB: newSizeKB / 1024, derivedFreedMB: derivedFreedKB / 1024, error: error)
+        return (newSizeMB: newSizeKB / 1024, derivedFreedMB: derivedFreedKB / 1024, error: errorMessage)
     }
 
     /// Deletes every DerivedData folder whose `WorkspacePath` is inside `worktree`. Returns KB freed.
