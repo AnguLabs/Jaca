@@ -7,6 +7,7 @@ struct DeviceSidebarView: View {
     @Bindable var model: AppModel
     @State private var showHistory = false
     @State private var showSettings = false
+    @State private var pairingModel: PairingModel?
 
     var body: some View {
         VStack(alignment: .leading, spacing: LemonadeTheme.spaces.spacing300) {
@@ -19,6 +20,13 @@ struct DeviceSidebarView: View {
                         : LemonadeTheme.colors.content.contentSecondary
                 )
                 Spacer()
+                Button(action: openPairing) {
+                    Image(systemName: "qrcode")
+                        .foregroundStyle(LemonadeTheme.colors.content.contentSecondary)
+                }
+                .buttonStyle(.plain)
+                .help("Pair device over Wi-Fi")
+                .accessibilityIdentifier("pairButton")
                 LemonadeUi.IconButton(
                     icon: .clockArrowUp, contentDescription: "History",
                     onClick: { showHistory = true }, size: .small
@@ -82,6 +90,13 @@ struct DeviceSidebarView: View {
         .sheet(isPresented: $showSettings) {
             SettingsView(model: model)
         }
+        .sheet(item: $pairingModel) { pairing in
+            PairDeviceSheet(model: pairing)
+        }
+    }
+
+    private func openPairing() {
+        pairingModel = model.makePairingModel()
     }
 
     private var platforms: [DevicePlatform] {
@@ -115,6 +130,9 @@ struct DeviceSidebarView: View {
                 textAlign: .center,
                 color: LemonadeTheme.colors.content.contentTertiary
             )
+            LemonadeUi.Button(label: "Pair over Wi-Fi", onClick: openPairing,
+                              leadingIcon: .smartphone, variant: .neutral, type: .subtle, size: .small)
+                .padding(.top, LemonadeTheme.spaces.spacing200)
         }
         .frame(maxWidth: .infinity)
         .padding(.top, LemonadeTheme.spaces.spacing600)

@@ -11,3 +11,6 @@ xcuserdata/
 # SwiftPM
 .swiftpm/
 .build/
+
+# Claude Code — personal, machine-local project memory (never commit)
+CLAUDE.local.md

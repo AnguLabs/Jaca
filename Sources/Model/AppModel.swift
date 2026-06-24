@@ -42,6 +42,9 @@ final class AppModel {
 
     private var providers: [DeviceProvider] = []
     private var discoveryTasks: [Task<Void, Never>] = []
+    /// Background loop that reattaches previously-paired Wi-Fi devices when adb's own
+    /// auto-connect doesn't (the "auto-recover" gap adb leaves open).
+    private var reconnectTask: Task<Void, Never>?
     private var devicesByPlatform: [DevicePlatform: [Device]] = [:]
 
     /// Tabs persisted from a previous launch, restored as their devices appear.
@@ -89,11 +92,17 @@ final class AppModel {
     func reloadProviders() {
         discoveryTasks.forEach { $0.cancel() }
         discoveryTasks.removeAll()
+        reconnectTask?.cancel()
+        reconnectTask = nil
         devicesByPlatform.removeAll()
         devices = []
         buildProviders()
         startDiscovery()
     }
+
+    /// A fresh `PairingModel` for the "Pair device over Wi-Fi" sheet, bound to the
+    /// currently-resolved adb path.
+    func makePairingModel() -> PairingModel { PairingModel(adbURL: adbURL) }
 
     // MARK: - Discovery
 
@@ -109,6 +118,30 @@ final class AppModel {
                 }
             }
             discoveryTasks.append(task)
+        }
+        startPairedReconnect()
+    }
+
+    /// Periodically reattaches known paired Wi-Fi devices: when a remembered device's
+    /// `_adb-tls-connect` service shows up over mDNS but it isn't in `adb devices` yet,
+    /// `adb connect` it. adb is supposed to do this itself but frequently doesn't, which
+    /// is the "doesn't auto-recover" complaint. Only ever touches devices we've paired
+    /// before (the store filters by GUID), mirroring adb's known-host policy.
+    private func startPairedReconnect() {
+        guard reconnectTask == nil, let adbURL else { return }
+        let service = AdbPairingService(adbURL: adbURL)
+        reconnectTask = Task { [weak self] in
+            while !Task.isCancelled {
+                let services = await service.discoverServices()
+                let targets = await PairedDeviceStore.shared.reconnectTargets(from: services)
+                if let self {
+                    let attached = Set(self.devices.map(\.id))
+                    for target in targets where !attached.contains(target.address) {
+                        await service.connect(address: target.address)
+                    }
+                }
+                try? await Task.sleep(for: .seconds(5))
+            }
         }
     }
 
