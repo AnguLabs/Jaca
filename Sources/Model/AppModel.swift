@@ -413,6 +413,16 @@ final class AppModel {
         return made
     }
 
+    /// Opens a Database tab for the device (browse an app's local SQLite DB).
+    @discardableResult
+    func startDatabaseSession(for device: Device) -> DatabaseSession {
+        mode = .devices
+        let session = DatabaseSession(device: device, adbURL: adbURL)
+        sessions.append(session)
+        selectedSessionID = session.id
+        return session
+    }
+
     @discardableResult
     func startNetworkSession(for device: Device, name: String? = nil, autoStart: Bool = true) -> NetworkSession? {
         mode = .devices   // opening a session returns to the devices/sessions view
