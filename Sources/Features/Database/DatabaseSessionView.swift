@@ -124,31 +124,35 @@ struct DatabaseSessionView: View {
     // A simple H+V scrollable grid: header row of columns, then clickable value rows.
     // Clicking a row opens the detail panel. Clipped so wide content never bleeds out.
     private func grid(_ rs: DBResultSet) -> some View {
-        ScrollView([.horizontal, .vertical]) {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 0) {
-                    ForEach(Array(rs.columns.enumerated()), id: \.offset) { _, col in
-                        cell(col, header: true)
-                    }
-                }
-                .background(LemonadeTheme.colors.background.bgNeutralSubtle)
-                ForEach(Array(rs.rows.enumerated()), id: \.offset) { index, row in
-                    Button(action: { session.selectRow(session.selectedRow == index ? nil : index) }) {
-                        HStack(spacing: 0) {
-                            ForEach(Array(row.enumerated()), id: \.offset) { _, value in
-                                cell(value ?? "NULL", header: false, isNull: value == nil)
-                            }
+        GeometryReader { geo in
+            ScrollView([.horizontal, .vertical]) {
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: 0) {
+                        ForEach(Array(rs.columns.enumerated()), id: \.offset) { _, col in
+                            cell(col, header: true)
                         }
-                        .background(session.selectedRow == index
-                            ? LemonadeTheme.colors.interaction.bgSubtleInteractive : Color.clear)
-                        .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .background(LemonadeTheme.colors.background.bgNeutralSubtle)
+                    ForEach(Array(rs.rows.enumerated()), id: \.offset) { index, row in
+                        Button(action: { session.selectRow(session.selectedRow == index ? nil : index) }) {
+                            HStack(spacing: 0) {
+                                ForEach(Array(row.enumerated()), id: \.offset) { _, value in
+                                    cell(value ?? "NULL", header: false, isNull: value == nil)
+                                }
+                            }
+                            .background(session.selectedRow == index
+                                ? LemonadeTheme.colors.interaction.bgSubtleInteractive : Color.clear)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
+                // Pin to top-left: a 2-axis ScrollView otherwise centers content smaller
+                // than its viewport, which floated the header into the middle.
+                .frame(minWidth: geo.size.width, minHeight: geo.size.height, alignment: .topLeading)
             }
+            .clipped()
         }
-        .clipped()
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private func cell(_ text: String, header: Bool, isNull: Bool = false) -> some View {
