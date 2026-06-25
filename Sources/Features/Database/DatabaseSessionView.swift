@@ -1,5 +1,6 @@
 import SwiftUI
 import Lemonade
+import AppKit
 
 /// The "Database" tab: app picker → database/table pickers → a scrollable grid of rows
 /// plus a read-only SQL box. A snapshot of a pulled copy; "Refresh" re-pulls.
@@ -294,6 +295,7 @@ private struct DBRowDetail: View {
     let row: [String?]
     var onClose: () -> Void
     @State private var mode: Mode = .fields
+    @State private var copied = false
     private enum Mode: Hashable { case fields, json }
 
     var body: some View {
@@ -305,6 +307,13 @@ private struct DBRowDetail: View {
                 }
                 .pickerStyle(.segmented).labelsHidden().fixedSize()
                 Spacer()
+                LemonadeUi.Button(
+                    label: copied ? "Copied" : "Copy JSON",
+                    onClick: { copyJSON() },
+                    leadingIcon: copied ? .circleCheck : .copy,
+                    variant: .neutral, type: .subtle, size: .xSmall
+                )
+                .fixedSize()
                 Button(action: onClose) {
                     Image(systemName: "xmark").font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(LemonadeTheme.colors.content.contentSecondary)
@@ -362,6 +371,16 @@ private struct DBRowDetail: View {
         }
         lines.append("}")
         return lines.joined(separator: "\n")
+    }
+
+    private func copyJSON() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(json, forType: .string)
+        copied = true
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.4))
+            copied = false
+        }
     }
 
     private func value(_ v: String?) -> String {
