@@ -8,62 +8,30 @@ struct DatabaseSessionView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            toolbar
+            HorizontalDividerOrLine()
             if session.appID == nil {
-                appPicker
+                messageState("Pick an app to browse its local database.", critical: false)
+            } else if let error = session.error, session.result == nil, session.tables.isEmpty {
+                messageState(error, critical: true)
             } else {
-                toolbar
-                HorizontalDividerOrLine()
-                if let error = session.error, session.result == nil, session.tables.isEmpty {
-                    messageState(error, critical: true)
-                } else {
-                    content
-                }
+                content
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(LemonadeTheme.colors.background.bgDefault)
     }
 
-    // MARK: - App picker
-
-    private var appPicker: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            LemonadeUi.Text("Pick an app", textStyle: LemonadeTypography.shared.headingXSmall,
-                            color: LemonadeTheme.colors.content.contentPrimary)
-                .padding(12)
-            if session.loading && session.apps.isEmpty {
-                loadingRow("Loading apps…")
-            }
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 1) {
-                    ForEach(session.apps) { app in
-                        Button(action: { session.selectApp(app.id) }) {
-                            VStack(alignment: .leading, spacing: 1) {
-                                LemonadeUi.Text(app.display, textStyle: LemonadeTypography.shared.bodyMediumSemiBold,
-                                                color: LemonadeTheme.colors.content.contentPrimary, maxLines: 1)
-                                if app.name != nil {
-                                    LemonadeUi.Text(app.id, textStyle: LemonadeTypography.shared.bodyXSmallRegular,
-                                                    color: LemonadeTheme.colors.content.contentSecondary, maxLines: 1)
-                                }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.vertical, 7).padding(.horizontal, 12)
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-        }
-    }
-
-    // MARK: - Toolbar (db + table pickers, refresh)
+    // MARK: - Toolbar (app + db + table pickers, refresh)
 
     private var toolbar: some View {
         HStack(spacing: 10) {
-            picker(title: "DB", selection: session.selectedDB?.name ?? "—",
-                   items: session.databases.map(\.name)) { name in
-                if let db = session.databases.first(where: { $0.name == name }) { session.selectDatabase(db) }
+            DatabaseAppPicker(session: session)
+            if !session.databases.isEmpty {
+                picker(title: "DB", selection: session.selectedDB?.name ?? "—",
+                       items: session.databases.map(\.name)) { name in
+                    if let db = session.databases.first(where: { $0.name == name }) { session.selectDatabase(db) }
+                }
             }
             if !session.tables.isEmpty {
                 picker(title: "Table", selection: session.selectedTable ?? "—",
@@ -74,10 +42,12 @@ struct DatabaseSessionView: View {
             }
             Spacer()
             if session.loading { ProgressView().controlSize(.small) }
-            LemonadeUi.Text("snapshot", textStyle: LemonadeTypography.shared.bodyXSmallRegular,
-                            color: LemonadeTheme.colors.content.contentTertiary)
-            LemonadeUi.Button(label: "Refresh", onClick: { session.refresh() }, leadingIcon: .arrowRotateCw,
-                              variant: .neutral, type: .subtle, size: .xSmall).fixedSize()
+            if session.selectedDB != nil {
+                LemonadeUi.Text("snapshot", textStyle: LemonadeTypography.shared.bodyXSmallRegular,
+                                color: LemonadeTheme.colors.content.contentTertiary)
+                LemonadeUi.Button(label: "Refresh", onClick: { session.refresh() }, leadingIcon: .arrowRotateCw,
+                                  variant: .neutral, type: .subtle, size: .xSmall).fixedSize()
+            }
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
     }
@@ -200,14 +170,100 @@ struct DatabaseSessionView: View {
                                         : LemonadeTheme.colors.content.contentSecondary)
             .frame(maxWidth: .infinity, maxHeight: .infinity).padding(24)
     }
+}
 
-    private func loadingRow(_ text: String) -> some View {
-        HStack(spacing: 8) {
-            ProgressView().controlSize(.small)
-            LemonadeUi.Text(text, textStyle: LemonadeTypography.shared.bodySmallRegular,
-                            color: LemonadeTheme.colors.content.contentSecondary)
+/// The app picker for the Database tab, mirroring the Network inspector's: a toolbar
+/// button ("Pick an app" until chosen) that opens a searchable popover of installed apps.
+/// Nothing loads until the user picks one.
+private struct DatabaseAppPicker: View {
+    @Bindable var session: DatabaseSession
+    @State private var show = false
+    @State private var query = ""
+
+    var body: some View {
+        Button(action: { show = true; session.loadApps() }) {
+            HStack(spacing: 5) {
+                Image(systemName: "ladybug").font(.system(size: 11, weight: .semibold))
+                Text(buttonLabel).font(.system(size: 11, weight: .medium)).lineLimit(1)
+                Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold))
+            }
+            .foregroundStyle(session.appID == nil
+                ? LemonadeTheme.colors.content.contentSecondary
+                : LemonadeTheme.colors.content.contentBrand)
+            .padding(.horizontal, 10).frame(height: 30)
+            .background(RoundedRectangle(cornerRadius: LemonadeTheme.radius.radius150)
+                .fill(LemonadeTheme.colors.background.bgNeutralSubtle))
         }
-        .padding(.horizontal, 12).padding(.vertical, 6)
+        .buttonStyle(.plain)
+        .help("Choose an app to browse its local database")
+        .accessibilityIdentifier("dbAppPicker")
+        .popover(isPresented: $show, arrowEdge: .bottom) { popover }
+    }
+
+    private var buttonLabel: String {
+        guard let id = session.appID else { return "Pick an app" }
+        if let app = session.apps.first(where: { $0.id == id }), let n = app.name { return n }
+        return id.components(separatedBy: ".").last ?? id
+    }
+
+    private var sorted: [AppEntry] {
+        let f = query.isEmpty ? session.apps : session.apps.filter {
+            $0.id.localizedCaseInsensitiveContains(query) || ($0.name ?? "").localizedCaseInsensitiveContains(query)
+        }
+        return f.sorted { a, b in
+            if a.isUserApp != b.isUserApp { return a.isUserApp }   // user apps first
+            return a.display.localizedCaseInsensitiveCompare(b.display) == .orderedAscending
+        }
+    }
+
+    private var popover: some View {
+        VStack(spacing: 0) {
+            TextField("Search apps…", text: $query)
+                .textFieldStyle(.roundedBorder)
+                .padding(LemonadeTheme.spaces.spacing200)
+                .accessibilityIdentifier("dbAppSearch")
+            Rectangle().fill(LemonadeTheme.colors.border.borderNeutralLow).frame(height: 1)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    if session.loading && session.apps.isEmpty {
+                        ProgressView().padding(LemonadeTheme.spaces.spacing400).frame(maxWidth: .infinity)
+                    }
+                    ForEach(sorted) { app in
+                        row(title: app.display, subtitle: app.name != nil ? app.id : nil,
+                            selected: session.appID == app.id) {
+                            show = false
+                            session.selectApp(app.id)
+                        }
+                    }
+                }
+            }
+        }
+        .frame(width: 360, height: 420)
+    }
+
+    private func row(title: String, subtitle: String?, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: LemonadeTheme.spaces.spacing200) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title).foregroundStyle(LemonadeTheme.colors.content.contentPrimary)
+                        .font(.system(size: 12)).lineLimit(1)
+                    if let subtitle {
+                        Text(subtitle).foregroundStyle(LemonadeTheme.colors.content.contentTertiary)
+                            .font(.system(size: 10, design: .monospaced)).lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 6)
+                if selected {
+                    Image(systemName: "checkmark").font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(LemonadeTheme.colors.content.contentBrand)
+                }
+            }
+            .padding(.horizontal, LemonadeTheme.spaces.spacing300)
+            .padding(.vertical, LemonadeTheme.spaces.spacing100)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("dbAppRow")
     }
 }
 
