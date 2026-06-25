@@ -81,7 +81,7 @@ struct DatabaseSessionView: View {
                             grid(rs)
                             if session.selectedTable != nil { paginationBar }
                         }
-                        .frame(maxWidth: .infinity)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                         if let i = session.selectedRow, i < rs.rows.count {
                             Rectangle().fill(LemonadeTheme.colors.border.borderNeutralLow).frame(width: 1)
                             DBRowDetail(columns: rs.columns, row: rs.rows[i]) { session.selectRow(nil) }
@@ -89,11 +89,13 @@ struct DatabaseSessionView: View {
                                 .transition(.move(edge: .trailing))
                         }
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 }
             } else {
                 messageState(session.loading ? "Loading…" : "No table selected.", critical: false)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(.easeOut(duration: 0.18), value: session.selectedRow)
     }
 
