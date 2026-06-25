@@ -97,6 +97,8 @@ struct RootView: View {
             LogSessionView(session: log, isActive: isActive)
         } else if let net = session as? NetworkSession {
             NetworkSessionView(session: net)
+        } else if let db = session as? DatabaseSession {
+            DatabaseSessionView(session: db)
         }
     }
 }

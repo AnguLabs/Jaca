@@ -115,6 +115,7 @@ struct DeviceSidebarView: View {
                         device: device,
                         onStart: { model.startSession(for: device) },
                         onInspectNetwork: { model.startNetworkSession(for: device, autoStart: false) },
+                        onBrowseDatabase: { model.startDatabaseSession(for: device) },
                         onStartCompanion: { model.startNetworkSession(for: device, autoStart: true) },
                         onUpdate: { showConnect = true },
                         updateOverUSB: { await model.updateCompanionOverUSB(device) },
@@ -178,6 +179,8 @@ private struct DeviceRow: View {
     let device: Device
     let onStart: () -> Void
     let onInspectNetwork: () -> Void
+    /// Open a Database tab (browse an app's local SQLite DB).
+    var onBrowseDatabase: () -> Void = {}
     /// Start (and auto-run) companion network capture — the primary action for companion devices.
     let onStartCompanion: () -> Void
     /// Fallback for a Wi-Fi / companion-only device: open the QR connect sheet to reinstall an
@@ -309,6 +312,10 @@ private struct DeviceRow: View {
             OptionMenuRow(icon: "network", title: "Inspect Network") {
                 showOptions = false
                 onInspectNetwork()
+            }
+            OptionMenuRow(icon: "cylinder.split.1x2", title: "Browse Database") {
+                showOptions = false
+                onBrowseDatabase()
             }
             if device.companionUpdateAvailable {
                 Divider()
