@@ -367,13 +367,15 @@ private struct DBRowDetail: View {
             .padding(12)
     }
 
-    /// Manual JSON so column order is preserved and numbers stay unquoted (when they
-    /// round-trip exactly); everything else is a quoted string, NULL → null.
+    /// Manual JSON so column order is preserved. Numbers stay unquoted (when they
+    /// round-trip exactly); a value that is itself valid JSON (object/array) is embedded
+    /// as real nested JSON instead of an escaped string; everything else is a quoted
+    /// string, NULL → null.
     private var json: String {
         var lines = ["{"]
         for (i, col) in columns.enumerated() {
             let comma = i < columns.count - 1 ? "," : ""
-            lines.append("  \(quote(col)): \(value(row[i]))\(comma)")
+            lines.append("  \(quote(col)): \(value(row[i], indent: "  "))\(comma)")
         }
         lines.append("}")
         return lines.joined(separator: "\n")
@@ -389,8 +391,18 @@ private struct DBRowDetail: View {
         }
     }
 
-    private func value(_ v: String?) -> String {
+    private func value(_ v: String?, indent: String) -> String {
         guard let v else { return "null" }
+        // A column whose value is itself JSON (object/array) → embed it as real nested
+        // JSON, indented to line up under the key, rather than an escaped string.
+        if let first = v.trimmingCharacters(in: .whitespaces).first, first == "{" || first == "[",
+           let data = v.data(using: .utf8),
+           let obj = try? JSONSerialization.jsonObject(with: data),
+           (obj is [Any] || obj is [String: Any]),
+           let pretty = try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys]),
+           let s = String(data: pretty, encoding: .utf8) {
+            return s.replacingOccurrences(of: "\n", with: "\n" + indent)
+        }
         if let n = Int(v), String(n) == v { return v }
         if let d = Double(v), String(d) == v { return v }
         return quote(v)
