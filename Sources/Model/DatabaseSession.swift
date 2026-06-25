@@ -23,9 +23,12 @@ final class DatabaseSession: WorkspaceTab {
     private(set) var tables: [DBTable] = []
     private(set) var selectedTable: String?
     private(set) var result: DBResultSet?
+    private(set) var selectedRow: Int?
     private(set) var loading = false
     var error: String?
     var sqlText = ""
+
+    func selectRow(_ index: Int?) { selectedRow = index }
 
     // Pagination (table browse)
     private(set) var page = 0
@@ -134,7 +137,7 @@ final class DatabaseSession: WorkspaceTab {
             do {
                 let rs = try await Task.detached { try service.rows(localDB: local, table: table, limit: size, offset: page * size) }.value
                 guard let self else { return }
-                self.result = rs; self.loading = false
+                self.result = rs; self.selectedRow = nil; self.loading = false
             } catch {
                 guard let self else { return }
                 self.loading = false
@@ -157,7 +160,7 @@ final class DatabaseSession: WorkspaceTab {
             do {
                 let rs = try await Task.detached { try service.query(localDB: local, sql: sql) }.value
                 guard let self else { return }
-                self.result = rs; self.loading = false
+                self.result = rs; self.selectedRow = nil; self.loading = false
             } catch {
                 guard let self else { return }
                 self.loading = false

@@ -75,13 +75,25 @@ struct DatabaseSessionView: View {
                 if rs.columns.isEmpty {
                     messageState("Query returned no columns.", critical: false)
                 } else {
-                    grid(rs)
-                    if session.selectedTable != nil { paginationBar }
+                    HStack(spacing: 0) {
+                        VStack(spacing: 0) {
+                            grid(rs)
+                            if session.selectedTable != nil { paginationBar }
+                        }
+                        .frame(maxWidth: .infinity)
+                        if let i = session.selectedRow, i < rs.rows.count {
+                            Rectangle().fill(LemonadeTheme.colors.border.borderNeutralLow).frame(width: 1)
+                            DBRowDetail(columns: rs.columns, row: rs.rows[i]) { session.selectRow(nil) }
+                                .frame(width: 360)
+                                .transition(.move(edge: .trailing))
+                        }
+                    }
                 }
             } else {
                 messageState(session.loading ? "Loading…" : "No table selected.", critical: false)
             }
         }
+        .animation(.easeOut(duration: 0.18), value: session.selectedRow)
     }
 
     private var sqlBar: some View {
@@ -106,7 +118,8 @@ struct DatabaseSessionView: View {
         }
     }
 
-    // A simple H+V scrollable grid: header row of columns, then value rows.
+    // A simple H+V scrollable grid: header row of columns, then clickable value rows.
+    // Clicking a row opens the detail panel. Clipped so wide content never bleeds out.
     private func grid(_ rs: DBResultSet) -> some View {
         ScrollView([.horizontal, .vertical]) {
             VStack(alignment: .leading, spacing: 0) {
@@ -116,15 +129,22 @@ struct DatabaseSessionView: View {
                     }
                 }
                 .background(LemonadeTheme.colors.background.bgNeutralSubtle)
-                ForEach(Array(rs.rows.enumerated()), id: \.offset) { _, row in
-                    HStack(spacing: 0) {
-                        ForEach(Array(row.enumerated()), id: \.offset) { _, value in
-                            cell(value ?? "NULL", header: false, isNull: value == nil)
+                ForEach(Array(rs.rows.enumerated()), id: \.offset) { index, row in
+                    Button(action: { session.selectRow(session.selectedRow == index ? nil : index) }) {
+                        HStack(spacing: 0) {
+                            ForEach(Array(row.enumerated()), id: \.offset) { _, value in
+                                cell(value ?? "NULL", header: false, isNull: value == nil)
+                            }
                         }
+                        .background(session.selectedRow == index
+                            ? LemonadeTheme.colors.interaction.bgSubtleInteractive : Color.clear)
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
                 }
             }
         }
+        .clipped()
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
@@ -264,6 +284,99 @@ private struct DatabaseAppPicker: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("dbAppRow")
+    }
+}
+
+/// Detail panel for one selected row: its columns as key/value, or the whole row as
+/// pretty-printed JSON. Values are text-selectable.
+private struct DBRowDetail: View {
+    let columns: [String]
+    let row: [String?]
+    var onClose: () -> Void
+    @State private var mode: Mode = .fields
+    private enum Mode: Hashable { case fields, json }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Picker("", selection: $mode) {
+                    Text("Fields").tag(Mode.fields)
+                    Text("JSON").tag(Mode.json)
+                }
+                .pickerStyle(.segmented).labelsHidden().fixedSize()
+                Spacer()
+                Button(action: onClose) {
+                    Image(systemName: "xmark").font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(LemonadeTheme.colors.content.contentSecondary)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(10)
+            HorizontalDividerOrLine()
+            ScrollView {
+                if mode == .fields { fields } else { jsonView }
+            }
+        }
+        .frame(maxHeight: .infinity)
+        .background(LemonadeTheme.colors.background.bgElevated)
+    }
+
+    private var fields: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(columns.enumerated()), id: \.offset) { i, col in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(col)
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(LemonadeTheme.colors.content.contentTertiary)
+                    Text(row[i] ?? "NULL")
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(row[i] == nil
+                            ? LemonadeTheme.colors.content.contentTertiary
+                            : LemonadeTheme.colors.content.contentPrimary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.horizontal, 12).padding(.vertical, 7)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Rectangle().fill(LemonadeTheme.colors.border.borderNeutralLow).frame(height: 1)
+            }
+        }
+    }
+
+    private var jsonView: some View {
+        Text(json)
+            .font(.system(size: 12, design: .monospaced))
+            .foregroundStyle(LemonadeTheme.colors.content.contentPrimary)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+    }
+
+    /// Manual JSON so column order is preserved and numbers stay unquoted (when they
+    /// round-trip exactly); everything else is a quoted string, NULL → null.
+    private var json: String {
+        var lines = ["{"]
+        for (i, col) in columns.enumerated() {
+            let comma = i < columns.count - 1 ? "," : ""
+            lines.append("  \(quote(col)): \(value(row[i]))\(comma)")
+        }
+        lines.append("}")
+        return lines.joined(separator: "\n")
+    }
+
+    private func value(_ v: String?) -> String {
+        guard let v else { return "null" }
+        if let n = Int(v), String(n) == v { return v }
+        if let d = Double(v), String(d) == v { return v }
+        return quote(v)
+    }
+
+    private func quote(_ s: String) -> String {
+        let esc = s.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\t", with: "\\t")
+        return "\"\(esc)\""
     }
 }
 
