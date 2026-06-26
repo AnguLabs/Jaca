@@ -58,7 +58,7 @@ final class CloudLogSession: WorkspaceTab {
     /// The per-session time window (server-side). Persisted on change.
     var timeRange: CloudTimeRange { didSet { onStateChanged?() } }
     /// Instant, client-side search over the already-fetched buffer.
-    var searchText = "" { didSet { recomputeVisible() } }
+    var searchText = "" { didSet { searchChanged() } }
     /// A raw Cloud Logging filter ingested from a Logs Explorer URL. When set, it overrides the
     /// structured `query` for fetching (the URL is authoritative). Persisted on change.
     var rawFilter: String? { didSet { onStateChanged?() } }
@@ -86,15 +86,22 @@ final class CloudLogSession: WorkspaceTab {
     var sqlText = CloudSqlTemplates.recent
     var sqlError: String?
     var sqlRunning = false
-    /// How many log rows the current SQL filter matches (shown in the editor bar).
+    /// How many log rows the current SQL query maps to in the list (shown in the editor bar).
     private(set) var sqlMatchCount = 0
-    /// The `seq`s the SQL filter currently allows through; nil in Logs mode (no SQL filter).
-    /// The SQL filter, keyed by `insert_id` (Cloud Logging's stable id) when the query selects it,
-    /// else by `seq`. `insert_id` is identical in the ring and the DB even after a poll restart,
-    /// where `seq` would be re-stamped on the ring but kept by the DB (INSERT OR IGNORE) — so
-    /// filtering by `seq` alone silently breaks. nil = no SQL filter (Logs mode).
-    private var sqlIdFilter: Set<String>?
-    private var sqlSeqFilter: Set<UInt64>?
+    /// The SQL result rows' keys, **in result order**: `insert_id` (primary) and `seq` (fallback)
+    /// per row. The SQL-mode list is rebuilt by looking each key up in the ring, so the query's
+    /// LIMIT / ORDER BY / WHERE are reflected exactly. We key on `insert_id` because it is
+    /// identical in the ring and the DB even after a poll restart, where `seq` is re-stamped on
+    /// the ring but kept by the DB (INSERT OR IGNORE). nil = no SQL filter (Logs mode).
+    private var sqlOrderedIds: [String]?
+    private var sqlOrderedSeqs: [UInt64]?
+    /// Whether a SQL filter is currently driving the list.
+    private var sqlActive: Bool { sqlOrderedIds != nil || sqlOrderedSeqs != nil }
+    /// Guards against overlapping SQL runs (the manual Run racing the 2s live refresh): a run in
+    /// flight sets this, and a request arriving meanwhile is coalesced into one re-run when it
+    /// finishes — so the button never sticks on "Running…".
+    private var sqlQueryInFlight = false
+    private var sqlRerunRequested = false
     /// True once the user hand-edits the SQL, so mode switches stop auto-regenerating it.
     private var sqlCustomized = false
     private var lastGeneratedSql: String?
@@ -149,7 +156,7 @@ final class CloudLogSession: WorkspaceTab {
         if rawFilter != nil { parts.append("URL filter") }
         else if let logName = selectedLogName { parts.append(CloudLogName.shortId(logName)) }
         parts.append(timeRange.label)
-        if sqlIdFilter != nil || sqlSeqFilter != nil { parts.append("SQL") }
+        if sqlActive { parts.append("SQL") }
         else if rawFilter == nil && !query.isEmpty { parts.append("filtered") }
         return parts.joined(separator: " · ")
     }
@@ -306,41 +313,38 @@ final class CloudLogSession: WorkspaceTab {
             }
         }
 
+        // In SQL mode the query owns the list; the 2s live refresh rebuilds it from the new rows.
+        guard viewMode != .sql else { return }
         for entry in drained where passes(entry) {
             visible.append(entry)
             displayMap.append(lineCount: LogTextLines.count(entry.message))
         }
     }
 
-    /// Whether an entry is currently visible: it must pass the SQL seq-filter (when in SQL mode)
-    /// and the instant client search.
+    /// Whether a new streamed entry should append to the live list — only in Logs mode (in SQL
+    /// mode the query owns the list and rebuilds it on each refresh) and only if it matches the
+    /// instant client search.
     private func passes(_ entry: CloudLogEntry) -> Bool {
-        guard Self.sqlPass(entry, ids: sqlIdFilter, seqs: sqlSeqFilter) else { return false }
-        return Self.matches(entry, search: searchText)
+        Self.matches(entry, search: searchText)
     }
 
-    /// Whether an entry passes the SQL filter (by stable insert_id if available, else by seq).
-    nonisolated static func sqlPass(_ entry: CloudLogEntry, ids: Set<String>?, seqs: Set<UInt64>?) -> Bool {
-        if let ids { return ids.contains(entry.insertId) }
-        if let seqs { return seqs.contains(entry.seq) }
-        return true
+    /// Routes a client-search change to the right list: rebuild from the SQL result in SQL mode,
+    /// re-filter the ring in Logs mode.
+    private func searchChanged() {
+        if viewMode == .sql { rebuildSqlVisible() } else { recomputeVisible() }
     }
 
     /// Re-filters the whole ring off the main thread on a search change, then assigns on main
     /// (token discards stale results; a catch-up pass re-adds entries that streamed in while the
-    /// background filter ran). Same shape as `LogSession.recomputeVisible`.
+    /// background filter ran). Same shape as `LogSession.recomputeVisible`. Logs mode only.
     private func recomputeVisible() {
         recomputeToken &+= 1
         let token = recomputeToken
         let snapshot = ring
         let search = searchText
-        let seqFilter = sqlSeqFilter
-        let idFilter = sqlIdFilter
         let lastSeq = snapshot.last?.seq
         Task.detached(priority: .userInitiated) {
-            let result = snapshot.filter { entry in
-                Self.sqlPass(entry, ids: idFilter, seqs: seqFilter) && Self.matches(entry, search: search)
-            }
+            let result = snapshot.filter { Self.matches($0, search: search) }
             await MainActor.run { [weak self] in
                 guard let self, token == self.recomputeToken else { return }
                 var out = result
@@ -352,6 +356,47 @@ final class CloudLogSession: WorkspaceTab {
                 self.visible = out
                 self.displayMap.rebuild(lineCounts: out.map { LogTextLines.count($0.message) })
                 self.listEpoch &+= 1
+            }
+        }
+    }
+
+    /// Rebuilds the SQL-mode list from the last SQL result: each result row (in query order) is
+    /// resolved to a ring entry by `insert_id`, falling back to `seq`, then run through the instant
+    /// search. The list is therefore exactly what the query returned (LIMIT / ORDER BY / WHERE),
+    /// not a fuzzy membership test — which is why a `LIMIT 2` now shows two rows. Off-main (token
+    /// shared with `recomputeVisible`, so the latest of either wins).
+    private func rebuildSqlVisible() {
+        guard viewMode == .sql, sqlActive else { return }
+        recomputeToken &+= 1
+        let token = recomputeToken
+        let ids = sqlOrderedIds
+        let seqs = sqlOrderedSeqs
+        let snapshot = ring
+        let search = searchText
+        Task.detached(priority: .userInitiated) {
+            let count = ids?.count ?? seqs?.count ?? 0
+            var byId = [String: CloudLogEntry](minimumCapacity: snapshot.count)
+            var bySeq = [UInt64: CloudLogEntry](minimumCapacity: snapshot.count)
+            for e in snapshot {
+                if !e.insertId.isEmpty { byId[e.insertId] = e }
+                bySeq[e.seq] = e
+            }
+            var out: [CloudLogEntry] = []
+            out.reserveCapacity(count)
+            var seen = Set<UInt64>()
+            for i in 0..<count {
+                var entry: CloudLogEntry?
+                if let id = ids?[i], !id.isEmpty { entry = byId[id] }
+                if entry == nil, let s = seqs?[i] { entry = bySeq[s] }
+                guard let e = entry, seen.insert(e.seq).inserted, Self.matches(e, search: search) else { continue }
+                out.append(e)
+            }
+            await MainActor.run { [weak self] in
+                guard let self, token == self.recomputeToken else { return }
+                self.visible = out
+                self.displayMap.rebuild(lineCounts: out.map { LogTextLines.count($0.message) })
+                self.listEpoch &+= 1
+                self.sqlMatchCount = out.count
             }
         }
     }
@@ -433,8 +478,9 @@ final class CloudLogSession: WorkspaceTab {
             startSqlAutoRefresh()
         } else {
             sqlRefreshTask?.cancel(); sqlRefreshTask = nil
-            sqlIdFilter = nil
-            sqlSeqFilter = nil
+            sqlOrderedIds = nil
+            sqlOrderedSeqs = nil
+            sqlRunning = false
             sqlError = nil
             recomputeVisible()          // drop the SQL filter → show the full live logs again
         }
@@ -465,8 +511,8 @@ final class CloudLogSession: WorkspaceTab {
         let serverFilter = CloudFilter.build(logName: selectedLogName, time: nil, query: query, rawFilter: rawFilter)
         var lines: [String] = []
         lines.append("-- Level 1 (Cloud Logging filter, fetched live): \(serverFilter.isEmpty ? "(all logs)" : serverFilter)")
-        lines.append("-- Level 2 (SQL filter): keep `insert_id`; matching rows show in the list, re-running as new logs arrive.")
-        lines.append("SELECT insert_id, datetime(ts, 'unixepoch', 'localtime') AS time, severity_name, log_id, text_payload")
+        lines.append("-- Level 2 (SQL filter): keep `insert_id`; the matching rows show in the list, in this order.")
+        lines.append("SELECT insert_id, seq, datetime(ts, 'unixepoch', 'localtime') AS time, severity_name, log_id, text_payload")
         lines.append("FROM log_entry")
         lines.append("ORDER BY seq DESC")
         lines.append("LIMIT 1000;")
@@ -484,60 +530,67 @@ final class CloudLogSession: WorkspaceTab {
         }
     }
 
-    /// Runs the SQL and turns its `seq` column into the active filter for the log list. `live`
-    /// re-runs (from the auto-refresh timer) stay quiet — no spinner, no clearing errors.
+    /// Runs the SQL and drives the log list from its result rows (in query order). `live` re-runs
+    /// (from the 2s auto-refresh) stay quiet — no spinner, no clearing errors. Overlapping runs are
+    /// coalesced so the manual Run can never stick on "Running…".
     func runSQL(live: Bool = false) {
         guard let database else {
-            if !live { sqlError = "No data captured yet — start the session first." }
+            if !live { sqlError = "No data captured yet — start the session first."; sqlRunning = false }
             return
         }
         let sql = sqlText
         guard DatabaseService.isReadOnly(sql) else {
-            if !live { sqlError = "Only read-only queries are allowed (SELECT / WITH / PRAGMA / EXPLAIN)." }
+            if !live { sqlError = "Only read-only queries are allowed (SELECT / WITH / PRAGMA / EXPLAIN)."; sqlRunning = false }
             return
         }
+        // Coalesce: if a run is already in flight, remember to re-run once it lands instead of
+        // piling up another query on the DB actor (and leaving the button spinning).
+        if sqlQueryInFlight {
+            sqlRerunRequested = true
+            if !live { sqlRunning = true; sqlError = nil }
+            return
+        }
+        sqlQueryInFlight = true
         if !live { sqlRunning = true; sqlError = nil }
-        Task { [weak self] in
+        Task { [weak self] in   // inherits MainActor isolation; query hops to the DB actor and back
+            defer { self?.finishSqlRun() }
             do {
                 let rs = try await database.query(sql)   // writer connection → sees live inserts
                 guard let self else { return }
-                if !live { self.sqlRunning = false }
-                // Prefer the stable insert_id key; fall back to seq. (seq is re-stamped on the ring
-                // across poll restarts, so seq alone silently breaks the filter — insert_id doesn't.)
-                if let idCol = rs.columns.firstIndex(where: { $0.lowercased() == "insert_id" }) {
-                    var ids = Set<String>()
-                    ids.reserveCapacity(rs.rows.count)
-                    for row in rs.rows { if let value = row[idCol] { ids.insert(value) } }
-                    let changed = (self.sqlIdFilter != ids) || (self.sqlSeqFilter != nil)
-                    self.sqlIdFilter = ids
-                    self.sqlSeqFilter = nil
-                    self.sqlMatchCount = ids.count
-                    self.sqlError = nil
-                    if changed { self.recomputeVisible() }
-                } else if let seqCol = rs.columns.firstIndex(where: { $0.lowercased() == "seq" }) {
-                    var seqs = Set<UInt64>()
-                    seqs.reserveCapacity(rs.rows.count)
-                    for row in rs.rows {
-                        if let value = row[seqCol], let parsed = UInt64(value) { seqs.insert(parsed) }
-                    }
-                    let changed = (self.sqlSeqFilter != seqs) || (self.sqlIdFilter != nil)
-                    self.sqlSeqFilter = seqs
-                    self.sqlIdFilter = nil
-                    self.sqlMatchCount = seqs.count
-                    self.sqlError = nil
-                    if changed { self.recomputeVisible() }
-                } else {
-                    self.sqlError = "Your SQL must SELECT an `insert_id` (or `seq`) column so the matching logs can be shown — e.g. SELECT insert_id, … FROM log_entry …"
-                    self.sqlIdFilter = []
-                    self.sqlSeqFilter = nil
-                    self.sqlMatchCount = 0
-                    self.recomputeVisible()
-                }
+                self.applySqlResult(rs)
             } catch {
                 guard let self else { return }
-                if !live { self.sqlRunning = false }
                 self.sqlError = (error as? LocalizedError)?.errorDescription ?? "\(error)"
             }
+        }
+    }
+
+    /// Captures the SQL result's row keys (insert_id + seq, in order) and rebuilds the list.
+    private func applySqlResult(_ rs: DBResultSet) {
+        let idCol = rs.columns.firstIndex { $0.lowercased() == "insert_id" }
+        let seqCol = rs.columns.firstIndex { $0.lowercased() == "seq" }
+        guard idCol != nil || seqCol != nil else {
+            sqlError = "Your SQL must SELECT an `insert_id` (or `seq`) column so the matching logs can be shown — e.g. SELECT insert_id, … FROM log_entry …"
+            sqlOrderedIds = []
+            sqlOrderedSeqs = nil
+            sqlMatchCount = 0
+            rebuildSqlVisible()
+            return
+        }
+        sqlOrderedIds = idCol.map { col in rs.rows.map { $0[col] ?? "" } }
+        sqlOrderedSeqs = seqCol.map { col in rs.rows.map { UInt64($0[col] ?? "") ?? 0 } }
+        sqlError = nil
+        rebuildSqlVisible()
+    }
+
+    /// Clears the in-flight flag and runs once more if a request arrived mid-run (so the latest
+    /// edits aren't lost), guaranteeing the spinner always resolves.
+    private func finishSqlRun() {
+        sqlQueryInFlight = false
+        sqlRunning = false
+        if sqlRerunRequested {
+            sqlRerunRequested = false
+            if viewMode == .sql { runSQL(live: true) }   // quiet re-run with the latest text
         }
     }
 
@@ -561,14 +614,14 @@ final class CloudLogSession: WorkspaceTab {
 /// isolate a single user/session flow in a noisy log.
 enum CloudSqlTemplates {
     static let recent = """
-    SELECT insert_id, datetime(ts, 'unixepoch', 'localtime') AS time, severity_name, log_id, text_payload
+    SELECT insert_id, seq, datetime(ts, 'unixepoch', 'localtime') AS time, severity_name, log_id, text_payload
     FROM log_entry
     ORDER BY seq DESC
     LIMIT 1000;
     """
 
     static let errorsOnly = """
-    SELECT insert_id, datetime(ts, 'unixepoch', 'localtime') AS time, severity_name, text_payload
+    SELECT insert_id, seq, datetime(ts, 'unixepoch', 'localtime') AS time, severity_name, text_payload
     FROM log_entry
     WHERE severity >= 500          -- ERROR and above
     ORDER BY seq DESC
@@ -584,7 +637,7 @@ enum CloudSqlTemplates {
         MAX(CASE WHEN text_payload LIKE '%END%'   THEN seq END) OVER (ORDER BY seq) AS last_end
       FROM log_entry
     )
-    SELECT insert_id, datetime(ts, 'unixepoch', 'localtime') AS time, severity_name, text_payload
+    SELECT insert_id, seq, datetime(ts, 'unixepoch', 'localtime') AS time, severity_name, text_payload
     FROM marked
     WHERE last_start IS NOT NULL
       AND (last_end IS NULL OR last_end < last_start)   -- inside an open START…END bracket

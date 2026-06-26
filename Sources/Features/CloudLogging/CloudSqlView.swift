@@ -58,7 +58,7 @@ struct CloudSqlEditorBar: View {
     }
 
     private var statusText: String {
-        "SQL filter · \(session.sqlMatchCount) matching · re-runs live"
+        "SQL filter · \(session.sqlMatchCount) shown · re-runs live"
     }
 
     private var labelsMenu: some View {
