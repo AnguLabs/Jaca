@@ -91,6 +91,20 @@ The pattern (reference implementation: `ProjectsModel` + `ProjectsCache`):
 
 When adding or revisiting an area whose data comes from the filesystem/processes (Gradle daemons and Xcode DerivedData currently rescan on appear), prefer this cache-first, background-refresh shape over scan-on-open.
 
+## Persisted caches must be migration-safe — NEVER lose data (IMPORTANT)
+
+Adding a field to a persisted `Codable` model must **never** drop the user's existing data. Caches live across releases (`~/.jaca/…`, `~/Library/Caches/Jaca/…`, `UserDefaults`), so a schema change that fails to decode silently wipes them. **Every time you add or change a persisted model, do the migration — there is no "small enough" change that skips this.**
+
+The trap: Swift's **synthesized `Codable` ignores a property's default value for missing keys**. Add a non-optional field and decoding the old JSON throws `keyNotFound`; a `try? decode(…) ?? []` then returns empty, and the next save overwrites the file with that empty value — the user's data is gone. (This actually happened: adding `CloudProject.favoriteLabelKeysByLogName` emptied `~/.jaca/cloud-logging/projects.json`.)
+
+So, for every model written to disk/`UserDefaults`:
+
+1. **Tolerant decode.** Give it a custom `init(from:)` (in an `extension`, so the memberwise init is preserved) that uses `decodeIfPresent(_:forKey:) ?? default` for every field except the truly-required ones (e.g. an id/key). Missing keys → defaults; unknown future keys are ignored automatically. Do this for nested/embedded models too (they decode as part of the parent).
+2. **Skip-bad-records on load.** Decode arrays via `CloudPersistence.decodeArray` (whole-array first, then element-by-element), so one unreadable record can't wipe the whole file.
+3. **Regression test.** Add a test that decodes an *old-schema* JSON (missing the new key) and asserts it loads with the field defaulted — not as an empty/failed decode.
+
+Reference implementation: `Sources/Core/CloudLogging/CloudProjectStore.swift` + `CloudPersistence` + `CloudMigrationTests`.
+
 ## Single source of truth & reactive state (IMPORTANT)
 
 State that more than one screen reads — device/link/capture status, discovery, connection health — lives in **one `@Observable @MainActor` owner**, and views render it. Don't scatter the same knowledge across views, and don't re-derive or re-validate it per screen. The recurring bug this prevents: three views each polling the same thing on a 1s timer, each with its own slightly-different copy of "is it connected?", so a fix in one place silently misses the others. Reference implementation: `CompanionRegistry` (the one source of truth for companion devices — discovery, gRPC links, CA push, capture heartbeats, the blocked-network hint), read by `AppModel`, `NetworkSession`, and every companion view.
