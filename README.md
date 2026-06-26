@@ -239,7 +239,7 @@ cd agent
 ```
 
 `build.sh` honours `ABIS="arm64-v8a x86_64"` and `API=28`; `deploy.sh` defaults to
-`com.teya.ac.dev` on `emulator-5554` (override with the two args, or `ANDROID_SERIAL`).
+`com.example.app.dev` on `emulator-5554` (override with the two args, or `ANDROID_SERIAL`).
 
 ---
 

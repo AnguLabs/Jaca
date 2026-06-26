@@ -99,7 +99,7 @@ final class AndroidDeviceProvider: DeviceProvider {
         return model.isEmpty ? nil : model
     }
 
-    /// AVD name of an emulator (e.g. "teya_pixel9_api36"), matching its window title.
+    /// AVD name of an emulator (e.g. "example_pixel9_api36"), matching its window title.
     /// `adb emu avd name` prints "<name>\nOK".
     static func queryAVDName(adbURL: URL, serial: String) async -> String? {
         guard let result = try? await CommandRunner.run(adbURL, ["-s", serial, "emu", "avd", "name"]),

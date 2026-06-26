@@ -20,7 +20,7 @@ final class SimulatorConsoleParserTests: XCTestCase {
     func testNSLogMirrorIsDroppedToAvoidDuplicates() {
         // `timestamp ProcessName[pid:tid] …` is already delivered by `log stream`
         // with full metadata, so the console source drops it.
-        let raw = "2026-06-14 19:53:58.395 Teya Dev[65991:17811277] [Firebase/Crashlytics] Version 11.15.0"
+        let raw = "2026-06-14 19:53:58.395 Example Dev[65991:17811277] [Firebase/Crashlytics] Version 11.15.0"
         XCTAssertNil(SimulatorConsoleParser.parse(raw))
     }
 

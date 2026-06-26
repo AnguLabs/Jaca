@@ -3,7 +3,7 @@
 # Usage: ./deploy.sh [package] [serial]
 set -euo pipefail
 cd "$(dirname "$0")"
-PKG="${1:-com.teya.ac.dev}"
+PKG="${1:-com.example.app.dev}"
 SERIAL="${2:-emulator-5554}"
 SOCK="squeeze_agent"
 ADB="$HOME/Library/Android/sdk/platform-tools/adb"

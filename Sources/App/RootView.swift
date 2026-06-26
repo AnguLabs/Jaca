@@ -42,6 +42,7 @@ struct RootView: View {
             ProjectsSidebarHeader(model: model)
             GradleSidebarHeader(model: model)
             XcodeSidebarHeader(model: model)
+            CloudLoggingSidebarSection(model: model)
             Divider()
             DeviceSidebarView(model: model)
             UpdateBanner()
@@ -59,6 +60,8 @@ struct RootView: View {
             GradleDaemonsView(model: model.gradle)
         } else if model.mode == .xcode {
             XcodeAreaView(model: model.xcode)
+        } else if model.mode == .cloudLogging {
+            CloudLoggingHomeView(model: model)
         } else {
             devicesDetail
         }
@@ -99,6 +102,8 @@ struct RootView: View {
             NetworkSessionView(session: net)
         } else if let db = session as? DatabaseSession {
             DatabaseSessionView(session: db)
+        } else if let cloud = session as? CloudLogSession {
+            CloudLogSessionView(session: cloud, model: model, isActive: isActive)
         }
     }
 }

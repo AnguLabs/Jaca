@@ -9,7 +9,7 @@ import Foundation
 /// same content the Xcode console shows, without a debugger or a logging profile.
 ///
 /// Two line shapes arrive:
-///   • the os_log mirror — `2026-06-15 16:56:41.265-0300 Teya Dev[5904:1882516] [cat] msg`
+///   • the os_log mirror — `2026-06-15 16:56:41.265-0300 Example Dev[5904:1882516] [cat] msg`
 ///   • raw stdout/stderr — anything without that header (genuine `print()` output)
 /// plus a little `devicectl` chrome at launch, which we drop.
 enum IOSDeviceConsoleParser {

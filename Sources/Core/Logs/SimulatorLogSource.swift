@@ -105,7 +105,7 @@ final class SimulatorLogSource: LogSource {
               r.exitCode == 0 else { return [] }
         var pids: Set<Int32> = []
         for line in r.stdout.split(separator: "\n") {
-            // "<pid>\t<status>\tUIKitApplication:com.teya.ac.dev[xxxx][rb-legacy]"
+            // "<pid>\t<status>\tUIKitApplication:com.example.app.dev[xxxx][rb-legacy]"
             guard line.contains(":\(bundleID)[") || line.hasSuffix(":\(bundleID)") else { continue }
             if let pidField = line.split(whereSeparator: { $0 == " " || $0 == "\t" }).first,
                let pid = Int32(pidField), pid > 0 {

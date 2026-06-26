@@ -33,10 +33,10 @@ final class NetworkConnectTests: XCTestCase {
         // The selected in-process app id must survive encode/decode of the tab list.
         let original = TabDescriptor(kind: .network, platform: .android, deviceID: "dev1",
                                      displayName: "Net", minLevel: 0, query: "",
-                                     isRegex: false, packageLabel: "com.teya.ac.dev")
+                                     isRegex: false, packageLabel: "com.example.app.dev")
         let data = try JSONEncoder().encode([original])
         let restored = try JSONDecoder().decode([TabDescriptor].self, from: data)
-        XCTAssertEqual(restored.first?.packageLabel, "com.teya.ac.dev")
+        XCTAssertEqual(restored.first?.packageLabel, "com.example.app.dev")
         XCTAssertEqual(restored.first?.kind, .network)
     }
 
@@ -44,7 +44,7 @@ final class NetworkConnectTests: XCTestCase {
         // The chosen capture mode must survive so a relaunched tab restores ready.
         let agent = TabDescriptor(kind: .network, platform: .android, deviceID: "dev1",
                                   displayName: "Net", minLevel: 0, query: "",
-                                  isRegex: false, packageLabel: "com.teya.ac.dev", captureMode: "agent")
+                                  isRegex: false, packageLabel: "com.example.app.dev", captureMode: "agent")
         let data = try JSONEncoder().encode([agent])
         XCTAssertEqual(try JSONDecoder().decode([TabDescriptor].self, from: data).first?.captureMode, "agent")
     }

@@ -59,7 +59,7 @@ extension LogFilterTests {
         var f = LogFilter()                      // hideSystemLogs defaults true
         XCTAssertFalse(f.matches(line(tag: "com.apple.network"), regex: nil))
         XCTAssertFalse(f.matches(line(tag: "com.apple.CFNetwork"), regex: nil))
-        XCTAssertTrue(f.matches(line(tag: "com.teya.haapi"), regex: nil))   // app subsystem
+        XCTAssertTrue(f.matches(line(tag: "com.example.haapi"), regex: nil))   // app subsystem
         XCTAssertTrue(f.matches(line(tag: ""), regex: nil))                  // NSLog / no subsystem
         f.hideSystemLogs = false
         XCTAssertTrue(f.matches(line(tag: "com.apple.network"), regex: nil))

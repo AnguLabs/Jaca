@@ -13,7 +13,7 @@ import Foundation
 /// stdout/print delta.
 enum SimulatorConsoleParser {
     /// Matches the simulator's NSLog/os_log stderr mirror:
-    /// `2026-06-14 19:53:58.395 Teya Dev[65991:17811277] message`
+    /// `2026-06-14 19:53:58.395 Example Dev[65991:17811277] message`
     /// (ISO-ish timestamp + `ProcessName[pid:tid]`) — already in `log stream`.
     private static let mirrorPrefix = try! NSRegularExpression(
         pattern: #"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+ .+\[\d+:[0-9a-fx]+\] "#,
