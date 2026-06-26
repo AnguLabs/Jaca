@@ -151,7 +151,10 @@ struct CloudLogTableView: NSViewRepresentable {
             let row = table.selectedRow
             guard row >= 0, row < session.displayRowCount else { return }
             let logIndex = session.locate(displayRow: row).log
-            if logIndex < session.visible.count { session.selectedEntry = session.visible[logIndex] }
+            if logIndex < session.visible.count {
+                let entry = session.visible[logIndex]
+                if !entry.isSynthetic { session.selectedEntry = entry }   // dividers aren't inspectable
+            }
         }
 
         func apply(epoch: Int, following: Bool) {
@@ -307,6 +310,17 @@ final class CloudCellNSView: NSView {
         guard let entry else { return }
         let h = bounds.height
         let ty = (h - LogColors.lineHeight) / 2
+
+        // A SQL-injected divider/marker row: centered, dim, no time / badge / log id.
+        if entry.isSynthetic {
+            guard subLine < displayLines.count else { return }
+            let text = displayLines[subLine] as NSString
+            let attrs = LogColors.attr(LogColors.timestamp)
+            let size = text.size(withAttributes: attrs)
+            let x = max(LogRowLayout.pad, (bounds.width - size.width) / 2)
+            text.draw(at: NSPoint(x: x, y: ty), withAttributes: attrs)
+            return
+        }
 
         if subLine == 0 {
             var x = LogRowLayout.pad

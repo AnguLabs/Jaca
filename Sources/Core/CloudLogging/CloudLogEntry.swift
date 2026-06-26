@@ -27,6 +27,9 @@ struct CloudLogEntry: Identifiable, Sendable, Hashable {
     let httpRequestSummary: String?
     /// Full entry as pretty JSON, for the detail panel's raw view.
     let raw: String
+    /// True for a row the SQL mode injected (a `----- window -----` separator / aggregate marker)
+    /// rather than a captured log entry. Rendered as a dim centered divider; not selectable.
+    var isSynthetic: Bool = false
 
     var id: UInt64 { seq }
 
@@ -35,6 +38,16 @@ struct CloudLogEntry: Identifiable, Sendable, Hashable {
     var tag: String { labels["tag"] ?? "" }
 
     enum PayloadKind: String, Sendable, Hashable { case text, json, proto, none }
+
+    /// Builds a synthetic divider/marker row for SQL mode from the columns a query SELECTed.
+    static func synthetic(id: UInt64, message: String, severity: CloudSeverity) -> CloudLogEntry {
+        CloudLogEntry(
+            seq: id, insertId: "", timestamp: Date(timeIntervalSince1970: 0), receiveTimestamp: nil,
+            severity: severity, logName: "", logId: "", message: message, payloadKind: .none,
+            labels: [:], resourceType: "", resourceLabels: [:], trace: nil, spanId: nil,
+            httpRequestSummary: nil, raw: message, isSynthetic: true
+        )
+    }
 }
 
 /// Decodes the JSON array printed by `gcloud logging read --format=json` into

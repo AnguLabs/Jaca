@@ -88,15 +88,14 @@ final class CloudLogSession: WorkspaceTab {
     var sqlRunning = false
     /// How many log rows the current SQL query maps to in the list (shown in the editor bar).
     private(set) var sqlMatchCount = 0
-    /// The SQL result rows' keys, **in result order**: `insert_id` (primary) and `seq` (fallback)
-    /// per row. The SQL-mode list is rebuilt by looking each key up in the ring, so the query's
-    /// LIMIT / ORDER BY / WHERE are reflected exactly. We key on `insert_id` because it is
-    /// identical in the ring and the DB even after a poll restart, where `seq` is re-stamped on
-    /// the ring but kept by the DB (INSERT OR IGNORE). nil = no SQL filter (Logs mode).
-    private var sqlOrderedIds: [String]?
-    private var sqlOrderedSeqs: [UInt64]?
+    /// The whole last SQL result (rows + columns), kept so the list can be rebuilt **in result
+    /// order**: each row is resolved to a captured entry by `insert_id` (primary) then `seq` —
+    /// `insert_id` is identical in the ring and the DB even after a poll restart, where `seq` is
+    /// re-stamped on the ring but kept by the DB. A row that resolves to nothing (or is flagged
+    /// `is_marker`) becomes a synthetic divider built from its own columns. nil = Logs mode.
+    private var sqlResult: DBResultSet?
     /// Whether a SQL filter is currently driving the list.
-    private var sqlActive: Bool { sqlOrderedIds != nil || sqlOrderedSeqs != nil }
+    private var sqlActive: Bool { sqlResult != nil }
     /// Guards against overlapping SQL runs (the manual Run racing the 2s live refresh): a run in
     /// flight sets this, and a request arriving meanwhile is coalesced into one re-run when it
     /// finishes — so the button never sticks on "Running…".
@@ -361,36 +360,22 @@ final class CloudLogSession: WorkspaceTab {
     }
 
     /// Rebuilds the SQL-mode list from the last SQL result: each result row (in query order) is
-    /// resolved to a ring entry by `insert_id`, falling back to `seq`, then run through the instant
-    /// search. The list is therefore exactly what the query returned (LIMIT / ORDER BY / WHERE),
-    /// not a fuzzy membership test — which is why a `LIMIT 2` now shows two rows. Off-main (token
-    /// shared with `recomputeVisible`, so the latest of either wins).
+    /// resolved to a captured entry by `insert_id`, falling back to `seq`, then run through the
+    /// instant search. The list is therefore exactly what the query returned (LIMIT / ORDER BY /
+    /// WHERE), not a fuzzy membership test. A row that resolves to nothing — or is explicitly
+    /// flagged via an `is_marker` column — becomes a **synthetic divider** drawn from its own
+    /// `text_payload` / `severity_name`, so a query can inject `----- window -----` separators.
+    /// Off-main (token shared with `recomputeVisible`, so the latest of either wins).
     private func rebuildSqlVisible() {
-        guard viewMode == .sql, sqlActive else { return }
+        guard viewMode == .sql, let rs = sqlResult else { return }
         recomputeToken &+= 1
         let token = recomputeToken
-        let ids = sqlOrderedIds
-        let seqs = sqlOrderedSeqs
         let snapshot = ring
         let search = searchText
+        let cols = SqlResultColumns(rs.columns)
+        let rows = rs.rows
         Task.detached(priority: .userInitiated) {
-            let count = ids?.count ?? seqs?.count ?? 0
-            var byId = [String: CloudLogEntry](minimumCapacity: snapshot.count)
-            var bySeq = [UInt64: CloudLogEntry](minimumCapacity: snapshot.count)
-            for e in snapshot {
-                if !e.insertId.isEmpty { byId[e.insertId] = e }
-                bySeq[e.seq] = e
-            }
-            var out: [CloudLogEntry] = []
-            out.reserveCapacity(count)
-            var seen = Set<UInt64>()
-            for i in 0..<count {
-                var entry: CloudLogEntry?
-                if let id = ids?[i], !id.isEmpty { entry = byId[id] }
-                if entry == nil, let s = seqs?[i] { entry = bySeq[s] }
-                guard let e = entry, seen.insert(e.seq).inserted, Self.matches(e, search: search) else { continue }
-                out.append(e)
-            }
+            let out = Self.mapSqlRows(columns: cols, rows: rows, ring: snapshot, search: search)
             await MainActor.run { [weak self] in
                 guard let self, token == self.recomputeToken else { return }
                 self.visible = out
@@ -399,6 +384,44 @@ final class CloudLogSession: WorkspaceTab {
                 self.sqlMatchCount = out.count
             }
         }
+    }
+
+    /// Maps SQL result rows (in order) to the list: each row resolves to a captured entry by
+    /// `insert_id` then `seq`; a row that resolves to nothing — or is flagged via `is_marker` — is
+    /// turned into a synthetic divider built from its own columns. Pure → unit-tested. Synthetic
+    /// ids count down from `UInt64.max` so they never collide with real (low, ascending) seqs.
+    nonisolated static func mapSqlRows(
+        columns cols: SqlResultColumns, rows: [[String?]], ring: [CloudLogEntry], search: String
+    ) -> [CloudLogEntry] {
+        var byId = [String: CloudLogEntry](minimumCapacity: ring.count)
+        var bySeq = [UInt64: CloudLogEntry](minimumCapacity: ring.count)
+        for e in ring {
+            if !e.insertId.isEmpty { byId[e.insertId] = e }
+            bySeq[e.seq] = e
+        }
+        var out: [CloudLogEntry] = []
+        out.reserveCapacity(rows.count)
+        var seen = Set<UInt64>()
+        var syntheticId = UInt64.max
+        for row in rows {
+            var entry: CloudLogEntry?
+            if !cols.isMarker(row) {
+                if let id = cols.id(row), !id.isEmpty { entry = byId[id] }
+                if entry == nil, let s = cols.seq(row) { entry = bySeq[s] }
+            }
+            if let e = entry {                 // a captured log line
+                guard seen.insert(e.seq).inserted, matches(e, search: search) else { continue }
+                out.append(e)
+            } else {                           // a synthetic divider / aggregate row
+                let synth = CloudLogEntry.synthetic(
+                    id: syntheticId, message: cols.message(row) ?? "",
+                    severity: CloudSeverity(apiValue: cols.severityName(row)))
+                syntheticId &-= 1
+                guard matches(synth, search: search) else { continue }
+                out.append(synth)
+            }
+        }
+        return out
     }
 
     /// Instant client-side match: free text over message, log id, severity, and label keys/values.
@@ -478,8 +501,7 @@ final class CloudLogSession: WorkspaceTab {
             startSqlAutoRefresh()
         } else {
             sqlRefreshTask?.cancel(); sqlRefreshTask = nil
-            sqlOrderedIds = nil
-            sqlOrderedSeqs = nil
+            sqlResult = nil
             sqlRunning = false
             sqlError = nil
             recomputeVisible()          // drop the SQL filter → show the full live logs again
@@ -565,20 +587,19 @@ final class CloudLogSession: WorkspaceTab {
         }
     }
 
-    /// Captures the SQL result's row keys (insert_id + seq, in order) and rebuilds the list.
+    /// Keeps the SQL result (so the list can be rebuilt in result order) and rebuilds the list.
     private func applySqlResult(_ rs: DBResultSet) {
-        let idCol = rs.columns.firstIndex { $0.lowercased() == "insert_id" }
-        let seqCol = rs.columns.firstIndex { $0.lowercased() == "seq" }
-        guard idCol != nil || seqCol != nil else {
+        let cols = SqlResultColumns(rs.columns)
+        guard cols.idCol != nil || cols.seqCol != nil else {
             sqlError = "Your SQL must SELECT an `insert_id` (or `seq`) column so the matching logs can be shown — e.g. SELECT insert_id, … FROM log_entry …"
-            sqlOrderedIds = []
-            sqlOrderedSeqs = nil
+            sqlResult = nil
             sqlMatchCount = 0
-            rebuildSqlVisible()
+            visible = []
+            displayMap.removeAll()
+            listEpoch &+= 1
             return
         }
-        sqlOrderedIds = idCol.map { col in rs.rows.map { $0[col] ?? "" } }
-        sqlOrderedSeqs = seqCol.map { col in rs.rows.map { UInt64($0[col] ?? "") ?? 0 } }
+        sqlResult = rs
         sqlError = nil
         rebuildSqlVisible()
     }
@@ -609,6 +630,36 @@ final class CloudLogSession: WorkspaceTab {
     }
 }
 
+/// Resolves the columns the SQL-mode list needs from a result set (by name, case-insensitive)
+/// and reads them out of a row. Drives both the map-back-to-entry and the synthetic-divider path.
+/// `Sendable` so it can cross into the off-main rebuild.
+struct SqlResultColumns: Sendable {
+    let idCol: Int?
+    let seqCol: Int?
+    let messageCol: Int?
+    let severityCol: Int?
+    let markerCol: Int?
+
+    init(_ columns: [String]) {
+        func find(_ names: Set<String>) -> Int? { columns.firstIndex { names.contains($0.lowercased()) } }
+        idCol = find(["insert_id"])
+        seqCol = find(["seq"])
+        messageCol = find(["text_payload", "message"])
+        severityCol = find(["severity_name"])
+        markerCol = find(["is_marker", "is_synthetic", "marker"])
+    }
+
+    func id(_ row: [String?]) -> String? { idCol.flatMap { row[$0] } }
+    func seq(_ row: [String?]) -> UInt64? { seqCol.flatMap { row[$0] }.flatMap { UInt64($0) } }
+    func message(_ row: [String?]) -> String? { messageCol.flatMap { row[$0] } }
+    func severityName(_ row: [String?]) -> String? { severityCol.flatMap { row[$0] } }
+    /// A row is a synthetic marker when an `is_marker`-style column is truthy.
+    func isMarker(_ row: [String?]) -> Bool {
+        guard let markerCol, let v = row[markerCol]?.lowercased() else { return false }
+        return v == "1" || v == "true" || v == "yes"
+    }
+}
+
 /// Ready-made SQL snippets the SQL mode offers (req 14). The "flow window" template is the
 /// headline use case: bracket rows between a START match and the next END match so you can
 /// isolate a single user/session flow in a noisy log.
@@ -628,25 +679,47 @@ enum CloudSqlTemplates {
     LIMIT 500;
     """
 
+    static let uniquePerLabel = """
+    -- One log per unique label: a single (latest) row for each distinct value of a label —
+    -- e.g. one line per user_id. Replace `user_id` with your label key (see the Labels menu).
+    -- MAX(seq) makes the shown row the most recent one for that value.
+    SELECT insert_id, MAX(seq) AS seq, datetime(ts, 'unixepoch', 'localtime') AS time,
+           severity_name, log_id, text_payload,
+           json_extract(labels_json, '$.user_id') AS label_value
+    FROM log_entry
+    GROUP BY label_value
+    HAVING label_value IS NOT NULL          -- drop rows that don't carry this label
+    ORDER BY label_value;
+    """
+
     static let flowWindow = """
-    -- Flow window (req 14): keep only rows inside a START…END bracket — isolate one flow.
+    -- Flow window (req 14): keep only rows inside a START…END bracket, with a divider per window.
     -- Edit the two LIKE patterns to your flow's start/end markers, then Run.
     WITH marked AS (
       SELECT *,
         MAX(CASE WHEN text_payload LIKE '%START%' THEN seq END) OVER (ORDER BY seq) AS last_start,
         MAX(CASE WHEN text_payload LIKE '%END%'   THEN seq END) OVER (ORDER BY seq) AS last_end
       FROM log_entry
+    ),
+    flow AS (
+      SELECT * FROM marked
+      WHERE last_start IS NOT NULL
+        AND (last_end IS NULL OR last_end < last_start)   -- inside an open START…END bracket
     )
-    SELECT insert_id, seq, datetime(ts, 'unixepoch', 'localtime') AS time, severity_name, text_payload
-    FROM marked
-    WHERE last_start IS NOT NULL
-      AND (last_end IS NULL OR last_end < last_start)   -- inside an open START…END bracket
-    ORDER BY seq;
+    SELECT insert_id, seq, datetime(ts, 'unixepoch', 'localtime') AS time, severity_name, text_payload, 0 AS is_marker
+    FROM flow
+    UNION ALL
+    -- one synthetic divider per window (is_marker = 1 → drawn as a divider, not a log line)
+    SELECT '', last_start, NULL, 'NOTICE', '──────────  window  ──────────', 1
+    FROM flow
+    GROUP BY last_start
+    ORDER BY seq, is_marker DESC;
     """
 
     static let all: [(label: String, sql: String)] = [
         ("Recent 1000", recent),
         ("Errors only", errorsOnly),
+        ("One log per unique label", uniquePerLabel),
         ("Flow window (START…END)", flowWindow),
     ]
 }
