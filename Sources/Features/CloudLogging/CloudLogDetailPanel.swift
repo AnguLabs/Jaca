@@ -109,10 +109,12 @@ struct CloudLogDetailPanel: View {
                     ForEach(Array(sorted.enumerated()), id: \.element.key) { index, pair in
                         LabelRow(
                             key: pair.key, value: pair.value,
+                            isFavorite: session.isFavoriteLabel(pair.key),
                             onFilter: { session.filterByLabel(scope: scope, key: pair.key, value: pair.value) },
                             onOr: { session.orLabel(scope: scope, key: pair.key, value: pair.value) },
                             onCopy: copy,
-                            onNewSession: { onNewSession(session.forkAddingLabel(scope: scope, key: pair.key, value: pair.value)) }
+                            onNewSession: { onNewSession(session.forkAddingLabel(scope: scope, key: pair.key, value: pair.value)) },
+                            onToggleFavorite: { session.toggleFavoriteLabel(pair.key) }
                         )
                         if index < sorted.count - 1 {
                             Rectangle().fill(LemonadeTheme.colors.border.borderNeutralLow).frame(height: 1)
@@ -183,10 +185,12 @@ struct CloudLogDetailPanel: View {
 private struct LabelRow: View {
     let key: String
     let value: String
+    var isFavorite: Bool = false
     var onFilter: () -> Void
     var onOr: () -> Void
     var onCopy: (String) -> Void
     var onNewSession: () -> Void
+    var onToggleFavorite: () -> Void = {}
     @State private var hovering = false
 
     var body: some View {
@@ -226,6 +230,8 @@ private struct LabelRow: View {
             Button("Filter by this value") { onFilter() }
             Button("Add this value (OR)") { onOr() }
             Button("Open in new session") { onNewSession() }
+            Divider()
+            Button(isFavorite ? "Unfavorite “\(key)”" : "Favorite “\(key)” (pin to top)") { onToggleFavorite() }
         }
     }
 }

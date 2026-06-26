@@ -14,6 +14,8 @@ struct CloudProject: Codable, Sendable, Hashable, Identifiable {
     var logNames: [String] = []
     /// Auto-detected label keys, cached per log name (req 9.3).
     var labelKeysByLogName: [String: [String]] = [:]
+    /// Favorited label keys, per log name — pinned to the top of the label-key list.
+    var favoriteLabelKeysByLogName: [String: [String]] = [:]
 
     var id: String { projectID }
     /// What the sidebar/tab shows: the display name if set, else the raw id.
@@ -23,6 +25,11 @@ struct CloudProject: Codable, Sendable, Hashable, Identifiable {
     /// keyed by "", when no log name is selected — so the labels system works either way).
     var currentLabelKeys: [String] {
         labelKeysByLogName[selectedLogName ?? ""] ?? []
+    }
+
+    /// Favorited label keys for the currently selected log name.
+    var currentFavoriteLabelKeys: [String] {
+        favoriteLabelKeysByLogName[selectedLogName ?? ""] ?? []
     }
 }
 

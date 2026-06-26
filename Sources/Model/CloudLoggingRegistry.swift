@@ -185,6 +185,16 @@ final class CloudLoggingRegistry {
         persist()
     }
 
+    /// Toggles a label key as a favorite for a (project, log name) — favorites pin to the top of
+    /// the label-key list. Persisted to ~/.jaca.
+    func toggleFavoriteLabel(_ key: String, project id: String, logName: String) {
+        guard !key.isEmpty, let index = projects.firstIndex(where: { $0.projectID == id }) else { return }
+        var favorites = projects[index].favoriteLabelKeysByLogName[logName] ?? []
+        if let at = favorites.firstIndex(of: key) { favorites.remove(at: at) } else { favorites.append(key) }
+        projects[index].favoriteLabelKeysByLogName[logName] = favorites
+        persist()
+    }
+
     // MARK: - Toast
 
     func flash(_ message: String, fallback: String = "checkmark") {
