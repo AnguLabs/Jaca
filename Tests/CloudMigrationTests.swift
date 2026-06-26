@@ -47,6 +47,34 @@ final class CloudMigrationTests: XCTestCase {
         XCTAssertEqual(back.first?.favoriteLabelKeysByLogName[""], ["user_id"])
     }
 
+    /// Open-tabs state: a malformed record is skipped, the rest (incl. a cloud tab) survive —
+    /// so one bad tab can't wipe the whole strip.
+    func testTabDescriptorsDecodeCloudTabAndSkipBadRecords() {
+        let json = """
+        [{"kind":"cloud","projectID":"p","displayName":"Prod","platform":"android","deviceID":"",
+          "minLevel":0,"query":"","isRegex":false,"packageLabel":"",
+          "cloudTimeRange":{"last":{"minutes":360}},
+          "cloudQuery":{"textConditions":[],"textCombineOr":true,"severitySet":[],
+                        "labelConditions":[],"labelCombineOr":false}},
+         {"displayName":"no kind — corrupt"},
+         {"kind":"log","platform":"iosSimulator","deviceID":"X","displayName":"iPhone",
+          "minLevel":0,"query":"","isRegex":false,"packageLabel":""}]
+        """
+        let tabs = CloudPersistence.decodeArray(TabDescriptor.self, from: Data(json.utf8))
+        XCTAssertEqual(tabs.count, 2)                       // the kind-less record is skipped
+        XCTAssertEqual(tabs[0].kind, .cloud)
+        XCTAssertEqual(tabs[0].projectID, "p")
+        XCTAssertEqual(tabs[0].cloudTimeRange, .last(minutes: 360))
+        XCTAssertEqual(tabs[1].kind, .log)
+    }
+
+    func testTabDescriptorOldSchemaMinimalFields() {
+        let tabs = CloudPersistence.decodeArray(
+            TabDescriptor.self, from: Data(#"[{"kind":"log","platform":"android","deviceID":"abc"}]"#.utf8))
+        XCTAssertEqual(tabs.first?.deviceID, "abc")
+        XCTAssertEqual(tabs.first?.displayName, "")          // defaulted, not a decode failure
+    }
+
     /// Embedded query models (persisted in templates.json and the open-tabs state) tolerate
     /// missing keys too.
     func testCloudLogQueryDecodesOldSchema() throws {

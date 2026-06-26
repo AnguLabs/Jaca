@@ -91,13 +91,8 @@ final class AppModel {
         if let days = UserDefaults.standard.object(forKey: "retentionDays") as? Int, days > 0 {
             retention = TimeInterval(days) * 86_400
         }
-        var cloudRestores: [TabDescriptor] = []
         if !uiTestMode {
-            let persisted = Self.loadPersistedTabs()
-            // Device-backed tabs restore as their device reappears; Cloud Logging tabs have no
-            // device, so they're restored eagerly below.
-            pendingRestores = persisted.filter { $0.kind != .cloud }
-            cloudRestores = persisted.filter { $0.kind == .cloud }
+            pendingRestores = Self.loadPersistedTabs()
         }
         buildProviders()
         companions = CompanionRegistry(ca: { [weak self] in self?.ensureCA() },
@@ -116,25 +111,13 @@ final class AppModel {
             let rules = LogExclusionStore.shared.rules
             for case let session as LogSession in self.sessions { session.applyExclusions(rules) }
         }
-        restoreCloudTabs(cloudRestores)
+        // Restore now: Cloud Logging tabs (no device) come back immediately; device-backed tabs
+        // stay pending until their device reappears. Anything not yet restorable is KEPT pending
+        // (never dropped), so a transient failure — e.g. projects not loaded yet — can't erase it.
+        restorePendingTabs()
         let store = history
         let cutoff = Date().addingTimeInterval(-retention)
         Task { await store?.prune(olderThan: cutoff) }
-    }
-
-    /// Recreates persisted Cloud Logging tabs (stopped) for projects that still exist. Unlike
-    /// device tabs these need no device, so they're restored immediately on launch.
-    private func restoreCloudTabs(_ descriptors: [TabDescriptor]) {
-        for descriptor in descriptors {
-            guard let projectID = descriptor.projectID,
-                  cloudLogging.project(projectID) != nil else { continue }
-            startCloudLogSession(
-                projectID: projectID, autoStart: false, displayName: descriptor.displayName,
-                query: descriptor.cloudQuery ?? CloudLogQuery(),
-                timeRange: descriptor.cloudTimeRange ?? .last(minutes: 15),
-                rawFilter: descriptor.cloudRawFilter
-            )
-        }
     }
 
     private func buildProviders() {
@@ -275,6 +258,20 @@ final class AppModel {
         var stillPending: [TabDescriptor] = []
         isRestoring = true
         for descriptor in pendingRestores {
+            // Cloud Logging tabs have no device — they only need their project loaded. Keep them
+            // pending (never drop) until it is, so a transient project-load failure can't lose them.
+            if descriptor.kind == .cloud {
+                if let projectID = descriptor.projectID, cloudLogging.project(projectID) != nil {
+                    startCloudLogSession(
+                        projectID: projectID, autoStart: false, displayName: descriptor.displayName,
+                        query: descriptor.cloudQuery ?? CloudLogQuery(),
+                        timeRange: descriptor.cloudTimeRange ?? .last(minutes: 15),
+                        rawFilter: descriptor.cloudRawFilter)
+                } else {
+                    stillPending.append(descriptor)
+                }
+                continue
+            }
             guard let device = devices.first(where: {
                 $0.id == descriptor.deviceID && $0.platform == descriptor.platform && $0.state.isReady
             }) else {
@@ -344,9 +341,9 @@ final class AppModel {
     }
 
     private static func loadPersistedTabs() -> [TabDescriptor] {
-        guard let data = UserDefaults.standard.data(forKey: tabsKey),
-              let descriptors = try? JSONDecoder().decode([TabDescriptor].self, from: data) else { return [] }
-        return descriptors
+        guard let data = UserDefaults.standard.data(forKey: tabsKey) else { return [] }
+        // Tolerant + element-by-element: one unreadable tab can't drop all the others.
+        return CloudPersistence.decodeArray(TabDescriptor.self, from: data)
     }
 
     // MARK: - Per-device shared context
@@ -606,6 +603,33 @@ struct TabDescriptor: Codable {
 
     func matches(_ other: TabDescriptor) -> Bool {
         kind == other.kind && deviceID == other.deviceID && displayName == other.displayName
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case kind, platform, deviceID, displayName, minLevel, query, isRegex, packageLabel,
+             captureMode, projectID, cloudQuery, cloudTimeRange, cloudRawFilter
+    }
+}
+
+extension TabDescriptor {
+    /// Migration-safe decode: only `kind` is required (a tab with no kind is meaningless and is
+    /// skipped by the element-wise loader); everything else falls back to a default, so adding a
+    /// field never invalidates a saved tab.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try c.decode(Kind.self, forKey: .kind)
+        platform = try c.decodeIfPresent(DevicePlatform.self, forKey: .platform) ?? .android
+        deviceID = try c.decodeIfPresent(String.self, forKey: .deviceID) ?? ""
+        displayName = try c.decodeIfPresent(String.self, forKey: .displayName) ?? ""
+        minLevel = try c.decodeIfPresent(Int.self, forKey: .minLevel) ?? 0
+        query = try c.decodeIfPresent(String.self, forKey: .query) ?? ""
+        isRegex = try c.decodeIfPresent(Bool.self, forKey: .isRegex) ?? false
+        packageLabel = try c.decodeIfPresent(String.self, forKey: .packageLabel) ?? ""
+        captureMode = try c.decodeIfPresent(String.self, forKey: .captureMode)
+        projectID = try c.decodeIfPresent(String.self, forKey: .projectID)
+        cloudQuery = try c.decodeIfPresent(CloudLogQuery.self, forKey: .cloudQuery)
+        cloudTimeRange = try c.decodeIfPresent(CloudTimeRange.self, forKey: .cloudTimeRange)
+        cloudRawFilter = try c.decodeIfPresent(String.self, forKey: .cloudRawFilter)
     }
 }
 
