@@ -16,11 +16,11 @@ final class LogMarkerTests: XCTestCase {
     /// Now: logs stay, and a death/restart marker is injected.
     func testAppDeathKeepsLogsAndMarksDeathAndRestart() async throws {
         let adb = try XCTUnwrap(AndroidToolchain.adbURL(), "adb not found")
-        let serial = "emulator-5554", pkg = "com.teya.ac.dev"
+        let serial = "emulator-5554", pkg = "com.example.app.dev"
         let devices = try? await CommandRunner.run(adb, ["devices"])
         try XCTSkipUnless(devices?.stdout.contains(serial) == true, "no emulator")
 
-        func launch() async { _ = try? await CommandRunner.run(adb, ["-s", serial, "shell", "am", "start", "-n", "\(pkg)/com.teya.ac.TeyaActivity"]) }
+        func launch() async { _ = try? await CommandRunner.run(adb, ["-s", serial, "shell", "am", "start", "-n", "\(pkg)/com.example.app.MainActivity"]) }
         await launch()
 
         let model = AppModel()

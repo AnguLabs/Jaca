@@ -33,14 +33,14 @@ final class IOSPackageFilterTests: XCTestCase {
 
     /// Filtering an iOS-simulator session by a bundle id must show that app's logs.
     /// (The bug: we matched the bundle id against the process name, which is the
-    /// executable — "Teya Dev" — so nothing matched. Now we filter by the resolved pid.)
+    /// executable — "Example Dev" — so nothing matched. Now we filter by the resolved pid.)
     func testSimulatorPackageFilterShowsAppLogsViaPID() async throws {
         let model = AppModel()
         model.startDiscovery()
         let ready = await waitUntil(12) { model.devices.contains { $0.platform == .iosSimulator && $0.state.isReady } }
         try XCTSkipUnless(ready, "no booted simulator")
         let sim = model.devices.first { $0.platform == .iosSimulator && $0.state.isReady }!
-        let pkg = "com.teya.ac.dev"
+        let pkg = "com.example.app.dev"
 
         // Make sure the app is running so it has a pid + emits logs.
         _ = try? await CommandRunner.run(AppleToolchain.xcrun, ["simctl", "launch", sim.id, pkg])

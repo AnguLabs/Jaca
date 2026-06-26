@@ -6,30 +6,30 @@ final class ProjectsGroupingTests: XCTestCase {
     // MARK: - Worktree path classification
 
     func test_isWorktreePath_andParentExtraction() {
-        let wt = "/Users/me/workspace/teya/.claude/worktrees/foamy-drifting-flask"
+        let wt = "/Users/me/workspace/myapp/.claude/worktrees/foamy-drifting-flask"
         XCTAssertTrue(ProjectsGrouping.isWorktreePath(wt))
-        XCTAssertEqual(ProjectsGrouping.parentRepoPath(of: wt), "/Users/me/workspace/teya")
+        XCTAssertEqual(ProjectsGrouping.parentRepoPath(of: wt), "/Users/me/workspace/myapp")
 
-        let plain = "/Users/me/workspace/teya"
+        let plain = "/Users/me/workspace/myapp"
         XCTAssertFalse(ProjectsGrouping.isWorktreePath(plain))
         XCTAssertNil(ProjectsGrouping.parentRepoPath(of: plain))
     }
 
     func test_checkout_isClaudeManaged_reflectsWorktreePath() {
-        XCTAssertTrue(ProjectsGrouping.isWorktreePath("/ws/teya/.claude/worktrees/foo"))
-        XCTAssertFalse(ProjectsGrouping.isWorktreePath("/ws/teya-wt-foo"))
+        XCTAssertTrue(ProjectsGrouping.isWorktreePath("/ws/myapp/.claude/worktrees/foo"))
+        XCTAssertFalse(ProjectsGrouping.isWorktreePath("/ws/myapp-wt-foo"))
     }
 
     // MARK: - Active-only filtering
 
     func test_activeOnly_dropsMissingCheckoutsAndMissingProjects() {
         let live = Project(
-            path: "/ws/teya", exists: true, isGitRepo: true, source: .claude,
+            path: "/ws/myapp", exists: true, isGitRepo: true, source: .claude,
             sessionCount: 2, lastActive: nil,
             checkouts: [
-                checkout("/ws/teya", isMain: true, exists: true),
-                checkout("/ws/teya/.claude/worktrees/here", isMain: false, exists: true),
-                checkout("/ws/teya/.claude/worktrees/gone", isMain: false, exists: false),
+                checkout("/ws/myapp", isMain: true, exists: true),
+                checkout("/ws/myapp/.claude/worktrees/here", isMain: false, exists: true),
+                checkout("/ws/myapp/.claude/worktrees/gone", isMain: false, exists: false),
             ]
         )
         let deadRoot = Project(
@@ -43,10 +43,10 @@ final class ProjectsGroupingTests: XCTestCase {
         )
 
         let result = ProjectsGrouping.activeOnly([live, deadRoot, nonGit])
-        XCTAssertEqual(Set(result.map(\.path)), ["/ws/teya", "/ws/notes"])  // dead root dropped
-        let teya = try! XCTUnwrap(result.first { $0.path == "/ws/teya" })
-        XCTAssertEqual(teya.checkouts.map(\.path), ["/ws/teya", "/ws/teya/.claude/worktrees/here"])
-        XCTAssertEqual(teya.worktreeCount, 1)
+        XCTAssertEqual(Set(result.map(\.path)), ["/ws/myapp", "/ws/notes"])  // dead root dropped
+        let myapp = try! XCTUnwrap(result.first { $0.path == "/ws/myapp" })
+        XCTAssertEqual(myapp.checkouts.map(\.path), ["/ws/myapp", "/ws/myapp/.claude/worktrees/here"])
+        XCTAssertEqual(myapp.worktreeCount, 1)
     }
 
     // MARK: - Sorting (main first; projects by recency)
@@ -76,15 +76,15 @@ final class ProjectsGroupingTests: XCTestCase {
 
     func test_tree_nestsSubProjectsUnderContainer() {
         let workspace = project("/ws", git: false)
-        let teya = project("/ws/teya", git: true)
+        let myapp = project("/ws/myapp", git: true)
         let jaca = project("/ws/jaca", git: true)
         let outside = project("/other/repo", git: true)
 
-        let roots = ProjectsGrouping.tree([teya, workspace, jaca, outside])
+        let roots = ProjectsGrouping.tree([myapp, workspace, jaca, outside])
         // Two roots: the container and the unrelated repo.
         XCTAssertEqual(Set(roots.map(\.id)), ["/ws", "/other/repo"])
         let ws = try! XCTUnwrap(roots.first { $0.id == "/ws" })
-        XCTAssertEqual(Set(ws.children.map(\.id)), ["/ws/teya", "/ws/jaca"])
+        XCTAssertEqual(Set(ws.children.map(\.id)), ["/ws/myapp", "/ws/jaca"])
         XCTAssertTrue(ws.hasChildren)
         // The unrelated repo is a childless root.
         let other = try! XCTUnwrap(roots.first { $0.id == "/other/repo" })
@@ -92,7 +92,7 @@ final class ProjectsGroupingTests: XCTestCase {
     }
 
     func test_tree_withoutContainment_isFlatLikeList() {
-        let a = project("/ws/teya", git: true)
+        let a = project("/ws/myapp", git: true)
         let b = project("/ws/jaca", git: true)   // siblings, no project at /ws
         let tree = ProjectsGrouping.tree([a, b])
         XCTAssertEqual(tree.count, 2)
@@ -115,9 +115,9 @@ final class ProjectsGroupingTests: XCTestCase {
     func test_extractCwd_findsFirstCwdAcrossLines() {
         let jsonl = """
         {"type":"system","sessionId":"x"}
-        {"type":"user","cwd":"/Users/me/workspace/teya","gitBranch":"main"}
+        {"type":"user","cwd":"/Users/me/workspace/myapp","gitBranch":"main"}
         """
-        XCTAssertEqual(ClaudeSessionProbe.extractCwd(fromJSONL: jsonl), "/Users/me/workspace/teya")
+        XCTAssertEqual(ClaudeSessionProbe.extractCwd(fromJSONL: jsonl), "/Users/me/workspace/myapp")
     }
 
     func test_extractCwd_returnsNilWhenAbsent() {
@@ -127,8 +127,8 @@ final class ProjectsGroupingTests: XCTestCase {
     // MARK: - Naive decode fallback
 
     func test_naiveDecode_replacesDashesWithSlashes() {
-        XCTAssertEqual(ProjectsScanner.naiveDecode("-Users-me-workspace-teya"),
-                       "/Users/me/workspace/teya")
+        XCTAssertEqual(ProjectsScanner.naiveDecode("-Users-me-workspace-myapp"),
+                       "/Users/me/workspace/myapp")
     }
 
     // MARK: - Disk cache round-trip (incl. sizes + worktrees)
@@ -142,11 +142,11 @@ final class ProjectsGroupingTests: XCTestCase {
 
         XCTAssertNil(cache.load())
 
-        var main = checkout("/ws/teya", isMain: true, exists: true)
+        var main = checkout("/ws/myapp", isMain: true, exists: true)
         main.sizeMB = 1200; main.cacheMB = 800; main.sizeComputed = true
-        let wt = checkout("/ws/teya/.claude/worktrees/foo", isMain: false, exists: true)
+        let wt = checkout("/ws/myapp/.claude/worktrees/foo", isMain: false, exists: true)
         let projects = [Project(
-            path: "/ws/teya", exists: true, isGitRepo: true, source: .claude,
+            path: "/ws/myapp", exists: true, isGitRepo: true, source: .claude,
             sessionCount: 3, lastActive: Date(timeIntervalSince1970: 1_000_000),
             checkouts: [main, wt]
         )]

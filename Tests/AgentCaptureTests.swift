@@ -4,12 +4,12 @@ import XCTest
 final class AgentTransactionParserTests: XCTestCase {
     func testParsesAgentJSONLine() {
         let line = #"""
-        {"type":"txn","id":"7","method":"POST","url":"https://id.teya.xyz/oauth/v2/oauth-token","startedAt":1717800000.5,"responseAt":1717800000.7,"finishedAt":1717800000.9,"status":200,"requestHeaders":{"Content-Type":"application/json"},"responseHeaders":{"Content-Type":"application/json; charset=utf-8"},"requestBody":"{\"a\":1}","responseBody":"{\"ok\":true}","requestSize":7,"responseSize":11,"callStack":["a.A.x(A.java:1)","b.B.y(B.kt:2)"]}
+        {"type":"txn","id":"7","method":"POST","url":"https://id.example.com/oauth/v2/oauth-token","startedAt":1717800000.5,"responseAt":1717800000.7,"finishedAt":1717800000.9,"status":200,"requestHeaders":{"Content-Type":"application/json"},"responseHeaders":{"Content-Type":"application/json; charset=utf-8"},"requestBody":"{\"a\":1}","responseBody":"{\"ok\":true}","requestSize":7,"responseSize":11,"callStack":["a.A.x(A.java:1)","b.B.y(B.kt:2)"]}
         """#
         let txn = AgentTransactionParser.parse(line)
         XCTAssertNotNil(txn)
         XCTAssertEqual(txn?.method, "POST")
-        XCTAssertEqual(txn?.host, "id.teya.xyz")
+        XCTAssertEqual(txn?.host, "id.example.com")
         XCTAssertEqual(txn?.scheme, "https")
         XCTAssertEqual(txn?.statusCode, 200)
         XCTAssertEqual(txn?.responseContentType, "application/json; charset=utf-8")
@@ -44,7 +44,7 @@ private final class StatusBox: @unchecked Sendable {
 final class LiveAgentCaptureTests: XCTestCase {
     func testAgentCapturesLive() async throws {
         let adb = try XCTUnwrap(AndroidToolchain.adbURL(), "adb not found")
-        let pkg = "com.teya.ac.dev"
+        let pkg = "com.example.app.dev"
         try XCTSkipUnless(AgentArtifacts.isAvailable, "agent artifacts not built (run agent/build*.sh)")
 
         // Pick whichever attached device actually has the debuggable test app, so the
@@ -60,7 +60,7 @@ final class LiveAgentCaptureTests: XCTestCase {
         let serial = try XCTUnwrap(picked, "test app not present/debuggable on any device")
 
         // Fresh process so we attach to a stable, known pid (no pid churn).
-        let act = "\(pkg)/com.teya.ac.TeyaActivity"
+        let act = "\(pkg)/com.example.app.MainActivity"
         _ = try? await CommandRunner.run(adb, ["-s", serial, "shell", "am", "force-stop", pkg])
         _ = try? await CommandRunner.run(adb, ["-s", serial, "shell", "am", "start", "-n", act])
         var up = false
@@ -102,7 +102,7 @@ final class LiveAgentCaptureTests: XCTestCase {
     /// listening — proving request bodies + app-rooted call stacks are captured.
     func testCapturesRequestBodyAndCleanStack() async throws {
         let adb = try XCTUnwrap(AndroidToolchain.adbURL(), "adb not found")
-        let pkg = "com.teya.ac.dev"
+        let pkg = "com.example.app.dev"
         try XCTSkipUnless(AgentArtifacts.isAvailable, "agent artifacts not built")
         let listing = (try? await CommandRunner.run(adb, ["devices"]))?.stdout ?? ""
         let serials = listing.split(separator: "\n").dropFirst()
@@ -113,7 +113,7 @@ final class LiveAgentCaptureTests: XCTestCase {
             picked = s; break
         }
         let serial = try XCTUnwrap(picked, "test app not present/debuggable on any device")
-        let act = "\(pkg)/com.teya.ac.TeyaActivity"
+        let act = "\(pkg)/com.example.app.MainActivity"
 
         _ = try? await CommandRunner.run(adb, ["-s", serial, "shell", "am", "start", "-n", act])
         for _ in 0..<10 {
@@ -168,7 +168,7 @@ final class LiveAgentCaptureTests: XCTestCase {
     /// the supervisor re-attaches automatically and keeps capturing.
     func testAgentReattachesAfterAppRestart() async throws {
         let adb = try XCTUnwrap(AndroidToolchain.adbURL(), "adb not found")
-        let serial = "emulator-5554", pkg = "com.teya.ac.dev"
+        let serial = "emulator-5554", pkg = "com.example.app.dev"
         let devices = try? await CommandRunner.run(adb, ["devices"])
         try XCTSkipUnless(devices?.stdout.contains(serial) == true, "no emulator")
         try XCTSkipUnless(AgentArtifacts.isAvailable, "agent artifacts not built")
@@ -177,7 +177,7 @@ final class LiveAgentCaptureTests: XCTestCase {
 
         func launch() async {
             _ = try? await CommandRunner.run(adb, ["-s", serial, "shell", "am", "force-stop", pkg])
-            _ = try? await CommandRunner.run(adb, ["-s", serial, "shell", "am", "start", "-n", "\(pkg)/com.teya.ac.TeyaActivity"])
+            _ = try? await CommandRunner.run(adb, ["-s", serial, "shell", "am", "start", "-n", "\(pkg)/com.example.app.MainActivity"])
         }
         func pidOf() async -> String {
             ((try? await CommandRunner.run(adb, ["-s", serial, "shell", "pidof", pkg]))?.stdout ?? "")

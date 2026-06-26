@@ -3,7 +3,7 @@ import Foundation
 /// Parses an `idevicesyslog` line into a `LogLine`.
 /// Format: `Mon DD HH:MM:SS.ffffff process(Lib)[pid] <Level>: message`
 /// (current libimobiledevice emits a sub-second fraction and no hostname; the
-/// process name itself can contain spaces, e.g. `Teya Dev(Security)`).
+/// process name itself can contain spaces, e.g. `Example Dev(Security)`).
 enum IOSSyslogParser {
     // month(1) day(2) time(3) [optional .fraction] process(4) pid(5) level(6) message(7)
     private static let regex = try! NSRegularExpression(

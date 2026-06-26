@@ -2,7 +2,7 @@ import Foundation
 import Observation
 
 /// The top-level areas of the app.
-enum WorkspaceMode: String { case devices, projects, gradle, xcode }
+enum WorkspaceMode: String { case devices, projects, gradle, xcode, cloudLogging }
 
 /// Root app state: the merged live device list and the ordered set of log
 /// sessions (tabs). Providers are pluggable, so iOS slots in by appending another
@@ -37,6 +37,11 @@ final class AppModel {
 
     /// The Xcode DerivedData area state (lists/deletes build caches; flags stale ones).
     let xcode = DerivedDataModel()
+
+    /// The Cloud Logging area state — the single source of truth for gcloud detection/auth,
+    /// the configured GCP projects, and each project's global log-name/label state. Read by
+    /// every `CloudLogSession` so changes (e.g. switching log name) propagate to all its tabs.
+    let cloudLogging = CloudLoggingRegistry()
 
     /// Resolved adb path; nil means the toolchain wasn't found (surface in UI).
     private(set) var adbURL: URL?
@@ -86,8 +91,13 @@ final class AppModel {
         if let days = UserDefaults.standard.object(forKey: "retentionDays") as? Int, days > 0 {
             retention = TimeInterval(days) * 86_400
         }
+        var cloudRestores: [TabDescriptor] = []
         if !uiTestMode {
-            pendingRestores = Self.loadPersistedTabs()
+            let persisted = Self.loadPersistedTabs()
+            // Device-backed tabs restore as their device reappears; Cloud Logging tabs have no
+            // device, so they're restored eagerly below.
+            pendingRestores = persisted.filter { $0.kind != .cloud }
+            cloudRestores = persisted.filter { $0.kind == .cloud }
         }
         buildProviders()
         companions = CompanionRegistry(ca: { [weak self] in self?.ensureCA() },
@@ -106,9 +116,25 @@ final class AppModel {
             let rules = LogExclusionStore.shared.rules
             for case let session as LogSession in self.sessions { session.applyExclusions(rules) }
         }
+        restoreCloudTabs(cloudRestores)
         let store = history
         let cutoff = Date().addingTimeInterval(-retention)
         Task { await store?.prune(olderThan: cutoff) }
+    }
+
+    /// Recreates persisted Cloud Logging tabs (stopped) for projects that still exist. Unlike
+    /// device tabs these need no device, so they're restored immediately on launch.
+    private func restoreCloudTabs(_ descriptors: [TabDescriptor]) {
+        for descriptor in descriptors {
+            guard let projectID = descriptor.projectID,
+                  cloudLogging.project(projectID) != nil else { continue }
+            startCloudLogSession(
+                projectID: projectID, autoStart: false, displayName: descriptor.displayName,
+                query: descriptor.cloudQuery ?? CloudLogQuery(),
+                timeRange: descriptor.cloudTimeRange ?? .last(minutes: 15),
+                rawFilter: descriptor.cloudRawFilter
+            )
+        }
     }
 
     private func buildProviders() {
@@ -272,6 +298,8 @@ final class AppModel {
                 let pkg = descriptor.packageLabel.isEmpty ? nil : descriptor.packageLabel
                 let kind = descriptor.captureMode.flatMap { CaptureSourceRegistry.descriptor(id: $0)?.kind } ?? .proxy
                 session?.restoreMode(kind, package: pkg)
+            case .cloud:
+                break   // Cloud Logging tabs have no device; restored eagerly in `restoreCloudTabs`.
             }
         }
         isRestoring = false
@@ -304,6 +332,13 @@ final class AppModel {
                                  displayName: net.displayName, minLevel: 0, query: "",
                                  isRegex: false, packageLabel: net.targetPackage ?? "",
                                  captureMode: net.currentDescriptor?.id ?? "proxy")
+        }
+        if let cloud = tab as? CloudLogSession {
+            return TabDescriptor(kind: .cloud, platform: .android, deviceID: "",
+                                 displayName: cloud.displayName, minLevel: 0, query: "",
+                                 isRegex: false, packageLabel: "",
+                                 projectID: cloud.projectID, cloudQuery: cloud.query,
+                                 cloudTimeRange: cloud.timeRange, cloudRawFilter: cloud.rawFilter)
         }
         return nil
     }
@@ -423,6 +458,27 @@ final class AppModel {
         return session
     }
 
+    /// Opens a Cloud Logging session for a GCP project (req 6). Like device sessions it lives in
+    /// the shared tab strip; it starts streaming only when the user presses Start (req: the
+    /// start/stop control drives streaming/polling), so opening a tab is cheap.
+    @discardableResult
+    func startCloudLogSession(projectID: String, autoStart: Bool = false,
+                              displayName: String? = nil,
+                              query: CloudLogQuery = CloudLogQuery(),
+                              timeRange: CloudTimeRange = .last(minutes: 15),
+                              rawFilter: String? = nil) -> CloudLogSession {
+        mode = .devices   // opening a session returns to the shared session view
+        let session = CloudLogSession(projectID: projectID, registry: cloudLogging,
+                                      displayName: displayName, query: query, timeRange: timeRange,
+                                      rawFilter: rawFilter)
+        session.onStateChanged = { [weak self] in self?.persistTabs() }
+        sessions.append(session)
+        selectedSessionID = session.id
+        if autoStart { session.start() }
+        persistTabs()
+        return session
+    }
+
     @discardableResult
     func startNetworkSession(for device: Device, name: String? = nil, autoStart: Bool = true) -> NetworkSession? {
         mode = .devices   // opening a session returns to the devices/sessions view
@@ -493,6 +549,8 @@ final class AppModel {
             let store = history
             Task { await store?.endSession(id: id) }
         }
+        // Cloud Logging tabs own a per-session SQLite file; delete it on close.
+        if let cloud = sessions[index] as? CloudLogSession { cloud.dispose() }
         let deviceID = (sessions[index] as? LogSession)?.device.id
             ?? (sessions[index] as? NetworkSession)?.device.id
         sessions.remove(at: index)
@@ -527,7 +585,7 @@ final class AppModel {
 
 /// Lightweight, Codable snapshot of a tab for session restore.
 struct TabDescriptor: Codable {
-    enum Kind: String, Codable { case log, network }
+    enum Kind: String, Codable { case log, network, cloud }
     var kind: Kind
     var platform: DevicePlatform
     var deviceID: String
@@ -539,6 +597,12 @@ struct TabDescriptor: Codable {
     /// Network tabs only: "proxy" or "agent". Optional so tabs persisted before
     /// this field still decode (defaults to proxy on restore).
     var captureMode: String?
+    /// Cloud Logging tabs only — the project + its persisted server-side query/time window
+    /// (and a raw filter when ingested from a URL). Optional so older persisted tabs still decode.
+    var projectID: String?
+    var cloudQuery: CloudLogQuery?
+    var cloudTimeRange: CloudTimeRange?
+    var cloudRawFilter: String?
 
     func matches(_ other: TabDescriptor) -> Bool {
         kind == other.kind && deviceID == other.deviceID && displayName == other.displayName

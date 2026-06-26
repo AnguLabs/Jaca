@@ -48,7 +48,7 @@ final class AppLevelE2ETests: XCTestCase {
     func testNetworkSessionAgentModeLive() async throws {
         let adb = try XCTUnwrap(AndroidToolchain.adbURL(), "adb not found")
         let serial = "emulator-5554"
-        let pkg = "com.teya.ac.dev"
+        let pkg = "com.example.app.dev"
         let devices = try? await CommandRunner.run(adb, ["devices"])
         try XCTSkipUnless(devices?.stdout.contains(serial) == true, "no emulator")
         try XCTSkipUnless(AgentArtifacts.isAvailable, "agent artifacts not built")
@@ -57,7 +57,7 @@ final class AppLevelE2ETests: XCTestCase {
 
         // Fresh process so the attach lands on a stable pid.
         _ = try? await CommandRunner.run(adb, ["-s", serial, "shell", "am", "force-stop", pkg])
-        _ = try? await CommandRunner.run(adb, ["-s", serial, "shell", "am", "start", "-n", "\(pkg)/com.teya.ac.TeyaActivity"])
+        _ = try? await CommandRunner.run(adb, ["-s", serial, "shell", "am", "start", "-n", "\(pkg)/com.example.app.MainActivity"])
         var up = false
         for _ in 0..<8 {
             let p = (try? await CommandRunner.run(adb, ["-s", serial, "shell", "pidof", pkg]))?.stdout ?? ""
