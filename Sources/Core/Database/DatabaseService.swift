@@ -136,11 +136,29 @@ struct DatabaseService: Sendable {
     }
 
     /// True when `sql` is a read-only statement (cheap pre-check; the read-only handle is
-    /// the real guard).
+    /// the real guard). Leading SQL comments are skipped first, since generated queries often
+    /// open with `-- explanatory` lines before the real keyword.
     static func isReadOnly(_ sql: String) -> Bool {
-        let t = sql.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let t = stripLeadingComments(sql).lowercased()
         return t.hasPrefix("select") || t.hasPrefix("with")
             || t.hasPrefix("pragma") || t.hasPrefix("explain")
+    }
+
+    /// Drops leading whitespace and SQL comments (`-- line` and `/* block */`) so the first real
+    /// keyword can be inspected.
+    static func stripLeadingComments(_ sql: String) -> String {
+        var s = Substring(sql)
+        while true {
+            let before = s
+            s = s.drop { $0 == " " || $0 == "\t" || $0 == "\n" || $0 == "\r" }
+            if s.hasPrefix("--") {
+                if let nl = s.firstIndex(of: "\n") { s = s[s.index(after: nl)...] } else { s = s[s.endIndex...] }
+            } else if s.hasPrefix("/*") {
+                if let end = s.range(of: "*/") { s = s[end.upperBound...] } else { s = s[s.endIndex...] }
+            }
+            if s == before { break }
+        }
+        return String(s)
     }
 
     // MARK: - SQLite helpers
