@@ -10,6 +10,7 @@ struct TabStripView: View {
     @State private var editingID: UUID?
     @State private var editingText = ""
     @State private var draggingID: UUID?
+    @FocusState private var nameFocused: Bool
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -57,6 +58,7 @@ struct TabStripView: View {
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(LemonadeTheme.colors.content.contentPrimary)
                             .frame(width: 130)
+                            .focused($nameFocused)
                             .onSubmit { commitRename(session) }
                             .onExitCommand { editingID = nil }
                     } else {
@@ -103,12 +105,23 @@ struct TabStripView: View {
             .contentShape(RoundedRectangle(cornerRadius: LemonadeTheme.radius.radius200))
         }
         .buttonStyle(.plain)
-        .simultaneousGesture(TapGesture(count: 2).onEnded {
-            editingText = session.displayName
-            editingID = session.id
-        })
+        .simultaneousGesture(TapGesture(count: 2).onEnded { beginRename(session) })
+        .contextMenu {
+            Button("Rename") { beginRename(session) }
+            Divider()
+            Button("Close Tab") { model.closeSession(session.id) }
+        }
     }
 
+    /// Starts an inline rename (also reachable by double-clicking the tab), focusing the field.
+    private func beginRename(_ session: any WorkspaceTab) {
+        editingText = session.displayName
+        editingID = session.id
+        DispatchQueue.main.async { nameFocused = true }
+    }
+
+    /// Commits the rename. The new name is stored on the session and persisted via its
+    /// `onStateChanged` (so it survives relaunch, restored from the saved tab descriptor).
     private func commitRename(_ session: any WorkspaceTab) {
         let trimmed = editingText.trimmingCharacters(in: .whitespaces)
         if !trimmed.isEmpty { session.displayName = trimmed }
