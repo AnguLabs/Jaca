@@ -281,9 +281,19 @@ private struct LabelKeyPicker: View {
     @Bindable var session: CloudLogSession
     @Binding var selectedKey: String
     @State private var show = false
+    @State private var query = ""
+    @FocusState private var searchFocused: Bool
+
+    /// Detected keys (favorites first), narrowed by the search query.
+    private var filteredKeys: [String] {
+        let all = session.orderedLabelKeys
+        let q = query.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return all }
+        return all.filter { $0.localizedCaseInsensitiveContains(q) }
+    }
 
     var body: some View {
-        Button(action: { show = true }) {
+        Button(action: { query = ""; show = true }) {
             HStack(spacing: 3) {
                 Text(selectedKey.isEmpty ? "key…" : selectedKey)
                     .font(.system(size: 11, weight: .medium, design: .monospaced)).lineLimit(1)
@@ -307,12 +317,30 @@ private struct LabelKeyPicker: View {
                 .padding(LemonadeTheme.spaces.spacing400)
                 .frame(width: 260)
         } else {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(session.orderedLabelKeys, id: \.self) { key in row(key) }
+            VStack(spacing: 0) {
+                TextField("Search labels…", text: $query)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($searchFocused)
+                    .padding(LemonadeTheme.spaces.spacing200)
+                    .onAppear { DispatchQueue.main.async { searchFocused = true } }
+                Rectangle().fill(LemonadeTheme.colors.border.borderNeutralLow).frame(height: 1)
+                let keys = filteredKeys
+                if keys.isEmpty {
+                    LemonadeUi.Text("No labels match “\(query)”.",
+                                    textStyle: LemonadeTypography.shared.bodySmallRegular,
+                                    color: LemonadeTheme.colors.content.contentTertiary)
+                        .padding(LemonadeTheme.spaces.spacing400)
+                        .frame(maxWidth: .infinity)
+                } else {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(keys, id: \.self) { key in row(key) }
+                        }
+                    }
+                    .frame(height: min(300, CGFloat(keys.count) * 30 + 8))
                 }
             }
-            .frame(width: 280, height: min(340, CGFloat(session.orderedLabelKeys.count) * 30 + 8))
+            .frame(width: 300)
         }
     }
 
