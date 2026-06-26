@@ -13,6 +13,7 @@ struct CloudLogDetailPanel: View {
     /// Opens a NEW session pre-filtered by a clicked value (current session stays put).
     var onNewSession: (CloudSessionFork) -> Void = { _ in }
     @State private var showRaw = false
+    @State private var showMessage = false   // MESSAGE collapsed by default
 
     var body: some View {
         VStack(spacing: 0) {
@@ -20,16 +21,16 @@ struct CloudLogDetailPanel: View {
             Rectangle().fill(LemonadeTheme.colors.border.borderNeutralLow).frame(height: 1)
             ScrollView {
                 VStack(alignment: .leading, spacing: LemonadeTheme.spaces.spacing400) {
-                    messageSection      // selectable — so any portion of the log text can be copied
+                    messageSection      // collapsed by default; expand to select/copy any portion
                     severityField
                     field("TIME", entry.timestamp.formatted(date: .abbreviated, time: .standard))
+                    labelsSection("LABELS", entry.labels, scope: .entry)
+                    labelsSection("RESOURCE LABELS", entry.resourceLabels, scope: .resource)
                     if let received = entry.receiveTimestamp {
                         field("RECEIVED", received.formatted(date: .omitted, time: .standard))
                     }
                     field("LOG", entry.logId)
                     if !entry.resourceType.isEmpty { field("RESOURCE TYPE", entry.resourceType) }
-                    labelsSection("LABELS", entry.labels, scope: .entry)
-                    labelsSection("RESOURCE LABELS", entry.resourceLabels, scope: .resource)
                     if let http = entry.httpRequestSummary { field("HTTP REQUEST", http) }
                     if let trace = entry.trace { field("TRACE", trace) }
                     if let span = entry.spanId { field("SPAN", span) }
@@ -40,6 +41,7 @@ struct CloudLogDetailPanel: View {
             }
         }
         .background(LemonadeTheme.colors.background.bgElevated)
+        .onChange(of: entry.seq) { _, _ in showMessage = false }   // re-collapse for each new entry
     }
 
     private var headerBar: some View {
@@ -62,21 +64,48 @@ struct CloudLogDetailPanel: View {
     private var messageSection: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
-                overline("MESSAGE")
+                Button(action: { showMessage.toggle() }) {
+                    HStack(spacing: 5) {
+                        Image(systemName: showMessage ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 9, weight: .bold))
+                        overline("MESSAGE")
+                    }
+                }
+                .buttonStyle(.plain)
                 Spacer()
                 LemonadeUi.IconButton(icon: .copy, contentDescription: "Copy message",
                                       onClick: { copy(entry.message) }, size: .small)
             }
-            Text(entry.message.isEmpty ? "—" : entry.message)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(LemonadeTheme.colors.content.contentPrimary)
-                .textSelection(.enabled)     // select any portion to copy
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(LemonadeTheme.spaces.spacing200)
-                .background(RoundedRectangle(cornerRadius: 8).fill(LemonadeTheme.colors.background.bgNeutralSubtle))
-                .contextMenu { Button("Copy") { copy(entry.message) } }
+            if showMessage {
+                Text(entry.message.isEmpty ? "—" : entry.message)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(LemonadeTheme.colors.content.contentPrimary)
+                    .textSelection(.enabled)     // expanded: select any portion to copy
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(LemonadeTheme.spaces.spacing200)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(LemonadeTheme.colors.background.bgNeutralSubtle))
+                    .contextMenu { Button("Copy") { copy(entry.message) } }
+            } else {
+                Button(action: { showMessage = true }) {
+                    Text(messagePreview)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(LemonadeTheme.colors.content.contentSecondary)
+                        .lineLimit(1).truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(LemonadeTheme.spaces.spacing200)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(LemonadeTheme.colors.background.bgNeutralSubtle))
+                }
+                .buttonStyle(.plain)
+                .help("Expand the message")
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var messagePreview: String {
+        let firstLine = entry.message
+            .split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? ""
+        return firstLine.isEmpty ? "—" : firstLine
     }
 
     private var severityField: some View {
@@ -102,19 +131,23 @@ struct CloudLogDetailPanel: View {
     @ViewBuilder
     private func labelsSection(_ title: String, _ labels: [String: String], scope: LabelScope) -> some View {
         if !labels.isEmpty {
-            let sorted = labels.sorted { $0.key < $1.key }
+            // Favorited label keys are pinned to the top here too, matching the query-bar picker.
+            let orderedKeys = CloudLabelOrdering.ordered(keys: Array(labels.keys), favorites: session.favoriteLabelKeys)
             VStack(alignment: .leading, spacing: 6) {
                 overline(title)
                 VStack(spacing: 0) {
-                    ForEach(Array(sorted.enumerated()), id: \.element.key) { index, pair in
+                    ForEach(Array(orderedKeys.enumerated()), id: \.element) { index, key in
+                        let value = labels[key] ?? ""
                         LabelRow(
-                            key: pair.key, value: pair.value,
-                            onFilter: { session.filterByLabel(scope: scope, key: pair.key, value: pair.value) },
-                            onOr: { session.orLabel(scope: scope, key: pair.key, value: pair.value) },
+                            key: key, value: value,
+                            isFavorite: session.isFavoriteLabel(key),
+                            onFilter: { session.filterByLabel(scope: scope, key: key, value: value) },
+                            onOr: { session.orLabel(scope: scope, key: key, value: value) },
                             onCopy: copy,
-                            onNewSession: { onNewSession(session.forkAddingLabel(scope: scope, key: pair.key, value: pair.value)) }
+                            onNewSession: { onNewSession(session.forkAddingLabel(scope: scope, key: key, value: value)) },
+                            onToggleFavorite: { session.toggleFavoriteLabel(key) }
                         )
-                        if index < sorted.count - 1 {
+                        if index < orderedKeys.count - 1 {
                             Rectangle().fill(LemonadeTheme.colors.border.borderNeutralLow).frame(height: 1)
                         }
                     }
@@ -183,19 +216,27 @@ struct CloudLogDetailPanel: View {
 private struct LabelRow: View {
     let key: String
     let value: String
+    var isFavorite: Bool = false
     var onFilter: () -> Void
     var onOr: () -> Void
     var onCopy: (String) -> Void
     var onNewSession: () -> Void
+    var onToggleFavorite: () -> Void = {}
     @State private var hovering = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            Text(key)
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
-                .foregroundStyle(LemonadeTheme.colors.content.contentSecondary)
-                .textSelection(.enabled)
-                .frame(width: 140, alignment: .leading)
+            HStack(spacing: 4) {
+                if isFavorite {
+                    Image(systemName: "star.fill").font(.system(size: 8))
+                        .foregroundStyle(LemonadeTheme.colors.content.contentCaution)
+                }
+                Text(key)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(LemonadeTheme.colors.content.contentSecondary)
+                    .textSelection(.enabled)
+            }
+            .frame(width: 140, alignment: .leading)
             Text(value.isEmpty ? "—" : value)
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(LemonadeTheme.colors.content.contentPrimary)
@@ -226,6 +267,8 @@ private struct LabelRow: View {
             Button("Filter by this value") { onFilter() }
             Button("Add this value (OR)") { onOr() }
             Button("Open in new session") { onNewSession() }
+            Divider()
+            Button(isFavorite ? "Unfavorite “\(key)”" : "Favorite “\(key)” (pin to top)") { onToggleFavorite() }
         }
     }
 }

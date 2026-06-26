@@ -16,6 +16,30 @@ struct CloudSqlTemplate: Codable, Identifiable, Hashable {
     var sql: String
 }
 
+// Migration-safe decoding: missing keys fall back to defaults so adding a field never drops
+// saved templates.
+
+extension CloudQueryTemplate {
+    enum CodingKeys: String, CodingKey { case id, name, query, rawFilter }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+        query = try c.decodeIfPresent(CloudLogQuery.self, forKey: .query) ?? CloudLogQuery()
+        rawFilter = try c.decodeIfPresent(String.self, forKey: .rawFilter)
+    }
+}
+
+extension CloudSqlTemplate {
+    enum CodingKeys: String, CodingKey { case id, name, sql }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+        sql = try c.decodeIfPresent(String.self, forKey: .sql) ?? ""
+    }
+}
+
 /// Persists the saved query + SQL templates to `~/.jaca/cloud-logging/templates.json` (global,
 /// not per-project), so a new session can start from a saved template. Atomic writes.
 struct CloudTemplateStore: Sendable {
@@ -24,6 +48,17 @@ struct CloudTemplateStore: Sendable {
     private struct Payload: Codable {
         var queries: [CloudQueryTemplate]
         var sql: [CloudSqlTemplate]
+
+        init(queries: [CloudQueryTemplate], sql: [CloudSqlTemplate]) {
+            self.queries = queries
+            self.sql = sql
+        }
+        enum CodingKeys: String, CodingKey { case queries, sql }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            queries = try c.decodeIfPresent([CloudQueryTemplate].self, forKey: .queries) ?? []
+            sql = try c.decodeIfPresent([CloudSqlTemplate].self, forKey: .sql) ?? []
+        }
     }
 
     init(fileURL: URL? = nil) {

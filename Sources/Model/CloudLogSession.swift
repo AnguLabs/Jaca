@@ -131,6 +131,14 @@ final class CloudLogSession: WorkspaceTab {
     var projectTitle: String { registry.project(projectID)?.title ?? projectID }
     var selectedLogName: String? { registry.project(projectID)?.selectedLogName }
     var labelKeys: [String] { registry.project(projectID)?.currentLabelKeys ?? [] }
+    var favoriteLabelKeys: [String] { registry.project(projectID)?.currentFavoriteLabelKeys ?? [] }
+    /// Detected label keys with favorites pinned to the top — what the picker presents.
+    var orderedLabelKeys: [String] { CloudLabelOrdering.ordered(keys: labelKeys, favorites: favoriteLabelKeys) }
+
+    func isFavoriteLabel(_ key: String) -> Bool { favoriteLabelKeys.contains(key) }
+    func toggleFavoriteLabel(_ key: String) {
+        registry.toggleFavoriteLabel(key, project: projectID, logName: selectedLogName ?? "")
+    }
 
     var subtitle: String {
         var parts = [projectTitle]

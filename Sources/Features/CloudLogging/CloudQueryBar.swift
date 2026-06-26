@@ -125,20 +125,23 @@ struct CloudQueryBar: View {
 
     private var labelSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            sectionHeader("LABELS") {
-                if session.query.labelConditions.count > 1 { combineToggle($session.query.labelCombineOr) }
+            HStack(spacing: 8) {
+                LemonadeUi.Text("LABELS", textStyle: LemonadeTypography.shared.bodyXSmallOverline,
+                                color: LemonadeTheme.colors.content.contentTertiary)
                 addButton {
                     let key = session.labelKeys.first ?? ""
                     session.query.labelConditions.append(LabelCondition(key: key))
                 }
                 .disabled(session.labelKeys.isEmpty)
+                Spacer()
+                if session.query.labelConditions.count > 1 { combineToggle($session.query.labelCombineOr) }
             }
             if session.labelKeys.isEmpty {
                 hint("No labels detected yet — run a session once so Jaca can auto-detect this log's label keys.")
             } else {
                 ForEach(Array(session.query.labelConditions.enumerated()), id: \.element.id) { index, _ in
                     HStack(spacing: 6) {
-                        labelKeyMenu($session.query.labelConditions[index].key)
+                        LabelKeyPicker(session: session, selectedKey: $session.query.labelConditions[index].key)
                         matchModeMenu($session.query.labelConditions[index].mode)
                         valueField("value…", $session.query.labelConditions[index].value)
                         removeButton { session.query.labelConditions.remove(at: index) }
@@ -234,20 +237,6 @@ struct CloudQueryBar: View {
         .frame(width: 110, alignment: .leading)
     }
 
-    private func labelKeyMenu(_ binding: Binding<String>) -> some View {
-        Menu {
-            ForEach(session.labelKeys, id: \.self) { key in
-                Button(key) { binding.wrappedValue = key }
-            }
-        } label: {
-            Text(binding.wrappedValue.isEmpty ? "key…" : binding.wrappedValue)
-                .font(.system(size: 11, weight: .medium, design: .monospaced)).lineLimit(1)
-        }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .frame(minWidth: 90, alignment: .leading)
-    }
-
     private func valueField(_ placeholder: String, _ binding: Binding<String>) -> some View {
         TextField(placeholder, text: binding)
             .textFieldStyle(.plain)
@@ -283,5 +272,77 @@ struct CloudQueryBar: View {
     private func hint(_ text: String) -> some View {
         LemonadeUi.Text(text, textStyle: LemonadeTypography.shared.bodyXSmallRegular,
                         color: LemonadeTheme.colors.content.contentTertiary)
+    }
+}
+
+/// Label-key picker: lists detected keys with favorites pinned on top; the star toggles favorite
+/// (persisted per log name in ~/.jaca), clicking the key selects it.
+private struct LabelKeyPicker: View {
+    @Bindable var session: CloudLogSession
+    @Binding var selectedKey: String
+    @State private var show = false
+
+    var body: some View {
+        Button(action: { show = true }) {
+            HStack(spacing: 3) {
+                Text(selectedKey.isEmpty ? "key…" : selectedKey)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced)).lineLimit(1)
+                    .foregroundStyle(selectedKey.isEmpty
+                        ? LemonadeTheme.colors.content.contentTertiary
+                        : LemonadeTheme.colors.content.contentPrimary)
+                Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(LemonadeTheme.colors.content.contentTertiary)
+            }
+        }
+        .buttonStyle(.plain)
+        .frame(minWidth: 90, alignment: .leading)
+        .popover(isPresented: $show, arrowEdge: .bottom) { popover }
+    }
+
+    @ViewBuilder private var popover: some View {
+        if session.labelKeys.isEmpty {
+            LemonadeUi.Text("No labels detected yet — run a session once.",
+                            textStyle: LemonadeTypography.shared.bodySmallRegular,
+                            color: LemonadeTheme.colors.content.contentTertiary)
+                .padding(LemonadeTheme.spaces.spacing400)
+                .frame(width: 260)
+        } else {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(session.orderedLabelKeys, id: \.self) { key in row(key) }
+                }
+            }
+            .frame(width: 280, height: min(340, CGFloat(session.orderedLabelKeys.count) * 30 + 8))
+        }
+    }
+
+    private func row(_ key: String) -> some View {
+        let favorite = session.isFavoriteLabel(key)
+        return HStack(spacing: 8) {
+            Button(action: { session.toggleFavoriteLabel(key) }) {
+                Image(systemName: favorite ? "star.fill" : "star")
+                    .font(.system(size: 11))
+                    .foregroundStyle(favorite
+                        ? LemonadeTheme.colors.content.contentCaution
+                        : LemonadeTheme.colors.content.contentTertiary)
+            }
+            .buttonStyle(.plain)
+            .help(favorite ? "Unfavorite" : "Favorite (pin to top)")
+            Button(action: { selectedKey = key; show = false }) {
+                Text(key)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(LemonadeTheme.colors.content.contentPrimary)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            if key == selectedKey {
+                Image(systemName: "checkmark").font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(LemonadeTheme.colors.content.contentBrand)
+            }
+        }
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .background(key == selectedKey ? LemonadeTheme.colors.background.bgBrandSubtle : .clear)
     }
 }

@@ -14,6 +14,8 @@ struct CloudProject: Codable, Sendable, Hashable, Identifiable {
     var logNames: [String] = []
     /// Auto-detected label keys, cached per log name (req 9.3).
     var labelKeysByLogName: [String: [String]] = [:]
+    /// Favorited label keys, per log name — pinned to the top of the label-key list.
+    var favoriteLabelKeysByLogName: [String: [String]] = [:]
 
     var id: String { projectID }
     /// What the sidebar/tab shows: the display name if set, else the raw id.
@@ -23,6 +25,31 @@ struct CloudProject: Codable, Sendable, Hashable, Identifiable {
     /// keyed by "", when no log name is selected — so the labels system works either way).
     var currentLabelKeys: [String] {
         labelKeysByLogName[selectedLogName ?? ""] ?? []
+    }
+
+    /// Favorited label keys for the currently selected log name.
+    var currentFavoriteLabelKeys: [String] {
+        favoriteLabelKeysByLogName[selectedLogName ?? ""] ?? []
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case projectID, displayName, selectedLogName, logNames, labelKeysByLogName, favoriteLabelKeysByLogName
+    }
+}
+
+extension CloudProject {
+    /// Migration-safe decode: every field except `projectID` falls back to its default when the
+    /// key is missing, so adding a field in a new release never drops an existing projects.json.
+    /// (Swift's synthesized decoder ignores property defaults for missing keys — the bug this
+    /// guards against.)
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        projectID = try c.decode(String.self, forKey: .projectID)
+        displayName = try c.decodeIfPresent(String.self, forKey: .displayName) ?? ""
+        selectedLogName = try c.decodeIfPresent(String.self, forKey: .selectedLogName)
+        logNames = try c.decodeIfPresent([String].self, forKey: .logNames) ?? []
+        labelKeysByLogName = try c.decodeIfPresent([String: [String]].self, forKey: .labelKeysByLogName) ?? [:]
+        favoriteLabelKeysByLogName = try c.decodeIfPresent([String: [String]].self, forKey: .favoriteLabelKeysByLogName) ?? [:]
     }
 }
 
@@ -45,7 +72,7 @@ struct CloudProjectStore: Sendable {
 
     func load() -> [CloudProject] {
         guard let data = try? Data(contentsOf: fileURL) else { return [] }
-        return (try? JSONDecoder().decode([CloudProject].self, from: data)) ?? []
+        return CloudPersistence.decodeArray(CloudProject.self, from: data)
     }
 
     func save(_ projects: [CloudProject]) {
