@@ -125,13 +125,16 @@ struct CloudQueryBar: View {
 
     private var labelSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            sectionHeader("LABELS") {
-                if session.query.labelConditions.count > 1 { combineToggle($session.query.labelCombineOr) }
+            HStack(spacing: 8) {
+                LemonadeUi.Text("LABELS", textStyle: LemonadeTypography.shared.bodyXSmallOverline,
+                                color: LemonadeTheme.colors.content.contentTertiary)
                 addButton {
                     let key = session.labelKeys.first ?? ""
                     session.query.labelConditions.append(LabelCondition(key: key))
                 }
                 .disabled(session.labelKeys.isEmpty)
+                Spacer()
+                if session.query.labelConditions.count > 1 { combineToggle($session.query.labelCombineOr) }
             }
             if session.labelKeys.isEmpty {
                 hint("No labels detected yet — run a session once so Jaca can auto-detect this log's label keys.")
