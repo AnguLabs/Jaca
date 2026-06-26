@@ -3,9 +3,10 @@ import Lemonade
 import AppKit
 
 /// SQL mode (reqs 13–14): a syntax-highlighted, autocompleting SQL editor that acts as a **live
-/// filter on the log list**. The query must SELECT a `seq` column; the matching rows show in the
-/// same fast log table below, re-running every couple of seconds as new logs arrive. A schema
-/// reference and a label-filter helper make it clear how to query.
+/// filter on the log list**. The query must SELECT an `insert_id` column (stable across poll
+/// restarts; `seq` works too as a fallback); the matching rows show in the same fast log table
+/// below, re-running every couple of seconds as new logs arrive. A schema reference and a
+/// label-filter helper make it clear how to query.
 struct CloudSqlEditorBar: View {
     @Bindable var session: CloudLogSession
     @State private var showSave = false
@@ -41,7 +42,7 @@ struct CloudSqlEditorBar: View {
                     LemonadeUi.Text(error, textStyle: LemonadeTypography.shared.bodyXSmallRegular,
                                     color: LemonadeTheme.colors.content.contentCritical, maxLines: 2)
                 } else {
-                    LemonadeUi.Text("⌘↩ to run · keep a `seq` column · labels: json_extract(labels_json,'$.key')",
+                    LemonadeUi.Text("⌘↩ to run · keep an `insert_id` column · labels: json_extract(labels_json,'$.key')",
                                     textStyle: LemonadeTypography.shared.bodyXSmallRegular,
                                     color: LemonadeTheme.colors.content.contentTertiary, maxLines: 1)
                 }

@@ -89,6 +89,11 @@ final class CloudLogSession: WorkspaceTab {
     /// How many log rows the current SQL filter matches (shown in the editor bar).
     private(set) var sqlMatchCount = 0
     /// The `seq`s the SQL filter currently allows through; nil in Logs mode (no SQL filter).
+    /// The SQL filter, keyed by `insert_id` (Cloud Logging's stable id) when the query selects it,
+    /// else by `seq`. `insert_id` is identical in the ring and the DB even after a poll restart,
+    /// where `seq` would be re-stamped on the ring but kept by the DB (INSERT OR IGNORE) — so
+    /// filtering by `seq` alone silently breaks. nil = no SQL filter (Logs mode).
+    private var sqlIdFilter: Set<String>?
     private var sqlSeqFilter: Set<UInt64>?
     /// True once the user hand-edits the SQL, so mode switches stop auto-regenerating it.
     private var sqlCustomized = false
@@ -144,7 +149,7 @@ final class CloudLogSession: WorkspaceTab {
         if rawFilter != nil { parts.append("URL filter") }
         else if let logName = selectedLogName { parts.append(CloudLogName.shortId(logName)) }
         parts.append(timeRange.label)
-        if sqlSeqFilter != nil { parts.append("SQL") }
+        if sqlIdFilter != nil || sqlSeqFilter != nil { parts.append("SQL") }
         else if rawFilter == nil && !query.isEmpty { parts.append("filtered") }
         return parts.joined(separator: " · ")
     }
@@ -310,8 +315,15 @@ final class CloudLogSession: WorkspaceTab {
     /// Whether an entry is currently visible: it must pass the SQL seq-filter (when in SQL mode)
     /// and the instant client search.
     private func passes(_ entry: CloudLogEntry) -> Bool {
-        if let seqFilter = sqlSeqFilter, !seqFilter.contains(entry.seq) { return false }
+        guard Self.sqlPass(entry, ids: sqlIdFilter, seqs: sqlSeqFilter) else { return false }
         return Self.matches(entry, search: searchText)
+    }
+
+    /// Whether an entry passes the SQL filter (by stable insert_id if available, else by seq).
+    nonisolated static func sqlPass(_ entry: CloudLogEntry, ids: Set<String>?, seqs: Set<UInt64>?) -> Bool {
+        if let ids { return ids.contains(entry.insertId) }
+        if let seqs { return seqs.contains(entry.seq) }
+        return true
     }
 
     /// Re-filters the whole ring off the main thread on a search change, then assigns on main
@@ -323,10 +335,11 @@ final class CloudLogSession: WorkspaceTab {
         let snapshot = ring
         let search = searchText
         let seqFilter = sqlSeqFilter
+        let idFilter = sqlIdFilter
         let lastSeq = snapshot.last?.seq
         Task.detached(priority: .userInitiated) {
             let result = snapshot.filter { entry in
-                (seqFilter == nil || seqFilter!.contains(entry.seq)) && Self.matches(entry, search: search)
+                Self.sqlPass(entry, ids: idFilter, seqs: seqFilter) && Self.matches(entry, search: search)
             }
             await MainActor.run { [weak self] in
                 guard let self, token == self.recomputeToken else { return }
@@ -420,6 +433,7 @@ final class CloudLogSession: WorkspaceTab {
             startSqlAutoRefresh()
         } else {
             sqlRefreshTask?.cancel(); sqlRefreshTask = nil
+            sqlIdFilter = nil
             sqlSeqFilter = nil
             sqlError = nil
             recomputeVisible()          // drop the SQL filter → show the full live logs again
@@ -431,8 +445,9 @@ final class CloudLogSession: WorkspaceTab {
     func noteSqlTextChanged(_ text: String) { sqlCustomized = (text != lastGeneratedSql) }
 
     /// (Re)builds a SQL starting point mirroring the current configuration: the structured
-    /// (level-1) query is already baked into the captured rows, so this selects them, keeps a
-    /// `seq` column (so matching rows can be shown in the list), and documents the active filter.
+    /// (level-1) query is already baked into the captured rows, so this selects them, keeps an
+    /// `insert_id` column (so matching rows can be shown in the list — stable across poll
+    /// restarts, unlike `seq`), and documents the active filter.
     func regenerateSQL() {
         let generated = generatedSQL()
         lastGeneratedSql = generated
@@ -450,8 +465,8 @@ final class CloudLogSession: WorkspaceTab {
         let serverFilter = CloudFilter.build(logName: selectedLogName, time: nil, query: query, rawFilter: rawFilter)
         var lines: [String] = []
         lines.append("-- Level 1 (Cloud Logging filter, fetched live): \(serverFilter.isEmpty ? "(all logs)" : serverFilter)")
-        lines.append("-- Level 2 (SQL filter): keep `seq`; matching rows show in the list, re-running as new logs arrive.")
-        lines.append("SELECT seq, datetime(ts, 'unixepoch', 'localtime') AS time, severity_name, log_id, text_payload")
+        lines.append("-- Level 2 (SQL filter): keep `insert_id`; matching rows show in the list, re-running as new logs arrive.")
+        lines.append("SELECT insert_id, datetime(ts, 'unixepoch', 'localtime') AS time, severity_name, log_id, text_payload")
         lines.append("FROM log_entry")
         lines.append("ORDER BY seq DESC")
         lines.append("LIMIT 1000;")
@@ -487,23 +502,37 @@ final class CloudLogSession: WorkspaceTab {
                 let rs = try await database.query(sql)   // writer connection → sees live inserts
                 guard let self else { return }
                 if !live { self.sqlRunning = false }
-                guard let seqCol = rs.columns.firstIndex(where: { $0.lowercased() == "seq" }) else {
-                    self.sqlError = "Your SQL must SELECT a `seq` column so the matching logs can be shown — e.g. SELECT seq, … FROM log_entry …"
-                    self.sqlSeqFilter = []
+                // Prefer the stable insert_id key; fall back to seq. (seq is re-stamped on the ring
+                // across poll restarts, so seq alone silently breaks the filter — insert_id doesn't.)
+                if let idCol = rs.columns.firstIndex(where: { $0.lowercased() == "insert_id" }) {
+                    var ids = Set<String>()
+                    ids.reserveCapacity(rs.rows.count)
+                    for row in rs.rows { if let value = row[idCol] { ids.insert(value) } }
+                    let changed = (self.sqlIdFilter != ids) || (self.sqlSeqFilter != nil)
+                    self.sqlIdFilter = ids
+                    self.sqlSeqFilter = nil
+                    self.sqlMatchCount = ids.count
+                    self.sqlError = nil
+                    if changed { self.recomputeVisible() }
+                } else if let seqCol = rs.columns.firstIndex(where: { $0.lowercased() == "seq" }) {
+                    var seqs = Set<UInt64>()
+                    seqs.reserveCapacity(rs.rows.count)
+                    for row in rs.rows {
+                        if let value = row[seqCol], let parsed = UInt64(value) { seqs.insert(parsed) }
+                    }
+                    let changed = (self.sqlSeqFilter != seqs) || (self.sqlIdFilter != nil)
+                    self.sqlSeqFilter = seqs
+                    self.sqlIdFilter = nil
+                    self.sqlMatchCount = seqs.count
+                    self.sqlError = nil
+                    if changed { self.recomputeVisible() }
+                } else {
+                    self.sqlError = "Your SQL must SELECT an `insert_id` (or `seq`) column so the matching logs can be shown — e.g. SELECT insert_id, … FROM log_entry …"
+                    self.sqlIdFilter = []
+                    self.sqlSeqFilter = nil
                     self.sqlMatchCount = 0
                     self.recomputeVisible()
-                    return
                 }
-                var seqs = Set<UInt64>()
-                seqs.reserveCapacity(rs.rows.count)
-                for row in rs.rows {
-                    if let value = row[seqCol], let parsed = UInt64(value) { seqs.insert(parsed) }
-                }
-                let changed = (self.sqlSeqFilter != seqs)
-                self.sqlSeqFilter = seqs
-                self.sqlMatchCount = seqs.count
-                self.sqlError = nil
-                if changed { self.recomputeVisible() }   // skip the reload when nothing changed
             } catch {
                 guard let self else { return }
                 if !live { self.sqlRunning = false }
@@ -532,14 +561,14 @@ final class CloudLogSession: WorkspaceTab {
 /// isolate a single user/session flow in a noisy log.
 enum CloudSqlTemplates {
     static let recent = """
-    SELECT seq, datetime(ts, 'unixepoch', 'localtime') AS time, severity_name, log_id, text_payload
+    SELECT insert_id, datetime(ts, 'unixepoch', 'localtime') AS time, severity_name, log_id, text_payload
     FROM log_entry
     ORDER BY seq DESC
     LIMIT 1000;
     """
 
     static let errorsOnly = """
-    SELECT seq, datetime(ts, 'unixepoch', 'localtime') AS time, severity_name, text_payload
+    SELECT insert_id, datetime(ts, 'unixepoch', 'localtime') AS time, severity_name, text_payload
     FROM log_entry
     WHERE severity >= 500          -- ERROR and above
     ORDER BY seq DESC
@@ -555,7 +584,7 @@ enum CloudSqlTemplates {
         MAX(CASE WHEN text_payload LIKE '%END%'   THEN seq END) OVER (ORDER BY seq) AS last_end
       FROM log_entry
     )
-    SELECT seq, datetime(ts, 'unixepoch', 'localtime') AS time, severity_name, text_payload
+    SELECT insert_id, datetime(ts, 'unixepoch', 'localtime') AS time, severity_name, text_payload
     FROM marked
     WHERE last_start IS NOT NULL
       AND (last_end IS NULL OR last_end < last_start)   -- inside an open START…END bracket

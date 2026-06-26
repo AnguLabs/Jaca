@@ -8,7 +8,8 @@ enum CloudSqlSchema {
     static let table = "log_entry"
 
     static let columns: [Column] = [
-        Column(name: "seq", type: "INTEGER", note: "Monotonic id — KEEP in SELECT so matching rows show in the list"),
+        Column(name: "insert_id", type: "TEXT", note: "Cloud Logging insertId (unique) — KEEP in SELECT so matching rows show in the list"),
+        Column(name: "seq", type: "INTEGER", note: "Monotonic id — handy for ORDER BY (insert_id is the stable key to KEEP)"),
         Column(name: "ts", type: "REAL", note: "Unix epoch seconds — datetime(ts,'unixepoch','localtime')"),
         Column(name: "severity", type: "INTEGER", note: "100=DEBUG 200=INFO 400=WARNING 500=ERROR 600=CRITICAL"),
         Column(name: "severity_name", type: "TEXT", note: "ERROR / WARNING / INFO / …"),
@@ -21,7 +22,6 @@ enum CloudSqlSchema {
         Column(name: "trace", type: "TEXT", note: "Trace id"),
         Column(name: "span_id", type: "TEXT", note: "Span id"),
         Column(name: "receive_ts", type: "REAL", note: "When Logging received it (unix epoch)"),
-        Column(name: "insert_id", type: "TEXT", note: "Cloud Logging insertId (unique)"),
         Column(name: "payload_kind", type: "TEXT", note: "text / json / proto / none"),
         Column(name: "raw", type: "TEXT", note: "Full entry JSON"),
     ]
