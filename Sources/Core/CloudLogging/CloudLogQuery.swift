@@ -168,3 +168,43 @@ enum CloudLogName {
         return id.removingPercentEncoding ?? id
     }
 }
+
+// MARK: - Migration-safe decoding (missing keys fall back to defaults, so adding a field never
+// invalidates a persisted query in templates.json or the saved open-tabs state).
+
+extension TextCondition {
+    enum CodingKeys: String, CodingKey { case id, mode, value }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        mode = try c.decodeIfPresent(CloudMatchMode.self, forKey: .mode) ?? .contains
+        value = try c.decodeIfPresent(String.self, forKey: .value) ?? ""
+    }
+}
+
+extension LabelCondition {
+    enum CodingKeys: String, CodingKey { case id, key, scope, mode, value }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        key = try c.decodeIfPresent(String.self, forKey: .key) ?? ""
+        scope = try c.decodeIfPresent(LabelScope.self, forKey: .scope) ?? .entry
+        mode = try c.decodeIfPresent(CloudMatchMode.self, forKey: .mode) ?? .exact
+        value = try c.decodeIfPresent(String.self, forKey: .value) ?? ""
+    }
+}
+
+extension CloudLogQuery {
+    enum CodingKeys: String, CodingKey {
+        case textConditions, textCombineOr, minSeverity, severitySet, labelConditions, labelCombineOr
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        textConditions = try c.decodeIfPresent([TextCondition].self, forKey: .textConditions) ?? []
+        textCombineOr = try c.decodeIfPresent(Bool.self, forKey: .textCombineOr) ?? true
+        minSeverity = try c.decodeIfPresent(CloudSeverity.self, forKey: .minSeverity)
+        severitySet = try c.decodeIfPresent([CloudSeverity].self, forKey: .severitySet) ?? []
+        labelConditions = try c.decodeIfPresent([LabelCondition].self, forKey: .labelConditions) ?? []
+        labelCombineOr = try c.decodeIfPresent(Bool.self, forKey: .labelCombineOr) ?? false
+    }
+}

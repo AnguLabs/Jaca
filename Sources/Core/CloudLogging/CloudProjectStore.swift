@@ -31,6 +31,26 @@ struct CloudProject: Codable, Sendable, Hashable, Identifiable {
     var currentFavoriteLabelKeys: [String] {
         favoriteLabelKeysByLogName[selectedLogName ?? ""] ?? []
     }
+
+    enum CodingKeys: String, CodingKey {
+        case projectID, displayName, selectedLogName, logNames, labelKeysByLogName, favoriteLabelKeysByLogName
+    }
+}
+
+extension CloudProject {
+    /// Migration-safe decode: every field except `projectID` falls back to its default when the
+    /// key is missing, so adding a field in a new release never drops an existing projects.json.
+    /// (Swift's synthesized decoder ignores property defaults for missing keys — the bug this
+    /// guards against.)
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        projectID = try c.decode(String.self, forKey: .projectID)
+        displayName = try c.decodeIfPresent(String.self, forKey: .displayName) ?? ""
+        selectedLogName = try c.decodeIfPresent(String.self, forKey: .selectedLogName)
+        logNames = try c.decodeIfPresent([String].self, forKey: .logNames) ?? []
+        labelKeysByLogName = try c.decodeIfPresent([String: [String]].self, forKey: .labelKeysByLogName) ?? [:]
+        favoriteLabelKeysByLogName = try c.decodeIfPresent([String: [String]].self, forKey: .favoriteLabelKeysByLogName) ?? [:]
+    }
 }
 
 /// On-disk store for cloud project configs. Lives under `~/.jaca/` (per the product spec —
@@ -52,7 +72,7 @@ struct CloudProjectStore: Sendable {
 
     func load() -> [CloudProject] {
         guard let data = try? Data(contentsOf: fileURL) else { return [] }
-        return (try? JSONDecoder().decode([CloudProject].self, from: data)) ?? []
+        return CloudPersistence.decodeArray(CloudProject.self, from: data)
     }
 
     func save(_ projects: [CloudProject]) {
