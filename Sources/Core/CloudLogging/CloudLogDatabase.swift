@@ -113,6 +113,40 @@ actor CloudLogDatabase {
         exec("COMMIT;")
     }
 
+    // MARK: - Read (on the WRITER's own connection, so live inserts are visible)
+
+    struct QueryError: Error, LocalizedError { let message: String; var errorDescription: String? { message } }
+
+    /// Runs a read-only query for the SQL mode on the writer connection. Using the same
+    /// connection as the inserts guarantees the latest rows are visible — a *separate* read-only
+    /// handle on a live WAL database can return nothing, which made the default query look broken.
+    /// (The caller pre-checks `DatabaseService.isReadOnly`; nothing but `sql` runs here.)
+    func query(_ sql: String) throws -> DBResultSet {
+        guard let db else { throw QueryError(message: "the session database is closed") }
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw QueryError(message: String(cString: sqlite3_errmsg(db)))
+        }
+        defer { sqlite3_finalize(stmt) }
+        let n = Int(sqlite3_column_count(stmt))
+        let columns = (0..<n).map { String(cString: sqlite3_column_name(stmt, Int32($0))) }
+        var rows: [[String?]] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            rows.append((0..<n).map { cellValue(stmt, Int32($0)) })
+        }
+        return DBResultSet(columns: columns, rows: rows)
+    }
+
+    private func cellValue(_ stmt: OpaquePointer?, _ col: Int32) -> String? {
+        switch sqlite3_column_type(stmt, col) {
+        case SQLITE_NULL: return nil
+        case SQLITE_BLOB: return "⟨blob⟩"
+        default:
+            guard let text = sqlite3_column_text(stmt, col) else { return nil }
+            return String(cString: text)
+        }
+    }
+
     /// Closes the handle and removes the file (+ WAL/SHM). Call when the tab closes.
     func deleteFile() {
         if insertStmt != nil { sqlite3_finalize(insertStmt); insertStmt = nil }

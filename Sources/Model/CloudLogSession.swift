@@ -108,7 +108,6 @@ final class CloudLogSession: WorkspaceTab {
     private var pollStream: AsyncStream<CloudPollEvent>?
 
     private var database: CloudLogDatabase?
-    private let databaseService = DatabaseService(adbURL: nil)
 
     init(
         projectID: String,
@@ -483,11 +482,9 @@ final class CloudLogSession: WorkspaceTab {
             return
         }
         if !live { sqlRunning = true; sqlError = nil }
-        let url = database.fileURL
-        let service = databaseService
         Task { [weak self] in
             do {
-                let rs = try await Task.detached { try service.query(localDB: url, sql: sql) }.value
+                let rs = try await database.query(sql)   // writer connection → sees live inserts
                 guard let self else { return }
                 if !live { self.sqlRunning = false }
                 guard let seqCol = rs.columns.firstIndex(where: { $0.lowercased() == "seq" }) else {
