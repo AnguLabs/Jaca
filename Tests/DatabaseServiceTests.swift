@@ -21,6 +21,20 @@ final class DatabaseServiceTests: XCTestCase {
         XCTAssertFalse(DatabaseService.isReadOnly("  "))
     }
 
+    /// Generated cloud-SQL opens with `-- explanatory` lines; the keyword check must look past
+    /// leading comments (this regression silently blocked every SQL-mode run).
+    func test_isReadOnly_skipsLeadingComments() {
+        XCTAssertTrue(DatabaseService.isReadOnly("""
+        -- Level 1 (Cloud Logging filter, fetched live): logName = "x"
+        -- Level 2 (SQL filter): keep `insert_id`.
+        SELECT insert_id, seq FROM log_entry ORDER BY seq DESC LIMIT 2;
+        """))
+        XCTAssertTrue(DatabaseService.isReadOnly("/* block */\nSELECT 1"))
+        XCTAssertTrue(DatabaseService.isReadOnly("  -- note\n  with x as (select 1) select * from x"))
+        // Comments must not let a write sneak through.
+        XCTAssertFalse(DatabaseService.isReadOnly("-- harmless looking\nDELETE FROM users"))
+    }
+
     // MARK: - DB file filtering
 
     func test_parseDBNames_dropsWalShmJournalAndBlanks() {
