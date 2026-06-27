@@ -38,7 +38,7 @@ final class SeqCounter: @unchecked Sendable {
     /// sub-seqs (`base, base+1, …`) without colliding with the next line — keeping `seq`
     /// strictly increasing for the front-trim and persistence ordering. Far more than the
     /// ≤ 3 parts a split ever produces.
-    init(stride: UInt64 = 8) { self.stride = stride }
+    init(start: UInt64 = 0, stride: UInt64 = 8) { self.value = start; self.stride = stride }
     func next() -> UInt64 { lock.lock(); defer { lock.unlock() }; let v = value; value &+= stride; return v }
 }
 

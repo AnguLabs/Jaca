@@ -111,8 +111,26 @@ final class CloudLogSession: WorkspaceTab {
     private let maxPerFlush = 4_000
     private var recomputeToken = 0
 
+    // MARK: Backward pagination (load older logs on scroll-up, while still polling new ones)
+
+    /// Live entries are stamped from a high base so older pages can be assigned strictly-lower
+    /// seqs (the ring stays sorted ascending = chronological), with room to spare under the cap.
+    static let forwardSeqBase: UInt64 = 1 << 40
+    private static let seqStride: UInt64 = 8
+    private let olderPageSize = 1_000
+    /// A page of older logs is being fetched.
+    private(set) var olderLoading = false
+    /// Whether older logs might still exist (false once a short/empty page comes back).
+    private(set) var hasMoreOlder = true
+    /// Lowest seq assigned so far — the next older page is stamped below this.
+    private var oldestSeq = CloudLogSession.forwardSeqBase
+    /// Every loaded insertId, so older pages don't re-add an entry already shown (live or older).
+    private var knownInsertIds = Set<String>()
+    /// Display rows prepended by "load older" — the table scrolls down by this delta to stay put.
+    private(set) var prependedDisplayRows = 0
+
     private let pending = CloudEntryBuffer()
-    private let seq = SeqCounter()
+    private let seq = SeqCounter(start: CloudLogSession.forwardSeqBase)
     private var consumeTask: Task<Void, Never>?
     private var flushTask: Task<Void, Never>?
     /// Holding the stream keeps the poller alive; dropping/cancelling it stops the poll.
@@ -239,8 +257,71 @@ final class CloudLogSession: WorkspaceTab {
         totalCount = 0
         droppedCount = 0
         droppedDisplayRows = 0
+        prependedDisplayRows = 0
+        oldestSeq = Self.forwardSeqBase
+        knownInsertIds.removeAll(keepingCapacity: true)
+        hasMoreOlder = true
+        olderLoading = false
         selectedEntry = nil
         listEpoch &+= 1
+    }
+
+    // MARK: - Load older (backward pagination)
+
+    /// Fetches the next page of **older** logs (before the oldest loaded) and prepends them, while
+    /// the live forward poll keeps running. Triggered when the user scrolls near the top. Safe to
+    /// call repeatedly — it no-ops while a page is in flight, when there's nothing older, or in
+    /// SQL mode (whose list is query-driven).
+    func loadOlder() {
+        guard viewMode == .logs, !olderLoading, hasMoreOlder,
+              let oldest = ring.first, let cli = registry.cli else { return }
+        olderLoading = true
+        let cursor = oldest.timestamp
+        let logName = selectedLogName, q = query, raw = rawFilter, proj = projectID, size = olderPageSize
+        Task { [weak self] in
+            let filter = CloudFilter.build(
+                logName: logName, time: "timestamp<=\(CloudTimestamp.quote(cursor))", query: q, rawFilter: raw)
+            let page = try? await cli.read(project: proj, filter: filter, order: "desc", limit: size)
+            guard let self else { return }
+            self.appendOlder(page, requested: size)
+        }
+    }
+
+    /// Integrates a fetched older page (newest-first from gcloud `order=desc`): dedup against
+    /// already-loaded ids, stamp strictly-lower seqs (oldest-first) so the ring stays chronological,
+    /// persist, and prepend to the list (compensating the viewport via `prependedDisplayRows`).
+    private func appendOlder(_ page: [CloudLogEntry]?, requested: Int) {
+        olderLoading = false
+        guard let page else { return }                       // transient error → leave hasMoreOlder, user can retry
+        if page.count < requested { hasMoreOlder = false }   // gcloud returned everything it had
+        // Dedup, keep newest-first, then flip to oldest-first for prepending.
+        let freshNewestFirst = page.filter { $0.insertId.isEmpty || !knownInsertIds.contains($0.insertId) }
+        guard !freshNewestFirst.isEmpty else { return }
+        let assigned = Self.assignOlderSeqs(Array(freshNewestFirst.reversed()), below: oldestSeq, stride: Self.seqStride)
+        oldestSeq = assigned.first?.seq ?? oldestSeq
+        for e in assigned where !e.insertId.isEmpty { knownInsertIds.insert(e.insertId) }
+
+        if let database { Task { await database.appendEntries(assigned) } }
+        registry.recordLabelKeys(LabelDetector.keys(in: assigned), project: projectID, logName: selectedLogName ?? "")
+
+        ring.insert(contentsOf: assigned, at: 0)
+        totalCount += assigned.count
+
+        let visibleNew = assigned.filter { passes($0) }
+        guard !visibleNew.isEmpty else { return }
+        visible.insert(contentsOf: visibleNew, at: 0)
+        prependedDisplayRows += displayMap.prepend(lineCounts: visibleNew.map { LogTextLines.count($0.message) })
+    }
+
+    /// Assigns strictly-decreasing seqs to an oldest-first page so it slots just below `oldestSeq`
+    /// (keeps the ring sorted ascending = chronological). Pure → unit-tested.
+    nonisolated static func assignOlderSeqs(_ oldestFirst: [CloudLogEntry], below oldestSeq: UInt64, stride: UInt64) -> [CloudLogEntry] {
+        let k = UInt64(oldestFirst.count)
+        return oldestFirst.enumerated().map { i, entry in
+            var e = entry
+            e.seq = oldestSeq - (k - UInt64(i)) * stride
+            return e
+        }
     }
 
     /// Stops, then deletes the per-session SQLite file. Called by AppModel on tab close.
@@ -298,6 +379,7 @@ final class CloudLogSession: WorkspaceTab {
 
         ring.append(contentsOf: drained)
         totalCount += drained.count
+        for e in drained where !e.insertId.isEmpty { knownInsertIds.insert(e.insertId) }
 
         if ring.count > ringCap {
             let overflow = ring.count - ringCap

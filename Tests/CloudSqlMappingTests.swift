@@ -66,6 +66,16 @@ final class CloudSqlMappingTests: XCTestCase {
         XCTAssertEqual(out.map(\.insertId), ["id25", "id24"])
     }
 
+    /// Older pages (oldest-first) get strictly-increasing seqs that all sit below the current
+    /// minimum, so the ring stays sorted ascending = chronological after prepending.
+    func test_assignOlderSeqs_belowMinimumAndAscending() {
+        let page = [entry(seq: 0, insertId: "a"), entry(seq: 0, insertId: "b"), entry(seq: 0, insertId: "c")]
+        let out = CloudLogSession.assignOlderSeqs(page, below: 1000, stride: 8)
+        XCTAssertEqual(out.map(\.seq), [976, 984, 992])      // ascending, all < 1000
+        XCTAssertEqual(out.map(\.insertId), ["a", "b", "c"]) // order preserved
+        XCTAssertLessThan(out.last!.seq, 1000)               // newest still below the old minimum
+    }
+
     /// A row with an empty insert_id that maps to nothing (and no marker column) still renders as a
     /// synthetic line built from its text_payload.
     func test_unmappedRow_becomesSyntheticByFallback() {

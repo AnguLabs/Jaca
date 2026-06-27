@@ -94,6 +94,7 @@ struct CloudLogTableView: NSViewRepresentable {
         private var lastCount = 0
         private var lastEpoch = -1
         private var lastDropped = 0
+        private var lastPrepended = 0
         private var programmaticScroll = false
         private var widestContent: CGFloat = 0
         private var syncingSelection = false
@@ -161,6 +162,7 @@ struct CloudLogTableView: NSViewRepresentable {
             guard let table else { return }
             let count = session.displayRowCount
             let dropped = session.droppedDisplayRows
+            let prepended = session.prependedDisplayRows
 
             if epoch != lastEpoch {
                 widestContent = 0
@@ -168,13 +170,16 @@ struct CloudLogTableView: NSViewRepresentable {
                 table.reloadData()
             } else {
                 let frontTrim = dropped - lastDropped
-                if frontTrim > 0 {
+                let prepend = prepended - lastPrepended
+                if prepend > 0 {
+                    keepViewportThroughPrepend(prepend)
+                } else if frontTrim > 0 {
                     keepViewportThroughTrim(frontTrim, following: following)
                 } else if count != lastCount {
                     table.noteNumberOfRowsChanged()
                 }
             }
-            lastCount = count; lastDropped = dropped; lastEpoch = epoch
+            lastCount = count; lastDropped = dropped; lastPrepended = prepended; lastEpoch = epoch
 
             if following { scrollToBottom() }
         }
@@ -192,11 +197,27 @@ struct CloudLogTableView: NSViewRepresentable {
             }
         }
 
+        /// Older rows were inserted above the viewport — grow the document and scroll down by the
+        /// added height so the user stays on exactly the rows they were reading (no jump).
+        private func keepViewportThroughPrepend(_ added: Int) {
+            guard let table else { return }
+            table.reloadData()
+            if let scroll {
+                var o = scroll.contentView.bounds.origin
+                o.y += CGFloat(added) * CloudLogTableView.rowHeight
+                programmaticScroll = true
+                scroll.contentView.scroll(to: o)
+                scroll.reflectScrolledClipView(scroll.contentView)
+                programmaticScroll = false
+            }
+        }
+
         func reloadAll() {
             table?.reloadData()
             lastCount = session.displayRowCount
             lastEpoch = session.listEpoch
             lastDropped = session.droppedDisplayRows
+            lastPrepended = session.prependedDisplayRows
             if session.followTail { scrollToBottom() }
         }
 
@@ -214,6 +235,10 @@ struct CloudLogTableView: NSViewRepresentable {
                 if !session.followTail { session.followTail = true }
             } else if session.followTail {
                 session.followTail = false
+            }
+            // Near the top → pull the next page of older logs (no-op if none / already loading).
+            if scroll.contentView.bounds.minY <= CloudLogTableView.rowHeight * 4 {
+                session.loadOlder()
             }
         }
     }
