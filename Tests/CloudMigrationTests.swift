@@ -47,6 +47,34 @@ final class CloudMigrationTests: XCTestCase {
         XCTAssertEqual(back.first?.favoriteLabelKeysByLogName[""], ["user_id"])
     }
 
+    /// A projects.json written before `labelExampleRulesByLogName` existed must still load with the
+    /// field defaulted (the same trap that once wiped the cache when a field was added).
+    func testCloudProjectDecodesOldSchemaWithoutLabelExampleRules() {
+        let json = #"[{"projectID":"p","displayName":"Prod","selectedLogName":"projects/p/logs/x"}]"#
+        let projects = CloudPersistence.decodeArray(CloudProject.self, from: Data(json.utf8))
+        XCTAssertEqual(projects.count, 1)
+        XCTAssertTrue(projects[0].labelExampleRulesByLogName.isEmpty)   // defaulted, not a failure
+    }
+
+    func testCloudProjectRoundTripWithLabelExampleRules() throws {
+        var project = CloudProject(projectID: "p")
+        project.labelExampleRulesByLogName = ["": ["tag": LabelExampleRule(all: true),
+                                                   "user_id": LabelExampleRule(count: 1)]]
+        let data = try JSONEncoder().encode([project])
+        let back = CloudPersistence.decodeArray(CloudProject.self, from: data)
+        XCTAssertEqual(back.first?.labelExampleRulesByLogName[""]?["tag"], LabelExampleRule(all: true))
+        XCTAssertEqual(back.first?.labelExampleRulesByLogName[""]?["user_id"]?.count, 1)
+    }
+
+    /// LabelExampleRule itself tolerates a missing key (e.g. an old rule saved before `all` existed).
+    func testLabelExampleRuleDecodesOldSchema() throws {
+        let r1 = try JSONDecoder().decode(LabelExampleRule.self, from: Data(#"{"count":5}"#.utf8))
+        XCTAssertEqual(r1.count, 5)
+        XCTAssertFalse(r1.all)                                          // defaulted
+        let r2 = try JSONDecoder().decode(LabelExampleRule.self, from: Data("{}".utf8))
+        XCTAssertEqual(r2, .default)                                    // both defaulted
+    }
+
     /// Open-tabs state: a malformed record is skipped, the rest (incl. a cloud tab) survive —
     /// so one bad tab can't wipe the whole strip.
     func testTabDescriptorsDecodeCloudTabAndSkipBadRecords() {

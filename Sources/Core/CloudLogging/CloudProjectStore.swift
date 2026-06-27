@@ -1,5 +1,30 @@
 import Foundation
 
+/// How many distinct example values of a label key to feed the Claude SQL assistant, per label.
+/// The samples teach the model each label's format; the default is just **one** (enough to show
+/// the shape) so a high-cardinality key like `user_id` doesn't flood the prompt. Set `all` for a
+/// low-cardinality key (e.g. `tag`) where seeing every value is genuinely useful.
+struct LabelExampleRule: Codable, Sendable, Hashable {
+    var all: Bool
+    var count: Int
+
+    static let `default` = LabelExampleRule(all: false, count: 1)
+
+    init(all: Bool = false, count: Int = 1) {
+        self.all = all
+        self.count = max(1, count)
+    }
+
+    enum CodingKeys: String, CodingKey { case all, count }
+
+    /// Migration-safe decode (defaults for any missing key).
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        all = try c.decodeIfPresent(Bool.self, forKey: .all) ?? false
+        count = max(1, try c.decodeIfPresent(Int.self, forKey: .count) ?? 1)
+    }
+}
+
 /// A configured GCP project + its global (per-project) Cloud Logging state. Persisted to
 /// `~/.jaca/cloud-logging/projects.json`. The `selectedLogName`, cached `logNames`, and
 /// auto-detected label keys are deliberately *global per project* (req 7): every open
@@ -16,6 +41,9 @@ struct CloudProject: Codable, Sendable, Hashable, Identifiable {
     var labelKeysByLogName: [String: [String]] = [:]
     /// Favorited label keys, per log name — pinned to the top of the label-key list.
     var favoriteLabelKeysByLogName: [String: [String]] = [:]
+    /// How many example values per label key to send to the Claude SQL assistant, per log name.
+    /// A key with no entry uses `LabelExampleRule.default` (one example).
+    var labelExampleRulesByLogName: [String: [String: LabelExampleRule]] = [:]
 
     var id: String { projectID }
     /// What the sidebar/tab shows: the display name if set, else the raw id.
@@ -32,8 +60,14 @@ struct CloudProject: Codable, Sendable, Hashable, Identifiable {
         favoriteLabelKeysByLogName[selectedLogName ?? ""] ?? []
     }
 
+    /// Label example rules for the currently selected log name.
+    var currentLabelExampleRules: [String: LabelExampleRule] {
+        labelExampleRulesByLogName[selectedLogName ?? ""] ?? [:]
+    }
+
     enum CodingKeys: String, CodingKey {
-        case projectID, displayName, selectedLogName, logNames, labelKeysByLogName, favoriteLabelKeysByLogName
+        case projectID, displayName, selectedLogName, logNames, labelKeysByLogName,
+             favoriteLabelKeysByLogName, labelExampleRulesByLogName
     }
 }
 
@@ -50,6 +84,7 @@ extension CloudProject {
         logNames = try c.decodeIfPresent([String].self, forKey: .logNames) ?? []
         labelKeysByLogName = try c.decodeIfPresent([String: [String]].self, forKey: .labelKeysByLogName) ?? [:]
         favoriteLabelKeysByLogName = try c.decodeIfPresent([String: [String]].self, forKey: .favoriteLabelKeysByLogName) ?? [:]
+        labelExampleRulesByLogName = try c.decodeIfPresent([String: [String: LabelExampleRule]].self, forKey: .labelExampleRulesByLogName) ?? [:]
     }
 }
 

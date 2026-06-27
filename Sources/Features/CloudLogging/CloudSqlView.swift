@@ -24,6 +24,7 @@ struct CloudSqlEditorBar: View {
                 LemonadeUi.Text(statusText, textStyle: LemonadeTypography.shared.bodyXSmallRegular,
                                 color: LemonadeTheme.colors.content.contentTertiary, maxLines: 1)
                 Spacer()
+                CloudSqlAssistantButton(session: session)
                 labelsMenu
                 schemaButton
                 templatesMenu

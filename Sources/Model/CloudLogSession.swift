@@ -529,6 +529,21 @@ final class CloudLogSession: WorkspaceTab {
         runSQL()
     }
 
+    /// Queries the per-session DB for distinct example values per label, honoring the user's
+    /// per-label example-count rules (default: one), so the Ask-Claude SQL assistant learns each
+    /// label's real format without flooding the prompt. Empty until logs are captured.
+    func labelSamples() async -> [CloudSqlLabelSample] {
+        guard let database, let rs = try? await database.query(CloudSqlAssistant.labelSampleSQL) else { return [] }
+        let rules = registry.labelExampleRules(project: projectID, logName: selectedLogName ?? "")
+        return CloudSqlAssistant.samples(from: rs.rows, rules: rules)
+    }
+
+    /// Distinct value count per label key (for the example-count modal). Empty until logs exist.
+    func labelCardinalities() async -> [CloudLabelCardinality] {
+        guard let database, let rs = try? await database.query(CloudSqlAssistant.labelCardinalitySQL) else { return [] }
+        return CloudSqlAssistant.cardinalities(from: rs.rows)
+    }
+
     private func generatedSQL() -> String {
         let serverFilter = CloudFilter.build(logName: selectedLogName, time: nil, query: query, rawFilter: rawFilter)
         var lines: [String] = []
