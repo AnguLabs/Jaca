@@ -138,6 +138,29 @@ final class DisplayLineMapTests: XCTestCase {
         XCTAssertEqual(m.locate(row: 2).sub, 1)
     }
 
+    func testPrependShiftsExistingAndReportsAddedRows() {
+        var m = map([1, 2])              // logs: row 0 | rows 1..2  (total 3)
+        let added = m.prepend(lineCounts: [3, 1])   // two older logs above: 3 rows + 1 row
+        XCTAssertEqual(added, 4)
+        XCTAssertEqual(m.logCount, 4)
+        XCTAssertEqual(m.totalRows, 7)
+        // prepended logs occupy the top, in order
+        XCTAssertEqual(m.rows(ofLog: 0), 0...2)      // first older log (3 rows)
+        XCTAssertEqual(m.rows(ofLog: 1), 3...3)      // second older log (1 row)
+        // original logs shifted down by the 4 added rows
+        XCTAssertEqual(m.rows(ofLog: 2), 4...4)      // was log 0 (1 row)
+        XCTAssertEqual(m.rows(ofLog: 3), 5...6)      // was log 1 (2 rows)
+        XCTAssertEqual(m.locate(row: 6).log, 3)
+        XCTAssertEqual(m.locate(row: 6).sub, 1)
+    }
+
+    func testPrependEmptyIsNoOp() {
+        var m = map([1, 2])
+        XCTAssertEqual(m.prepend(lineCounts: [Int]()), 0)
+        XCTAssertEqual(m.logCount, 2)
+        XCTAssertEqual(m.totalRows, 3)
+    }
+
     func testRemoveFirstClampsAndAll() {
         var m = map([2, 2])
         XCTAssertEqual(m.removeFirst(0), 0)

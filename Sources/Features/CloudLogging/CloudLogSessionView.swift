@@ -243,13 +243,16 @@ struct CloudLogSessionView: View {
 
     @ViewBuilder private var logsBody: some View {
         HStack(spacing: 0) {
-            ZStack(alignment: .bottomTrailing) {
+            ZStack(alignment: .top) {
                 CloudLogTableView(session: session, isActive: isActive,
                                   revision: session.visible.count, epoch: session.listEpoch,
                                   follow: session.followTail, selectedSeq: session.selectedEntry?.seq)
                     .background(LemonadeTheme.colors.background.bgDefault)
                 if session.visible.isEmpty {
                     emptyHint
+                }
+                if session.olderLoading {
+                    olderLoadingBanner
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -263,6 +266,21 @@ struct CloudLogSessionView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .animation(.easeOut(duration: 0.18), value: session.selectedEntry?.seq)
+    }
+
+    /// Thin "loading older logs" indicator pinned to the top while a backward page is in flight.
+    private var olderLoadingBanner: some View {
+        HStack(spacing: 6) {
+            ProgressView().controlSize(.small).scaleEffect(0.7)
+            LemonadeUi.Text("Loading older logs…", textStyle: LemonadeTypography.shared.bodyXSmallRegular,
+                            color: LemonadeTheme.colors.content.contentSecondary)
+        }
+        .padding(.horizontal, 10).padding(.vertical, 4)
+        .background(Capsule().fill(LemonadeTheme.colors.background.bgElevated))
+        .overlay(Capsule().strokeBorder(LemonadeTheme.colors.border.borderNeutralLow, lineWidth: 1))
+        .padding(.top, 6)
+        .transition(.opacity)
+        .allowsHitTesting(false)
     }
 
     private var emptyHint: some View {

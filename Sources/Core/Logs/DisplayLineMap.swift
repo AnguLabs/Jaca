@@ -106,6 +106,23 @@ struct DisplayLineMap: Equatable {
 
     mutating func removeAll() { prefix = [0] }
 
+    /// Prepends logs (oldest-first `lineCounts`) at the front, shifting existing offsets up.
+    /// Returns the number of display rows added — used to compensate the viewport scroll when
+    /// older entries load *above* what the user is looking at.
+    @discardableResult
+    mutating func prepend<C: Collection>(lineCounts: C) -> Int where C.Element == Int {
+        guard !lineCounts.isEmpty else { return 0 }
+        var head = [0]
+        head.reserveCapacity(lineCounts.count + prefix.count)
+        var running = 0
+        for c in lineCounts { running += max(1, c); head.append(running) }
+        let addedRows = running
+        head.removeLast()                                   // its trailing total == shifted prefix[0]
+        for offset in prefix { head.append(offset + addedRows) }
+        prefix = head
+        return addedRows
+    }
+
     /// Drops the first `k` logs and rebases the remaining offsets to start at 0.
     /// Returns the number of display rows removed (to compensate the viewport scroll).
     @discardableResult
