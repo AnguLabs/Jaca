@@ -33,6 +33,7 @@ enum CommandRunner {
         _ executable: URL,
         _ arguments: [String],
         environment: [String: String]? = nil,
+        currentDirectory: URL? = nil,
         timeout: TimeInterval? = nil
     ) async throws -> Result {
         guard FileManager.default.isExecutableFile(atPath: executable.path) else {
@@ -44,10 +45,13 @@ enum CommandRunner {
                 process.executableURL = executable
                 process.arguments = arguments
                 if let environment { process.environment = environment }
+                if let currentDirectory { process.currentDirectoryURL = currentDirectory }
                 let outPipe = Pipe()
                 let errPipe = Pipe()
                 process.standardOutput = outPipe
                 process.standardError = errPipe
+                // Detach stdin so a tool that probes it (e.g. `claude`) doesn't block waiting on input.
+                process.standardInput = FileHandle.nullDevice
                 do {
                     try process.run()
                 } catch {

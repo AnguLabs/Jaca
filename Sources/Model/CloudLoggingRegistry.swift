@@ -195,6 +195,17 @@ final class CloudLoggingRegistry {
         persist()
     }
 
+    /// The configured example-count rules for a (project, log name), keyed by label key. Missing
+    /// keys fall back to `LabelExampleRule.default` at the point of use.
+    func labelExampleRules(project id: String, logName: String) -> [String: LabelExampleRule] {
+        project(id)?.labelExampleRulesByLogName[logName] ?? [:]
+    }
+
+    /// Replaces the whole rule map for a (project, log name). Persisted to ~/.jaca.
+    func setLabelExampleRules(_ rules: [String: LabelExampleRule], project id: String, logName: String) {
+        update(id) { $0.labelExampleRulesByLogName[logName] = rules }
+    }
+
     // MARK: - Toast
 
     func flash(_ message: String, fallback: String = "checkmark") {
