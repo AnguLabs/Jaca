@@ -156,6 +156,9 @@ struct JacaApp: App {
         // Register the Figtree faces bundled with the Lemonade design system so
         // LemonadeUi.Text renders in the brand typeface instead of the system font.
         LemonadeFonts.registerFonts()
+        // Show hover tooltips (e.g. the tab context tooltip) quickly instead of after the long
+        // ~1.5s system default. App-wide and harmless for a developer tool. Milliseconds.
+        UserDefaults.standard.register(defaults: ["NSInitialToolTipDelay": 350])
     }
 
     var body: some Scene {
