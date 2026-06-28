@@ -65,6 +65,10 @@ struct CloudQueryBar: View {
                 HStack(spacing: 6) {
                     matchModeMenu($session.query.textConditions[index].mode)
                     valueField("text…", $session.query.textConditions[index].value)
+                    if session.query.textConditions[index].mode == .regex {
+                        CloudRegexAssistantButton(value: $session.query.textConditions[index].value,
+                                                  field: "the log message (textPayload)")
+                    }
                     removeButton { session.query.textConditions.remove(at: index) }
                 }
                 // The OR/AND combiner sits *between* conditions, so it's obvious they're combined.
@@ -144,6 +148,11 @@ struct CloudQueryBar: View {
                         LabelKeyPicker(session: session, selectedKey: $session.query.labelConditions[index].key)
                         matchModeMenu($session.query.labelConditions[index].mode)
                         valueField("value…", $session.query.labelConditions[index].value)
+                        if session.query.labelConditions[index].mode == .regex {
+                            let key = session.query.labelConditions[index].key
+                            CloudRegexAssistantButton(value: $session.query.labelConditions[index].value,
+                                                      field: key.isEmpty ? "a label value" : "labels.\(key)")
+                        }
                         removeButton { session.query.labelConditions.remove(at: index) }
                     }
                 }

@@ -20,12 +20,11 @@ enum CloudMatchMode: String, Codable, Sendable, CaseIterable, Hashable {
     /// Builds one filter term for `field` (already a valid filter LHS like `textPayload`
     /// or `labels.foo`) and `value` (raw user text).
     func term(field: String, value: String) -> String {
-        let v = CloudFilter.quote(value)
         switch self {
-        case .contains: return "\(field):\(v)"
-        case .exact: return "\(field)=\(v)"
-        case .regex: return "\(field)=~\(v)"
-        case .notContains: return "NOT \(field):\(v)"
+        case .contains: return "\(field):\(CloudFilter.quote(value))"
+        case .exact: return "\(field)=\(CloudFilter.quote(value))"
+        case .regex: return "\(field)=~\(CloudFilter.quoteRegex(value))"   // backslashes pass through to RE2
+        case .notContains: return "NOT \(field):\(CloudFilter.quote(value))"
         }
     }
 }
@@ -140,6 +139,14 @@ enum CloudFilter {
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
         return "\"\(escaped)\""
+    }
+
+    /// Double-quotes an **RE2 regex** for the `=~` operator. Unlike `quote`, backslashes are NOT
+    /// doubled: we pass the filter to gcloud as a raw argument (no shell), and Cloud Logging hands
+    /// the backslash straight to RE2 — so `\d` must stay `\d` (doubling it makes RE2 see a literal
+    /// `\` and the pattern never matches digits). Only the wrapping double-quote is escaped.
+    static func quoteRegex(_ value: String) -> String {
+        "\"\(value.replacingOccurrences(of: "\"", with: "\\\""))\""
     }
 
     /// Quotes a label key only when it contains characters that aren't a bare identifier

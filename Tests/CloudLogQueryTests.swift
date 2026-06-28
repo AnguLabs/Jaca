@@ -16,6 +16,22 @@ final class CloudLogQueryTests: XCTestCase {
         XCTAssertEqual(CloudFilter.quote(#"a"b\c"#), #""a\"b\\c""#)
     }
 
+    /// Regex (`=~`) must pass backslashes straight through to RE2 — doubling them (as `quote`
+    /// does for literals) makes `\d` match a literal `\` and never a digit. Only `"` is escaped.
+    func testRegexTermDoesNotDoubleBackslashes() {
+        let term = CloudMatchMode.regex.term(field: "labels.x", value: #"^202606(2[7-9]|[3-9]\d)\d{2}$"#)
+        XCTAssertEqual(term, #"labels.x=~"^202606(2[7-9]|[3-9]\d)\d{2}$""#)
+    }
+
+    func testRegexTermEscapesOnlyQuotes() {
+        XCTAssertEqual(CloudFilter.quoteRegex(#"say "hi"\d"#), "\"say \\\"hi\\\"\\d\"")
+    }
+
+    /// Literal modes still escape backslashes (a `\` in an exact value is a real backslash).
+    func testExactTermStillEscapesBackslash() {
+        XCTAssertEqual(CloudMatchMode.exact.term(field: "labels.x", value: #"a\b"#), #"labels.x="a\\b""#)
+    }
+
     func testQuoteKeyOnlyWhenNeeded() {
         XCTAssertEqual(CloudFilter.quoteKeyIfNeeded("env"), "env")
         XCTAssertEqual(CloudFilter.quoteKeyIfNeeded("run.googleapis.com/x"), #""run.googleapis.com/x""#)
