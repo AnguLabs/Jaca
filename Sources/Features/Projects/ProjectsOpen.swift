@@ -19,4 +19,7 @@ extension Notification.Name {
     /// Posted by the ⌘⇧O menu command to switch to the Projects area. `RootView`
     /// observes it because the menu can't reach `AppModel`.
     static let openProjects = Notification.Name("jaca.openProjects")
+    /// Posted by a log list's "Copy Format…" menu item (and the app menu) to open the copy-format
+    /// config modal. `RootView` observes it (a log table's AppKit menu can't present a sheet).
+    static let openLogCopyFormat = Notification.Name("jaca.openLogCopyFormat")
 }

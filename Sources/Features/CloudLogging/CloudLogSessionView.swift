@@ -86,6 +86,10 @@ struct CloudLogSessionView: View {
                                 onChipClicked: { showFilters.toggle() })
                 searchField
                 Spacer()
+                LemonadeUi.Button(label: "Copy format",
+                                  onClick: { NotificationCenter.default.post(name: .openLogCopyFormat, object: nil) },
+                                  leadingIcon: .settingsSlider, variant: .neutral, type: .subtle, size: .xSmall)
+                    .fixedSize()
                 LemonadeUi.IconButton(icon: .download, contentDescription: "Export") { exportLog() }
             }
         }

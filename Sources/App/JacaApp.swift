@@ -173,6 +173,11 @@ struct JacaApp: App {
                 }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
             }
+            CommandGroup(after: .pasteboard) {
+                Button("Copy Format…") {
+                    NotificationCenter.default.post(name: .openLogCopyFormat, object: nil)
+                }
+            }
         }
     }
 

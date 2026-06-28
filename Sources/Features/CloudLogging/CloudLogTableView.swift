@@ -263,11 +263,7 @@ final class CloudLogNSTableView: NSTableView {
         let entries = session.logIndices(forDisplayRows: selectedRowIndexes)
             .compactMap { $0 < session.visible.count ? session.visible[$0] : nil }
         guard !entries.isEmpty else { return }
-        let text = entries.map { entry -> String in
-            let time = entry.timestamp.logClock
-            let tag = entry.tag.isEmpty ? "" : " \(entry.tag)"
-            return "\(time) \(entry.severity.apiName)\(tag)  \(entry.message)"
-        }.joined(separator: "\n")
+        let text = LogCopyFormatStore.shared.format.render(entries.map(\.copyFields))
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
     }
@@ -284,6 +280,7 @@ final class CloudLogNSTableView: NSTableView {
         let menu = NSMenu()
         menu.addItem(withTitle: n > 1 ? "Copy \(n) Entries" : "Copy Entry",
                      action: #selector(copyMenu), keyEquivalent: "")
+        menu.addItem(withTitle: "Copy Format…", action: #selector(openCopyFormat), keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Select All", action: #selector(selectAll(_:)), keyEquivalent: "")
         menu.items.forEach { if $0.action != #selector(selectAll(_:)) { $0.target = self } }
@@ -291,6 +288,7 @@ final class CloudLogNSTableView: NSTableView {
     }
 
     @objc private func copyMenu() { copyRows() }
+    @objc private func openCopyFormat() { NotificationCenter.default.post(name: .openLogCopyFormat, object: nil) }
 }
 
 // MARK: - Selection row view
