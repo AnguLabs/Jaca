@@ -7,6 +7,8 @@ struct Worktree: Identifiable, Hashable {
     var name: String
     var base: String
     var age: String
+    /// Raw committer date of the last commit (HEAD) — the sort key behind `age`'s string.
+    var lastCommit: Date? = nil
     var sizeMB: Int
     var cacheMB: Int
     var orphan: Bool = false

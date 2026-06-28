@@ -83,7 +83,8 @@ struct ProjectsScanner: Sendable {
             isClaudeManaged: ProjectsGrouping.isWorktreePath(w.id),
             hasClaudeSessions: (claude?.count ?? 0) > 0,
             claudeSessionCount: claude?.count ?? 0,
-            claudeLastActive: claude?.last
+            claudeLastActive: claude?.last,
+            lastCommit: w.lastCommit
         )
     }
 
