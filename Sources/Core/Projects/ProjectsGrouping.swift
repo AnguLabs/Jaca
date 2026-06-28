@@ -36,7 +36,7 @@ enum ProjectsGrouping {
             var copy = project
             copy.checkouts.sort { a, b in
                 if a.isMain != b.isMain { return a.isMain }   // main first
-                return recency(a.claudeLastActive, a.name, b.claudeLastActive, b.name)
+                return recency(a.lastModified, a.name, b.lastModified, b.name)
             }
             return copy
         }

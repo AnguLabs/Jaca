@@ -44,7 +44,7 @@ struct Project: Identifiable, Equatable, Codable {
 
     /// Most recent activity across the root and all checkouts — drives ordering.
     var effectiveLastActive: Date? {
-        ([lastActive] + checkouts.map(\.claudeLastActive)).compactMap { $0 }.max()
+        ([lastActive] + checkouts.map(\.lastModified)).compactMap { $0 }.max()
     }
 }
 
@@ -67,6 +67,9 @@ struct ProjectCheckout: Identifiable, Equatable, Codable {
     var hasClaudeSessions: Bool = false
     var claudeSessionCount: Int = 0
     var claudeLastActive: Date? = nil
+    /// Committer date of this checkout's last commit (git HEAD). Together with
+    /// `claudeLastActive` it drives recency ordering — see `lastModified`.
+    var lastCommit: Date? = nil
 
     var sizeMB: Int = 0
     var cacheMB: Int = 0
@@ -85,6 +88,14 @@ struct ProjectCheckout: Identifiable, Equatable, Codable {
         return url.lastPathComponent
     }
     var displayPath: String { (path as NSString).abbreviatingWithTildeInPath }
+
+    /// Ordering key, kept in sync with the date the row *displays*: the git last-commit
+    /// date (the "3 days ago" shown beside the path), falling back to Claude session
+    /// activity only when there's no commit (e.g. an orphaned worktree). We deliberately
+    /// do NOT mix in the Claude `.jsonl` mtime when a commit exists — those files get
+    /// bulk-rewritten (session compaction/sync), so their mtime is unreliable as recency
+    /// and would order the list by noise instead of by the visible commit date.
+    var lastModified: Date? { lastCommit ?? claudeLastActive }
 }
 
 /// A node in the TREE view: a project plus any detected sub-projects nested under it by

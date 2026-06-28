@@ -31,8 +31,9 @@ struct GitService: Sendable {
                 name = e.branch ?? url.lastPathComponent; orphan = false; kind = nil
             }
             let base = orphan ? "—" : (await upstream(of: url) ?? "—")
-            let age = await lastCommitRelative(of: url) ?? "—"
-            trees.append(Worktree(id: e.path, name: name, base: base, age: age,
+            let commit = await lastCommit(of: url)
+            trees.append(Worktree(id: e.path, name: name, base: base, age: commit.relative ?? "—",
+                                  lastCommit: commit.date,
                                   sizeMB: 0, cacheMB: 0, orphan: orphan, kind: kind))
         }
         return trees
@@ -49,11 +50,18 @@ struct GitService: Sendable {
         return parts.dropFirst().joined(separator: "/")
     }
 
-    private func lastCommitRelative(of worktree: URL) async -> String? {
-        let res = await sh(git, ["-C", worktree.path, "log", "-1", "--format=%cr"])
-        guard res.ok else { return nil }
-        let s = res.out.trimmingCharacters(in: .whitespacesAndNewlines)
-        return s.isEmpty ? nil : s
+    /// HEAD's committer date as both a raw `Date` (for ordering) and git's own relative
+    /// string (for display) — fetched in one `git log` so sorting costs no extra process.
+    private func lastCommit(of worktree: URL) async -> (date: Date?, relative: String?) {
+        let res = await sh(git, ["-C", worktree.path, "log", "-1", "--format=%ct%n%cr"])
+        guard res.ok else { return (nil, nil) }
+        let lines = res.out.split(separator: "\n", omittingEmptySubsequences: false)
+        let date = lines.first
+            .flatMap { TimeInterval($0.trimmingCharacters(in: .whitespaces)) }
+            .map { Date(timeIntervalSince1970: $0) }
+        let relative = lines.count > 1
+            ? lines[1].trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        return (date, relative.isEmpty ? nil : relative)
     }
 
     /// Removes a worktree from git and deletes its directory (`--force`, so dirty trees go too).

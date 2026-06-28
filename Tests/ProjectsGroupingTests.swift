@@ -72,6 +72,48 @@ final class ProjectsGroupingTests: XCTestCase {
         XCTAssertTrue(sorted[0].checkouts.first?.isMain == true)  // main reordered to front
     }
 
+    func test_sorted_ordersWorktreesByLastModifiedNewestFirst() {
+        let t0 = Date(timeIntervalSince1970: 1_000_000)
+        // Worktrees with NO Claude activity, only git commit dates — these previously
+        // fell back to alphabetical order; they must now sort newest-commit first.
+        let project = Project(
+            path: "/ws/app", exists: true, isGitRepo: true, source: .claude,
+            sessionCount: 0, lastActive: nil,
+            checkouts: [
+                checkout("/ws/app/.claude/worktrees/alpha", isMain: false, lastCommit: t0.addingTimeInterval(-3600)),
+                checkout("/ws/app/.claude/worktrees/zeta", isMain: false, lastCommit: t0),  // newest
+                checkout("/ws/app", isMain: true, lastCommit: t0.addingTimeInterval(-9000)),
+                checkout("/ws/app/.claude/worktrees/mid", isMain: false, lastCommit: t0.addingTimeInterval(-1800)),
+            ]
+        )
+        let sorted = ProjectsGrouping.sorted([project])[0].checkouts.map(\.name)
+        // Main pinned first, then worktrees newest-commit → oldest (zeta, mid, alpha).
+        XCTAssertEqual(sorted, ["main checkout", "zeta", "mid", "alpha"])
+    }
+
+    func test_lastModified_usesCommitDateAndIgnoresNoisyClaudeMtime() {
+        let commit = Date(timeIntervalSince1970: 1_000_000)
+        let claudeNewer = commit.addingTimeInterval(600)  // bulk-touched .jsonl, not real activity
+        let committed = checkout("/ws/app/.claude/worktrees/w", isMain: false,
+                                 claudeLast: claudeNewer, lastCommit: commit)
+        XCTAssertEqual(committed.lastModified, commit)  // the displayed commit date wins
+
+        // No commit (e.g. orphaned worktree) → fall back to Claude activity.
+        let orphan = checkout("/ws/app/.claude/worktrees/o", isMain: false,
+                              claudeLast: claudeNewer, lastCommit: nil)
+        XCTAssertEqual(orphan.lastModified, claudeNewer)
+    }
+
+    // MARK: - Migration: old cache JSON without the lastCommit key
+
+    func test_decode_oldCheckoutWithoutLastCommit_defaultsToNil() throws {
+        // A checkout encoded before `lastCommit` existed — must decode, not fail/wipe.
+        let json = #"{"path":"/ws/app","isMain":true,"exists":true,"orphan":false,"isClaudeManaged":false,"hasClaudeSessions":false,"claudeSessionCount":0,"sizeMB":0,"cacheMB":0,"sizeComputed":false,"cleaning":false,"dropped":false,"removing":false}"#
+        let c = try JSONDecoder().decode(ProjectCheckout.self, from: Data(json.utf8))
+        XCTAssertNil(c.lastCommit)
+        XCTAssertEqual(c.path, "/ws/app")
+    }
+
     // MARK: - Tree nesting
 
     func test_tree_nestsSubProjectsUnderContainer() {
@@ -162,13 +204,13 @@ final class ProjectsGroupingTests: XCTestCase {
     }
 
     private func checkout(_ path: String, isMain: Bool, exists: Bool = true,
-                          claudeLast: Date? = nil) -> ProjectCheckout {
+                          claudeLast: Date? = nil, lastCommit: Date? = nil) -> ProjectCheckout {
         ProjectCheckout(
             path: path, isMain: isMain, branch: isMain ? nil : (path as NSString).lastPathComponent,
             base: nil, age: nil, exists: exists,
             isClaudeManaged: ProjectsGrouping.isWorktreePath(path),
             hasClaudeSessions: claudeLast != nil, claudeSessionCount: claudeLast != nil ? 1 : 0,
-            claudeLastActive: claudeLast
+            claudeLastActive: claudeLast, lastCommit: lastCommit
         )
     }
 }
