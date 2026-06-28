@@ -100,6 +100,10 @@ struct LogSessionView: View {
                         maxLines: 1
                     )
                 }
+                LemonadeUi.Button(label: "Copy format",
+                                  onClick: { NotificationCenter.default.post(name: .openLogCopyFormat, object: nil) },
+                                  leadingIcon: .settingsSlider, variant: .neutral, type: .subtle, size: .xSmall)
+                    .fixedSize()
                 LemonadeUi.IconButton(icon: .download, contentDescription: "Export") {
                     exportLog()
                 }

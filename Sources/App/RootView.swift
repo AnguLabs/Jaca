@@ -6,6 +6,7 @@ import AppKit
 /// right with a tab strip above it.
 struct RootView: View {
     @State private var model = AppModel()
+    @State private var showCopyFormat = false
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
@@ -14,6 +15,10 @@ struct RootView: View {
                 .navigationSplitViewColumnWidth(min: 240, ideal: 280, max: 360)
         } detail: {
             detail
+        }
+        .sheet(isPresented: $showCopyFormat) { LogCopyFormatSheet() }
+        .onReceive(NotificationCenter.default.publisher(for: .openLogCopyFormat)) { _ in
+            showCopyFormat = true
         }
         .task {
             model.startDiscovery()

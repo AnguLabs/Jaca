@@ -278,12 +278,12 @@ final class LogNSTableView: NSTableView {
 
     override func keyDown(with event: NSEvent) {
         if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers == "c" {
-            copyRows(messagesOnly: true); return
+            copyRows(messagesOnly: false); return
         }
         super.keyDown(with: event)
     }
 
-    @objc func copy(_ sender: Any?) { copyRows(messagesOnly: true) }   // Edit ▸ Copy
+    @objc func copy(_ sender: Any?) { copyRows(messagesOnly: false) }   // Edit ▸ Copy
 
     /// Double-click toggles a prettified JSON body between its expanded (multi-line) and
     /// collapsed (single-line) forms; harmless on every other row.
@@ -299,8 +299,11 @@ final class LogNSTableView: NSTableView {
         let lines = session.logIndices(forDisplayRows: selectedRowIndexes)
             .compactMap { $0 < session.visible.count ? session.visible[$0] : nil }
         guard !lines.isEmpty else { return }
+        let text = messagesOnly
+            ? LogClipboard.text(for: lines, messagesOnly: true)
+            : LogCopyFormatStore.shared.format.render(lines.map(\.copyFields))
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(LogClipboard.text(for: lines, messagesOnly: messagesOnly), forType: .string)
+        NSPasteboard.general.setString(text, forType: .string)
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
@@ -313,10 +316,11 @@ final class LogNSTableView: NSTableView {
         guard !selectedRowIndexes.isEmpty else { return nil }
         let n = session.logIndices(forDisplayRows: selectedRowIndexes).count
         let menu = NSMenu()
-        menu.addItem(withTitle: n > 1 ? "Copy \(n) Messages" : "Copy Message",
-                     action: #selector(copyMessages), keyEquivalent: "")
-        menu.addItem(withTitle: n > 1 ? "Copy \(n) Lines (with time & tag)" : "Copy Line",
+        menu.addItem(withTitle: n > 1 ? "Copy \(n) Lines" : "Copy Line",
                      action: #selector(copyLinesFull), keyEquivalent: "")
+        menu.addItem(withTitle: n > 1 ? "Copy \(n) Messages only" : "Copy Message only",
+                     action: #selector(copyMessages), keyEquivalent: "")
+        menu.addItem(withTitle: "Copy Format…", action: #selector(openCopyFormat), keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Select All", action: #selector(selectAll(_:)), keyEquivalent: "")
         menu.items.forEach { if $0.action != #selector(selectAll(_:)) { $0.target = self } }
@@ -325,6 +329,7 @@ final class LogNSTableView: NSTableView {
 
     @objc private func copyMessages() { copyRows(messagesOnly: true) }
     @objc private func copyLinesFull() { copyRows(messagesOnly: false) }
+    @objc private func openCopyFormat() { NotificationCenter.default.post(name: .openLogCopyFormat, object: nil) }
 }
 
 // MARK: - Selection row view (recoloured highlight)
