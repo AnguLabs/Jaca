@@ -10,6 +10,8 @@ struct TabStripView: View {
     @State private var editingID: UUID?
     @State private var editingText = ""
     @State private var draggingID: UUID?
+    @State private var hoveredID: UUID?
+    @State private var hoverTask: Task<Void, Never>?
     @FocusState private var nameFocused: Bool
 
     var body: some View {
@@ -76,6 +78,9 @@ struct TabStripView: View {
                         maxLines: 1
                     )
                 }
+                // Cap the text column so a long subtitle truncates with "…" instead of stretching
+                // the whole tab wide. A short name/subtitle still shrinks the tab to fit.
+                .frame(maxWidth: 200, alignment: .leading)
 
                 Button(action: { model.closeSession(session.id) }) {
                     Image(systemName: "xmark")
@@ -106,11 +111,55 @@ struct TabStripView: View {
         }
         .buttonStyle(.plain)
         .simultaneousGesture(TapGesture(count: 2).onEnded { beginRename(session) })
+        .onHover { inside in
+            if inside { scheduleTooltip(session.id) } else { cancelTooltip(session.id) }
+        }
+        .popover(isPresented: Binding(get: { hoveredID == session.id },
+                                      set: { if !$0 { hoveredID = nil } }),
+                 arrowEdge: .bottom) {
+            tabTooltip(session)
+        }
         .contextMenu {
             Button("Rename") { beginRename(session) }
             Divider()
             Button("Close Tab") { model.closeSession(session.id) }
         }
+    }
+
+    /// The hover tooltip: the tab's name plus its full context, one part per line (so a truncated
+    /// subtitle is fully readable). Shown after a short dwell via `scheduleTooltip`.
+    @ViewBuilder
+    private func tabTooltip(_ session: any WorkspaceTab) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            LemonadeUi.Text(session.displayName,
+                            textStyle: LemonadeTypography.shared.bodySmallSemiBold,
+                            color: LemonadeTheme.colors.content.contentPrimary)
+            ForEach(Array(session.subtitle.components(separatedBy: " · ")
+                .filter { !$0.isEmpty }.enumerated()), id: \.offset) { _, part in
+                LemonadeUi.Text(part,
+                                textStyle: LemonadeTypography.shared.bodyXSmallRegular,
+                                color: LemonadeTheme.colors.content.contentSecondary)
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .frame(maxWidth: 380, alignment: .leading)
+    }
+
+    /// Shows the tooltip after a short dwell — unless the tab is being dragged or renamed.
+    private func scheduleTooltip(_ id: UUID) {
+        guard draggingID == nil, editingID != id else { return }
+        hoverTask?.cancel()
+        hoverTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(450))
+            guard !Task.isCancelled, draggingID == nil, editingID != id else { return }
+            hoveredID = id
+        }
+    }
+
+    /// Cancels a pending tooltip and hides it when the cursor leaves the tab.
+    private func cancelTooltip(_ id: UUID) {
+        hoverTask?.cancel(); hoverTask = nil
+        if hoveredID == id { hoveredID = nil }
     }
 
     /// Starts an inline rename (also reachable by double-clicking the tab), focusing the field.
