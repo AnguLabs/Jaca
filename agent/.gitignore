@@ -3,4 +3,5 @@ out/
 classes/
 classes-boot/
 classes-capture/
+classes-okhttp-stubs/
 *.dex

@@ -12,13 +12,22 @@ import java.util.zip.GZIPInputStream
 /**
  * Injects a capture interceptor into okhttp clients (okhttp3 and okhttp2/squareup).
  * We can't compile against the app's okhttp (it's on the app class loader, not ours),
- * so the interceptor is a dynamic Proxy of the relevant Interceptor interface and all
- * okhttp calls go through reflection.
+ * so the capture logic ([Handler]) speaks to okhttp entirely through reflection.
  *
  * Hooked via SqueezeHooks on OkHttpClient.networkInterceptors(): the exit hook returns
- * a list with our interceptor prepended, so it runs for every call. okhttp3 and okhttp2
- * expose the same chain methods (request()/proceed()) so one reflective Handler serves
- * both; only the Interceptor interface type differs.
+ * a list with our interceptor prepended, so it runs for every call.
+ *
+ * **okhttp3 uses a REAL interceptor class, not a dynamic Proxy.** A `java.lang.reflect.Proxy`
+ * re-wraps any thrown checked exception as `UndeclaredThrowableException` unless the proxied
+ * method declares it — and R8 strips the `throws IOException` off `okhttp3.Interceptor.intercept`
+ * in release/minified apps (it keeps names + line numbers, but not the Exceptions attribute).
+ * So a cancelled/failed call's `IOException` came back as an *unchecked* UndeclaredThrowableException,
+ * slipped past okhttp's `catch (IOException)` on the async dispatcher, hit `catch (Throwable)`,
+ * and crashed the app. A real class is invoked directly (no proxy), so its IOException propagates
+ * unchanged. The class ([SqueezeOkHttp3Interceptor], compiled against okhttp stubs and shipped in
+ * the capture dex) is loaded on a child loader whose PARENT is the app loader, so it binds to the
+ * app's okhttp3 and calls back into this capture logic through the bootstrap [SqueezeOkHttpDelegate]
+ * bridge. okhttp2/squareup keeps the Proxy path (legacy; same crash class is far less likely there).
  *
  * Response bodies are captured with a **lazy tee** (a Proxy of okio.Source that copies
  * bytes as the app reads them), NOT an eager peek. Reading ahead on a live HTTP/2 stream
@@ -32,9 +41,10 @@ object OkHttpHook {
 
     private val interceptors = java.util.concurrent.ConcurrentHashMap<String, Any>()
     private val failed = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val handler = Handler()
 
     /** Returns a list with our interceptor first, or the original on any failure.
-     *  [ifaceName] is the okhttp Interceptor interface to proxy (okhttp3 vs squareup). */
+     *  [ifaceName] is the okhttp Interceptor interface (okhttp3 vs squareup). */
     fun inject(existing: List<*>, ifaceName: String): List<*> {
         val ic = ensureInterceptor(ifaceName) ?: return existing
         if (existing.any { it === ic }) return existing
@@ -57,19 +67,55 @@ object OkHttpHook {
         if (failed.contains(ifaceName)) return null
         synchronized(this) {
             interceptors[ifaceName]?.let { return it }
-            return try {
-                val loader = SqueezeHooks.appClassLoader ?: Thread.currentThread().contextClassLoader
-                val interceptorCls = Class.forName(ifaceName, false, loader)
-                val proxy = Proxy.newProxyInstance(loader, arrayOf(interceptorCls), Handler())
-                interceptors[ifaceName] = proxy
-                Log.i(TAG, "$ifaceName capture interceptor installed")
-                proxy
+            val ic = try {
+                if (ifaceName == "okhttp3.Interceptor") buildOkhttp3Interceptor()
+                else buildProxyInterceptor(ifaceName)
             } catch (t: Throwable) {
-                failed.add(ifaceName)
-                Log.e(TAG, "$ifaceName interceptor build failed: $t")
-                null
+                Log.e(TAG, "$ifaceName interceptor build failed: $t"); null
+            }
+            if (ic == null) { failed.add(ifaceName); return null }
+            interceptors[ifaceName] = ic
+            return ic
+        }
+    }
+
+    /** okhttp3: a real [SqueezeOkHttp3Interceptor] loaded on a child of the app loader (so its
+     *  `throws IOException` survives and it binds to the app's okhttp3). Falls back to the Proxy
+     *  if the dex/loader isn't available — apps that didn't strip the throws clause work either way. */
+    private fun buildOkhttp3Interceptor(): Any? {
+        val appLoader = SqueezeHooks.appClassLoader ?: Thread.currentThread().contextClassLoader
+        val dexPath = SqueezeHooks.captureDexPath
+        if (appLoader != null && dexPath != null) {
+            try {
+                val dexBytes = java.io.File(dexPath).readBytes()
+                val child = dalvik.system.InMemoryDexClassLoader(java.nio.ByteBuffer.wrap(dexBytes), appLoader)
+                val cls = child.loadClass("com.squeeze.capture.SqueezeOkHttp3Interceptor")
+                val delIface = Class.forName("com.squeeze.agent.SqueezeOkHttpDelegate")
+                val ic = cls.getConstructor(delIface).newInstance(CaptureDelegate(handler))
+                Log.i(TAG, "okhttp3 capture interceptor installed (real class)")
+                return ic
+            } catch (t: Throwable) {
+                Log.e(TAG, "okhttp3 real-class interceptor failed, falling back to proxy: $t")
             }
         }
+        return buildProxyInterceptor("okhttp3.Interceptor")
+    }
+
+    /** Fallback / okhttp2 path: a dynamic Proxy of the Interceptor interface. */
+    private fun buildProxyInterceptor(ifaceName: String): Any? {
+        val loader = SqueezeHooks.appClassLoader ?: Thread.currentThread().contextClassLoader ?: return null
+        val interceptorCls = Class.forName(ifaceName, false, loader)
+        val proxy = Proxy.newProxyInstance(loader, arrayOf(interceptorCls), handler)
+        Log.i(TAG, "$ifaceName capture interceptor installed (proxy)")
+        return proxy
+    }
+
+    /** Bridges the real okhttp3 interceptor class (app-parented loader) back to the capture
+     *  logic here (isolated capture loader). The bootstrap interface is shared by both loaders,
+     *  so the call crosses the loader boundary cleanly; a thrown IOException propagates through. */
+    private class CaptureDelegate(private val handler: Handler) : com.squeeze.agent.SqueezeOkHttpDelegate {
+        @Throws(java.io.IOException::class)
+        override fun intercept(chain: Any?): Any? = handler.capture(chain!!)
     }
 
     private class Handler : InvocationHandler {
@@ -84,6 +130,11 @@ object OkHttpHook {
                 else -> null
             }
         }
+
+        /** Entry point for the real okhttp3 interceptor class (which can't see this private
+         *  member through the Proxy path). Runs the same capture as [invoke]'s intercept branch. */
+        @Throws(java.io.IOException::class)
+        fun capture(chain: Any): Any = intercept(chain)
 
         // Mirrors AOSP's OkHttp{3,2}Interceptor: track the request up-front (best-effort),
         // run proceed(), and on failure record the error and RETHROW the real exception

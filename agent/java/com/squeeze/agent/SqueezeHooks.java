@@ -13,6 +13,10 @@ public final class SqueezeHooks {
      *  Set from native; used by the capture to build an okhttp3.Interceptor by reflection. */
     public static volatile ClassLoader appClassLoader;
 
+    /** Filesystem path of the capture dex. Set from {@link SqueezeAgent#attach}; the okhttp3
+     *  capture loads the real interceptor class from it on a child of {@link #appClassLoader}. */
+    public static volatile String captureDexPath;
+
     public static Object onExit(String methodSignature, Object returnObject) {
         SqueezeExitHandler h = handler;
         if (h == null) return returnObject;
