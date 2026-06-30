@@ -19,7 +19,7 @@ AGENT_CAP=agent/out/squeezeagent-capture.dex
 agent_needs_build() {
   [ -f "$AGENT_SO" ] && [ -f "$AGENT_BOOT" ] && [ -f "$AGENT_CAP" ] || return 0   # any artifact missing
   [ -n "$(find agent/native agent/build.sh -type f -newer "$AGENT_SO" 2>/dev/null | head -1)" ] && return 0
-  [ -n "$(find agent/java agent/kotlin agent/build-dex.sh -type f -newer "$AGENT_CAP" 2>/dev/null | head -1)" ] && return 0
+  [ -n "$(find agent/java agent/kotlin agent/okhttp agent/okhttp-stubs agent/build-dex.sh -type f -newer "$AGENT_CAP" 2>/dev/null | head -1)" ] && return 0
   return 1   # up to date
 }
 

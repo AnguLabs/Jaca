@@ -19,6 +19,7 @@ public final class SqueezeAgent {
     /** Called from native: capture dex path + reporter socket name. */
     public static synchronized void attach(String captureDexPath, String socketName) {
         try {
+            SqueezeHooks.captureDexPath = captureDexPath;  // okhttp3 capture loads its real interceptor from here
             if (captureInstance != null) {
                 // Re-attach: capture is already loaded + hooks installed; just point
                 // the reporter at the new host socket.
