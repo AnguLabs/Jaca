@@ -2,8 +2,10 @@ package com.squeeze.capture
 
 import android.util.Log
 import com.squeeze.agent.SqueezeHooks
+import java.io.ByteArrayOutputStream
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Method
+import java.lang.reflect.Modifier
 import java.lang.reflect.Proxy
 import java.util.zip.GZIPInputStream
 
@@ -17,10 +19,16 @@ import java.util.zip.GZIPInputStream
  * a list with our interceptor prepended, so it runs for every call. okhttp3 and okhttp2
  * expose the same chain methods (request()/proceed()) so one reflective Handler serves
  * both; only the Interceptor interface type differs.
+ *
+ * Response bodies are captured with a **lazy tee** (a Proxy of okio.Source that copies
+ * bytes as the app reads them), NOT an eager peek. Reading ahead on a live HTTP/2 stream
+ * can block/time out and reset the stream with CANCEL, which then crashes the app's own
+ * read (okhttp3.internal.http2.StreamResetException: stream was reset: CANCEL). The tee
+ * never reads ahead, so it can't corrupt the stream; it mirrors how AOSP's network
+ * inspector wraps the body instead of peeking it.
  */
 object OkHttpHook {
     private const val TAG = "SqueezeAgent"
-    private const val BODY_PEEK = 1024L * 1024   // cap captured bodies at 1 MB
 
     private val interceptors = java.util.concurrent.ConcurrentHashMap<String, Any>()
     private val failed = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
@@ -93,8 +101,11 @@ object OkHttpHook {
                 throw e
             }
 
-            try { tracker?.let { recordResponse(it, response) } } catch (t: Throwable) { /* never break the call */ }
-            return response
+            // Return the (possibly body-wrapped) response. Never let capture break the call:
+            // on any failure fall back to the original response.
+            return try {
+                if (tracker != null) recordResponse(tracker, response) else response
+            } catch (t: Throwable) { response }
         }
 
         /** Runs a reflective call, rethrowing the real exception instead of the
@@ -144,31 +155,30 @@ object OkHttpHook {
             } catch (t: Throwable) { /* request body is best-effort */ }
         }
 
-        private fun recordResponse(tracker: SqueezeTracker, response: Any) {
+        /** Records status/headers, then (for okhttp3 non-streaming responses) returns a
+         *  response whose body is tee'd through [ResponseBodyTee] so we capture bytes as
+         *  the app reads them. Streaming content types and okhttp2 — or any reflection
+         *  failure — report headers immediately with no body rather than touch the live
+         *  stream. Returns the response the chain should hand back to the app. */
+        private fun recordResponse(tracker: SqueezeTracker, response: Any): Any {
             val respCls = response.javaClass
             val code = respCls.getMethod("code").invoke(response) as Int
             val respHeaders = headers(respCls.getMethod("headers").invoke(response))
             tracker.onResponse(code, respHeaders)
 
-            // peekBody(n) does source.request(n), which BLOCKS until n bytes arrive or
-            // the stream ends. On a streaming response (SSE/gRPC/long-poll) that would
-            // stall the app from receiving its own body, so skip the eager peek there
-            // and bound it by Content-Length when known. (okhttp2 has no peekBody, so the
-            // getMethod below throws and the body is simply skipped — that's fine.)
-            if (!isStreaming(respHeaders)) {
-                try {
-                    val len = contentLength(respHeaders)
-                    if (len != 0L) {
-                        val peekN = if (len in 1..BODY_PEEK) len else BODY_PEEK
-                        val peek = respCls.getMethod("peekBody", java.lang.Long.TYPE).invoke(response, peekN)
-                        var bytes = peek.javaClass.getMethod("bytes").invoke(peek) as ByteArray
-                        if (isGzip(respHeaders)) bytes = gunzip(bytes)
-                        tracker.appendResponseBody(bytes, 0, bytes.size)
-                    }
-                } catch (t: Throwable) { /* body optional */ }
+            // peeking/teeing a never-ending body (SSE/gRPC/long-poll) would only emit the
+            // txn when the stream finally ends, so report those up-front with no body.
+            if (isStreaming(respHeaders)) {
+                tracker.report()
+                return response
             }
 
-            tracker.report()
+            val wrapped = try {
+                ResponseBodyTee.install(response, tracker, respHeaders)
+            } catch (t: Throwable) { null }
+
+            if (wrapped == null) tracker.report()   // couldn't tee — emit headers only
+            return wrapped ?: response
         }
 
         private fun boolMethod(obj: Any, name: String): Boolean = try {
@@ -187,13 +197,8 @@ object OkHttpHook {
             } catch (t: Throwable) { null }
         }
 
-        private fun isGzip(headers: Map<String, List<String>>?): Boolean {
-            val v = headers?.entries?.firstOrNull { it.key.equals("Content-Encoding", true) }?.value
-            return v?.any { it.contains("gzip", true) } == true
-        }
-
-        /** Content types that never end (or shouldn't be eagerly buffered) — peeking
-         *  these would block the app's own read. */
+        /** Content types that never end (or shouldn't be eagerly buffered) — teeing
+         *  these would defer the txn until the stream finally closes. */
         private fun isStreaming(headers: Map<String, List<String>>?): Boolean {
             val ct = header(headers, "Content-Type")?.lowercase() ?: return false
             return ct.startsWith("text/event-stream") ||
@@ -201,14 +206,188 @@ object OkHttpHook {
                 ct.contains("x-mixed-replace")
         }
 
-        private fun contentLength(headers: Map<String, List<String>>?): Long =
-            header(headers, "Content-Length")?.toLongOrNull() ?: -1L
-
         private fun header(headers: Map<String, List<String>>?, name: String): String? =
             headers?.entries?.firstOrNull { it.key.equals(name, true) }?.value?.firstOrNull()
-
-        private fun gunzip(data: ByteArray): ByteArray = try {
-            GZIPInputStream(data.inputStream()).readBytes()
-        } catch (t: Throwable) { data }  // truncated/partial peek — keep what we have
     }
+
+    private const val BODY_PEEK = 1024L * 1024   // cap captured bodies at 1 MB
+}
+
+/**
+ * Wraps an okhttp3 Response so its body is read through a tee: every byte the app reads is
+ * also copied (up to 1 MB) into the tracker, and the transaction is reported when the body
+ * reaches EOF or is closed. Nothing is ever read ahead of the app, so the live HTTP/2 stream
+ * is never advanced/blocked/reset by us. Built entirely by reflection (we can't compile
+ * against the app's okhttp/okio); any failure returns null and the caller reports headers only.
+ */
+private object ResponseBodyTee {
+    private const val CAP = 1024 * 1024   // cap captured response body at 1 MB (raw, pre-gunzip)
+
+    /** Returns a new Response with a tee'd body, or null if it couldn't be built. */
+    fun install(response: Any, tracker: SqueezeTracker, respHeaders: Map<String, List<String>>?): Any? {
+        val respCls = response.javaClass
+        // okhttp2 has no compatible ResponseBody.create(...,BufferedSource); skip its body.
+        if (!respCls.name.startsWith("okhttp3.")) return null
+        val loader = respCls.classLoader ?: return null
+
+        val responseBodyBase = Class.forName("okhttp3.ResponseBody", false, loader)
+        val body = respCls.getMethod("body").invoke(response) ?: return null
+        val source = responseBodyBase.getMethod("source").invoke(body) ?: return null   // okio.BufferedSource
+        val contentType = responseBodyBase.getMethod("contentType").invoke(body)        // okhttp3.MediaType?
+        val contentLength = responseBodyBase.getMethod("contentLength").invoke(body) as Long
+
+        val okioSourceCls = Class.forName("okio.Source", false, loader)
+        val okioBufferCls = Class.forName("okio.Buffer", false, loader)
+
+        val tee = Proxy.newProxyInstance(
+            loader, arrayOf(okioSourceCls),
+            TeeSource(source, tracker, respHeaders, okioSourceCls, okioBufferCls)
+        )
+        val buffered = bufferSource(tee, okioSourceCls, loader) ?: return null
+        val newBody = createResponseBody(responseBodyBase, contentType, contentLength, buffered, loader)
+            ?: return null
+
+        val builder = respCls.getMethod("newBuilder").invoke(response)
+        builder.javaClass.getMethod("body", responseBodyBase).invoke(builder, newBody)
+        return builder.javaClass.getMethod("build").invoke(builder)
+    }
+
+    /** Wrap an okio.Source into a BufferedSource. Okio.buffer(Source) across versions, or the
+     *  RealBufferedSource(Source) constructor as a fallback (present in every okio version). */
+    private fun bufferSource(src: Any, okioSourceCls: Class<*>, loader: ClassLoader): Any? {
+        try {
+            val okio = Class.forName("okio.Okio", false, loader)
+            return okio.getMethod("buffer", okioSourceCls).invoke(null, src)
+        } catch (t: Throwable) { /* fall through */ }
+        try {
+            val rbs = Class.forName("okio.RealBufferedSource", false, loader)
+            val ctor = rbs.getDeclaredConstructor(okioSourceCls)
+            ctor.isAccessible = true
+            return ctor.newInstance(src)
+        } catch (t: Throwable) { return null }
+    }
+
+    /** Find a static ResponseBody.create(...) with a (BufferedSource, contentType, long) shape in
+     *  any argument order — okhttp3 3.x is (MediaType,long,BufferedSource), 4.x/5.x reorders it. */
+    private fun createResponseBody(
+        base: Class<*>, contentType: Any?, contentLength: Long, buffered: Any, loader: ClassLoader
+    ): Any? {
+        val bufferedSourceCls = Class.forName("okio.BufferedSource", false, loader)
+        val candidates = base.methods.filter { m ->
+            Modifier.isStatic(m.modifiers) && m.name == "create" && m.parameterTypes.size == 3 &&
+                m.parameterTypes.any { it.isAssignableFrom(buffered.javaClass) || it == bufferedSourceCls } &&
+                m.parameterTypes.any { it == java.lang.Long.TYPE }
+        }
+        for (m in candidates) {
+            try {
+                val args = arrayOfNulls<Any?>(3)
+                m.parameterTypes.forEachIndexed { i, p ->
+                    args[i] = when {
+                        p == java.lang.Long.TYPE -> contentLength
+                        p.isAssignableFrom(buffered.javaClass) || p == bufferedSourceCls -> buffered
+                        else -> contentType   // MediaType? — nullable, so a null contentType is fine
+                    }
+                }
+                return m.invoke(null, *args)
+            } catch (t: Throwable) { /* try the next overload */ }
+        }
+        return null
+    }
+
+    /** InvocationHandler for the okio.Source proxy. Delegates read/timeout/close to the real
+     *  source and copies the just-read bytes into the tracker (non-destructively) up to the cap. */
+    private class TeeSource(
+        private val delegate: Any,
+        private val tracker: SqueezeTracker,
+        private val respHeaders: Map<String, List<String>>?,
+        okioSourceCls: Class<*>,
+        private val bufferCls: Class<*>
+    ) : InvocationHandler {
+        private val readMethod = okioSourceCls.getMethod("read", bufferCls, java.lang.Long.TYPE)
+        private val timeoutMethod = okioSourceCls.getMethod("timeout")
+        private val closeMethod = okioSourceCls.getMethod("close")
+        private val copyToMethod = bufferCls.getMethod(
+            "copyTo", bufferCls, java.lang.Long.TYPE, java.lang.Long.TYPE
+        )
+        private val readByteArrayMethod = bufferCls.getMethod("readByteArray")
+        // okio 1.x exposes size(); 2.x/3.x exposes the Kotlin property getter getSize().
+        private val sizeMethod = try { bufferCls.getMethod("size") } catch (t: Throwable) { bufferCls.getMethod("getSize") }
+        private val scratch = bufferCls.getConstructor().newInstance()
+
+        private val captured = ByteArrayOutputStream()
+        private var capturedEnough = false
+        @Volatile private var finished = false
+
+        override fun invoke(proxy: Any, method: Method, args: Array<out Any?>?): Any? {
+            return when (method.name) {
+                "read" -> doRead(args!![0]!!, args[1] as Long)
+                "close" -> { try { unwrapped { closeMethod.invoke(delegate) } } finally { finish() }; null }
+                "timeout" -> timeoutMethod.invoke(delegate)
+                "hashCode" -> System.identityHashCode(proxy)
+                "equals" -> proxy === args?.getOrNull(0)
+                "toString" -> "SqueezeTeeSource"
+                else -> null
+            }
+        }
+
+        private fun doRead(sink: Any, byteCount: Long): Long {
+            // Unwrap InvocationTargetException so the delegate's real IOException (e.g. a
+            // StreamResetException: CANCEL) propagates unchanged. Leaking the reflection
+            // wrapper would surface as UndeclaredThrowableException and crash the app's
+            // read — the same trap invokeUnwrapped() guards on the proceed() path.
+            val n: Long
+            try {
+                n = unwrapped { readMethod.invoke(delegate, sink, byteCount) } as Long
+            } catch (t: Throwable) {
+                finish()       // stream broke mid-read — still emit what we captured
+                throw t
+            }
+            if (n > 0L) { try { capture(sink, n) } catch (t: Throwable) { /* never affect the read */ } }
+            else if (n < 0L) finish()   // EOF
+            return n
+        }
+
+        private inline fun unwrapped(block: () -> Any?): Any? {
+            try {
+                return block()
+            } catch (e: java.lang.reflect.InvocationTargetException) {
+                throw e.targetException ?: e
+            }
+        }
+
+        /** Copy the n bytes just appended to [sink] (at its tail) without consuming them. */
+        private fun capture(sink: Any, n: Long) {
+            synchronized(captured) {
+                if (capturedEnough) return
+                val size = sizeMethod.invoke(sink) as Long
+                copyToMethod.invoke(sink, scratch, size - n, n)             // copyTo(out, offset, byteCount)
+                val chunk = readByteArrayMethod.invoke(scratch) as ByteArray // drains scratch, leaving it empty
+                val room = CAP - captured.size()
+                if (room > 0) captured.write(chunk, 0, minOf(chunk.size, room))
+                if (captured.size() >= CAP) capturedEnough = true
+            }
+        }
+
+        private fun finish() {
+            synchronized(captured) {
+                if (finished) return
+                finished = true
+                try {
+                    var bytes = captured.toByteArray()
+                    if (isGzip(respHeaders)) bytes = gunzip(bytes)
+                    if (bytes.isNotEmpty()) tracker.appendResponseBody(bytes, 0, bytes.size)
+                } catch (t: Throwable) { /* body is best-effort */ }
+            }
+            tracker.report()
+        }
+    }
+
+    private fun isGzip(headers: Map<String, List<String>>?): Boolean {
+        val v = headers?.entries?.firstOrNull { it.key.equals("Content-Encoding", true) }?.value
+        return v?.any { it.contains("gzip", true) } == true
+    }
+
+    private fun gunzip(data: ByteArray): ByteArray = try {
+        GZIPInputStream(data.inputStream()).readBytes()
+    } catch (t: Throwable) { data }  // truncated/partial capture — keep what we have
 }

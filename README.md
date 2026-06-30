@@ -105,10 +105,19 @@ mirrors AOSP's App Inspection and is built from open-source pieces:
    `localabstract` socket back to Jaca.
 
 The interceptor is written to be **transparent to the app** — it mirrors AOSP's
-`OkHttp3Interceptor`: it never consumes a one-shot/duplex request body, it rethrows
-the *real* exception on a cancelled/failed call (so a `StreamResetException` can't
-crash the app), and it skips the eager body peek on streaming responses
-(`text/event-stream`, gRPC, long-poll) so it can't stall the app's own read.
+`OkHttp3Interceptor`: it never consumes a one-shot/duplex request body, and it
+rethrows the *real* exception on a cancelled/failed call (so a `StreamResetException`
+can't crash the app). Response bodies are captured with a **lazy tee**, never an
+eager `peekBody`: the response body's `okio.Source` is wrapped in a reflective proxy
+that copies bytes (up to 1 MB) *as the app reads them* and reports the transaction at
+EOF/close. Reading ahead on a live HTTP/2 stream — which the old eager peek did for
+any response without a `Content-Length` (common with Ktor/OkHttp over HTTP/2) — could
+block, time out, and reset the stream with `CANCEL`, which then crashed the app's own
+read; the tee never advances the stream past the app, so it can't. The tee also
+unwraps reflection's `InvocationTargetException`, so a real read error reaches the app
+as its original `IOException` rather than an `UndeclaredThrowableException`. Streaming
+content types (`text/event-stream`, gRPC, long-poll) are reported up-front with no
+body, since teeing a never-ending stream would defer the transaction until it closes.
 
 There's a classloader subtlety that drove the design. The hook trampoline has to
 live on the **bootstrap** classloader (so an instrumented boot class like `URL`
