@@ -4,7 +4,6 @@ enum GitError: Error { case notARepository(String) }
 
 struct GitService: Sendable {
     private let git = "/usr/bin/git"
-    private let du = "/usr/bin/du"
     private let cacheDirs = ["node_modules", "build", ".gradle", "DerivedData", "Pods", "ios/build", "android/.cxx", ".expo"]
 
     /// Runs `exe args…` to completion. Launch failures are folded into `ok == false`
@@ -72,23 +71,11 @@ struct GitService: Sendable {
         return (res.ok, res.err)
     }
 
-    /// Returns (total MB, cache MB) for a worktree. Failures yield 0 for that part.
+    /// Returns (total MB, cache MB) for a worktree, in a single concurrent traversal
+    /// (see `DirectorySizer`). Failures yield 0.
     func diskUsage(of worktree: URL) async -> (sizeMB: Int, cacheMB: Int) {
-        let totalKB = await duKB(worktree.path)
-        var cacheKB = 0
-        for dir in cacheDirs {
-            let p = worktree.appendingPathComponent(dir).path
-            if FileManager.default.fileExists(atPath: p) {
-                cacheKB += await duKB(p)
-            }
-        }
-        return (sizeMB: totalKB / 1024, cacheMB: cacheKB / 1024)
-    }
-
-    private func duKB(_ path: String) async -> Int {
-        let res = await sh(du, ["-sk", path])
-        // du may exit non-zero (e.g. an unreadable subdir) yet still print a valid total.
-        let firstField = res.out.split(whereSeparator: { $0 == "\t" || $0 == " " || $0 == "\n" }).first
-        return Int(firstField ?? "") ?? 0
+        let (total, cache) = await DirectorySizer(cacheDirs: Set(cacheDirs)).size(worktree)
+        let mb = 1024 * 1024
+        return (sizeMB: Int(total) / mb, cacheMB: Int(cache) / mb)
     }
 }
