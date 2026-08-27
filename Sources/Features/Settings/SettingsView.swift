@@ -64,6 +64,31 @@ struct SettingsView: View {
                         )
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
+
+                        Divider().overlay(LemonadeTheme.colors.border.borderNeutralLow)
+
+                        Toggle(isOn: Binding(get: { model.responseOverridesEnabled },
+                                             set: { model.responseOverridesEnabled = $0 })) {
+                            LemonadeUi.Text(
+                                "Response overrides (experimental)",
+                                textStyle: LemonadeTypography.shared.bodySmallSemiBold,
+                                color: LemonadeTheme.colors.content.contentPrimary
+                            )
+                        }
+                        LemonadeUi.Text(
+                            "Off by default. Lets you answer a matched request from a rule instead of the " +
+                            "real server — right-click any captured request, or use the Overrides button " +
+                            "next to the search field.\n\n" +
+                            "It works on apps that pin certificates, because the in-process Agent rewrites " +
+                            "the request above TLS rather than intercepting the network. While a rule is " +
+                            "enabled, only the hosts it names are routed through your Mac; everything else " +
+                            "stays on the device's own network. The tunnel is removed when capture stops, " +
+                            "and the agent stops diverting on its own if Jaca goes away.",
+                            textStyle: LemonadeTypography.shared.bodyXSmallRegular,
+                            color: LemonadeTheme.colors.content.contentTertiary
+                        )
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
                     section("History") {
