@@ -11,6 +11,10 @@ struct SettingsView: View {
     @AppStorage("adbPath") private var adbPath = ""
     @AppStorage("retentionDays") private var retentionDays = 7
     @AppStorage("colorScheme") private var colorScheme = "dark"
+    /// Straight from `UserDefaults`, not `AppModel`: unlike the flags above it reconfigures
+    /// nothing — the supervisor re-reads it per decision, so it applies to a live tab.
+    @AppStorage(FeatureFlags.simulatorAutoReattachKey) private var simulatorAutoReattach = false
+    @AppStorage(JacaLog.verboseKey) private var verboseLogging = false
     @State private var exclusions: [LogExcludeRule] = []
 
     var body: some View {
@@ -59,6 +63,73 @@ struct SettingsView: View {
                             "certificate pinning (many banking and secure apps) won't be decrypted and may " +
                             "stop working; traffic over QUIC (HTTP/3) can't be decrypted. Experimental and " +
                             "may be unreliable.",
+                            textStyle: LemonadeTypography.shared.bodyXSmallRegular,
+                            color: LemonadeTheme.colors.content.contentTertiary
+                        )
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                        Divider().overlay(LemonadeTheme.colors.border.borderNeutralLow)
+
+                        Toggle(isOn: Binding(get: { model.responseOverridesEnabled },
+                                             set: { model.responseOverridesEnabled = $0 })) {
+                            LemonadeUi.Text(
+                                "Response overrides (experimental)",
+                                textStyle: LemonadeTypography.shared.bodySmallSemiBold,
+                                color: LemonadeTheme.colors.content.contentPrimary
+                            )
+                        }
+                        LemonadeUi.Text(
+                            "Off by default. Lets you answer a matched request from a rule instead of the " +
+                            "real server — right-click any captured request, or use the Overrides button " +
+                            "next to the search field.\n\n" +
+                            "It works on apps that pin certificates, because the in-process Agent rewrites " +
+                            "the request above TLS rather than intercepting the network. While a rule is " +
+                            "enabled, only the hosts it names are routed through your Mac; everything else " +
+                            "stays on the device's own network. The tunnel is removed when capture stops, " +
+                            "and the agent stops diverting on its own if Jaca goes away.",
+                            textStyle: LemonadeTypography.shared.bodyXSmallRegular,
+                            color: LemonadeTheme.colors.content.contentTertiary
+                        )
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                        Divider().overlay(LemonadeTheme.colors.border.borderNeutralLow)
+
+                        Toggle(isOn: $simulatorAutoReattach) {
+                            LemonadeUi.Text(
+                                "Re-attach to iOS Simulator apps automatically",
+                                textStyle: LemonadeTypography.shared.bodySmallSemiBold,
+                                color: LemonadeTheme.colors.content.contentPrimary
+                            )
+                        }
+                        LemonadeUi.Text(
+                            "Off by default. The agent is injected into the process Jaca launched, so an app " +
+                            "you quit and reopen yourself comes back without it — capture and overrides stop. " +
+                            "Jaca notices and offers a “Relaunch & re-attach” button on the capture tab.\n\n" +
+                            "Turn this on to let it relaunch the app for you instead of asking. It still says so " +
+                            "in the status line, and it never opens an app you closed — only one you reopened " +
+                            "yourself.",
+                            textStyle: LemonadeTypography.shared.bodyXSmallRegular,
+                            color: LemonadeTheme.colors.content.contentTertiary
+                        )
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                        Divider().overlay(LemonadeTheme.colors.border.borderNeutralLow)
+
+                        Toggle(isOn: Binding(get: { verboseLogging },
+                                             set: { verboseLogging = $0; JacaLog.verboseEnabled = $0 })) {
+                            LemonadeUi.Text(
+                                "Verbose diagnostic logging",
+                                textStyle: LemonadeTypography.shared.bodySmallSemiBold,
+                                color: LemonadeTheme.colors.content.contentPrimary
+                            )
+                        }
+                        LemonadeUi.Text(
+                            "Off by default. Writes a line to ~/.jaca/logs/jaca.log for each bounced request " +
+                            "and each heartbeat. Useful when a divert isn't behaving, but it is a synchronous " +
+                            "file write per request — leave it off during normal capture.",
                             textStyle: LemonadeTypography.shared.bodyXSmallRegular,
                             color: LemonadeTheme.colors.content.contentTertiary
                         )

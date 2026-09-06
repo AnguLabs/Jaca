@@ -47,6 +47,9 @@ final class NetworkSession: WorkspaceTab, CaptureSink {
     /// companion capture source streams from. Read reactively (via `companions.devices`) — no polling.
     let companions: CompanionRegistry?
     private var companion: CompanionHub? { companions?.hub }
+
+    /// The shared response-override library — a reference to the one owner, never a copy.
+    let overrides: OverridesModel?
     private var current: CaptureSource?
     private var indexByID: [UUID: Int] = [:]
     private let bodyCache: NetworkBodyCache?
@@ -171,13 +174,122 @@ final class NetworkSession: WorkspaceTab, CaptureSink {
     }
 
     init(device: Device, ca: CertificateAuthority, adbURL: URL?, displayName: String? = nil,
-         bodyCache: NetworkBodyCache? = nil, companions: CompanionRegistry? = nil) {
+         bodyCache: NetworkBodyCache? = nil, companions: CompanionRegistry? = nil,
+         overrides: OverridesModel? = nil) {
         self.device = device
         self.ca = ca
         self.adbURL = adbURL
         self.displayName = displayName ?? "Network · \(device.displayModel)"
         self.bodyCache = bodyCache
         self.companions = companions
+        self.overrides = overrides
+    }
+
+    /// Restarts the running capture source so it picks up a changed intercept configuration.
+    /// `makeContext()` snapshots the override services at launch, so a mid-capture toggle needs a
+    /// fresh source — re-selecting the same one keeps the captured rows.
+    func restartForInterceptChange() {
+        guard isRunning, let descriptor = currentDescriptor else { return }
+        current?.stop()
+        current = nil
+        attachState = .idle
+        let source = descriptor.make(makeContext())
+        current = source
+        source.start(into: self)
+    }
+
+    /// Whether the device still has a proxy configured, including the per-network
+    /// `global_http_proxy_*` rows a crashed session can strand — "connected, no internet".
+    private(set) var deviceProxyLingers = false
+    private(set) var isRevertingDeviceProxy = false
+
+    /// Checks for a stranded device proxy. Cheap, and only meaningful for an adb device.
+    func refreshDeviceProxyState() async {
+        guard let adbURL, isADBDevice else { deviceProxyLingers = false; return }
+        deviceProxyLingers = await ProxyConfigurator.hasAnyProxyConfigured(
+            adbURL: adbURL, serial: device.id)
+    }
+
+    /// Clears every proxy key and re-validates the network, so a stranded device is recoverable
+    /// without dropping to a shell.
+    func revertDeviceProxy() async {
+        guard let adbURL, isADBDevice, !isRevertingDeviceProxy else { return }
+        isRevertingDeviceProxy = true
+        JacaLog.info("proxy", "reverting device proxy on \(device.id)")
+        await ProxyConfigurator.clearAndroidProxy(adbURL: adbURL, serial: device.id)
+        ProxyCleanup.deregister(adbPath: adbURL.path, serial: device.id)
+        await refreshDeviceProxyState()
+        isRevertingDeviceProxy = false
+        JacaLog.info("proxy",
+            "device proxy revert finished on \(device.id); stillConfigured=\(deviceProxyLingers)")
+    }
+
+    /// This tab's arming target, when it's inspecting one app on one device.
+    var interceptTarget: InterceptTarget? {
+        guard let package = targetPackage, !package.isEmpty else { return nil }
+        return InterceptTarget(deviceID: device.id, package: package)
+    }
+
+    /// Whether this session wired up override services at launch — the toolbar must not claim
+    /// overrides are active when nothing was armed.
+    var interceptWired: Bool { current?.arming != nil }
+
+    /// What the *running* capture source can honour, via the same clamp the runtime uses — so
+    /// the toolbar tint and "can't run here" badge never promise what the transport won't do.
+    var activeInterceptCapabilities: InterceptCapabilities {
+        current?.interceptCapabilities ?? []
+    }
+
+    /// Whether any capture source is running. With none, the honest message is "start capture",
+    /// not "this rule can't run here".
+    var hasRunningSource: Bool { current != nil }
+
+    /// This tab's arming state, read from the one owner (`OverridesModel`) rather than copied.
+    /// Toolbar, popover, row badge and attach banner all render this value.
+    var armingState: InterceptArmingState {
+        guard let overrides, let target = interceptTarget else { return attachState }
+        let armed = overrides.arming(for: target)
+        // With overrides off nothing publishes, so `.idle` means "nobody is arming", not "fine"
+        // — fall back to what the source knows about the agent still being in the app.
+        if case .idle = armed { return attachState }
+        return armed
+    }
+
+    /// What the running source last reported about its agent. Separate from the coordinator's
+    /// arming state because it must survive response overrides being off, which is the default.
+    private(set) var attachState: InterceptArmingState = .idle
+
+    /// Whether to show the pane-top attach notice: the agent is gone but the tab still believes
+    /// it is capturing — the "armed and silently doing nothing" case.
+    ///
+    /// Gated on a running source, **not** on `interceptWired`: losing the agent kills capture
+    /// either way, and only the simulator supervisor produces `.detached`/`.waitingForApp`.
+    var showsAttachBanner: Bool {
+        guard isRunning else { return false }
+        switch armingState {
+        case .detached, .waitingForApp: return true
+        case .idle, .waitingForAgent, .agentTooOld, .active, .failed: return false
+        }
+    }
+
+    /// The attach banner's action. Only the iOS-Simulator source can put the agent back, and only
+    /// by relaunching the user's app — hence explicit, never automatic.
+    func relaunchToAttach() {
+        (current as? IOSSimulatorAgentCaptureSource)?.relaunchToAttach()
+    }
+
+    /// The interception point this tab is currently capturing through.
+    var interceptTransport: InterceptTransportID {
+        switch captureMode {
+        case .agent:
+            return device.platform == .iosSimulator
+                ? .iosSimulatorDivert(bundleID: targetPackage ?? "")
+                : .agentDivert(package: targetPackage ?? "")
+        case .companion:
+            return .companionMetadata
+        default:
+            return .mitmProxy
+        }
     }
 
     // MARK: - Source selection (generic)
@@ -231,6 +343,7 @@ final class NetworkSession: WorkspaceTab, CaptureSink {
     private func launch(_ descriptor: CaptureSourceDescriptor) {
         guard !isRunning else { return }
         isRunning = true
+        attachState = .idle
         let source = descriptor.make(makeContext())
         current = source
         source.start(into: self)
@@ -238,13 +351,15 @@ final class NetworkSession: WorkspaceTab, CaptureSink {
 
     private func makeContext() -> CaptureContext {
         CaptureContext(device: device, adbURL: adbURL, ca: ca, deviceContext: deviceContext,
-                       targetPackage: targetPackage, companion: companion)
+                       targetPackage: targetPackage, companion: companion,
+                       intercept: FeatureFlags.responseOverridesEnabled ? overrides?.services() : nil)
     }
 
     func stop() {
         guard isRunning else { return }
         isRunning = false
         proxyNeedsSetup = false
+        attachState = .idle
         current?.stop()
         current = nil
     }
@@ -272,6 +387,10 @@ final class NetworkSession: WorkspaceTab, CaptureSink {
 
     func capture(didReceive transaction: NetworkTransaction) { upsert(transaction) }
     func capture(didChangeStatus status: String?) { statusMessage = status }
+
+    /// The source lost (or regained) its agent. Held here rather than in `OverridesModel`
+    /// because it's true whether or not overrides are wired — see `attachState`.
+    func capture(didChangeAttach state: InterceptArmingState) { attachState = state }
     func capture(didBindPort port: Int) { boundPort = port }
     func captureNeedsSetup() {
         if !caReady { proxyNeedsSetup = true }
@@ -295,7 +414,12 @@ final class NetworkSession: WorkspaceTab, CaptureSink {
 
     func upsert(_ txn: NetworkTransaction) {
         // First successfully MITM'd HTTPS request confirms the CA is trusted.
-        if txn.scheme == "https", txn.error == nil {
+        //
+        // Proof only when the bytes came back decrypted with our CA: a fabricated override never
+        // touched TLS and the agent never uses the CA, so counting either would dismiss the setup
+        // prompt for a user whose CA isn't installed. `== .proxy` was too narrow — companion
+        // capture decrypts through `ProxyServer` too, so its CA sheet never saw `caReady` flip.
+        if txn.scheme == "https", txn.error == nil, captureMode.decryptsWithOurCA, !wasOverridden(txn) {
             caReady = true
             proxyNeedsSetup = false
             caInstaller?.noteInterceptionConfirmed()
@@ -330,6 +454,35 @@ final class NetworkSession: WorkspaceTab, CaptureSink {
         transactions[idx].requestBody = nil
         transactions[idx].responseBody = nil
         transactions[idx].bodiesEvicted = true
+    }
+
+    /// True when a rule produced this response, so it says nothing about the network it never
+    /// reached. Read from the stamp the pipeline leaves.
+    private func wasOverridden(_ txn: NetworkTransaction) -> Bool {
+        txn.responseHeaders.contains { $0.name.lowercased() == OverrideHeaders.override.lowercased() }
+    }
+
+    /// The currently selected transaction, if any.
+    var selectedTransaction: NetworkTransaction? {
+        guard let selectedID, let idx = indexByID[selectedID] else { return nil }
+        return transactions[idx]
+    }
+
+    /// Loads a transaction's bodies, **awaiting** the spill cache when they've been evicted.
+    /// `ensureBodies(for:)` is fire-and-forget, which seeding can't use: the sheet must copy the
+    /// body now, since `NetworkBodyCache` wipes its directory on every launch.
+    func bodies(for id: UUID) async -> (req: Data?, resp: Data?) {
+        guard let idx = indexByID[id] else { return (nil, nil) }
+        let txn = transactions[idx]
+        if !txn.bodiesEvicted || bodyCache == nil { return (txn.requestBody, txn.responseBody) }
+        guard let cache = bodyCache else { return (txn.requestBody, txn.responseBody) }
+        let loaded = await cache.load(id)
+        if let i = indexByID[id] {
+            transactions[i].requestBody = loaded.req
+            transactions[i].responseBody = loaded.resp
+            transactions[i].bodiesEvicted = false
+        }
+        return (loaded.req, loaded.resp)
     }
 
     func ensureBodies(for id: UUID) {
