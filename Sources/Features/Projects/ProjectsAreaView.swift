@@ -47,6 +47,7 @@ struct ProjectsAreaView: View {
         } else {
             VStack(spacing: 0) {
                 header
+                sizeScanBar
                 listSection
             }
         }
@@ -91,6 +92,64 @@ struct ProjectsAreaView: View {
         )
         .padding(.horizontal, 8)
         .padding(.top, 8)
+    }
+
+    /// Asks before walking every checkout for its size, then reports progress while it
+    /// runs. The answer lives for this launch only — a relaunch asks again.
+    @ViewBuilder private var sizeScanBar: some View {
+        Group {
+            if model.needsSizeApproval {
+                sizeScanRow {
+                    LemonadeUi.Button(
+                        label: "Not now", onClick: { model.declineSizeScan() },
+                        variant: .neutral, type: .subtle, size: .small
+                    )
+                    LemonadeUi.Button(
+                        label: "Calculate", onClick: { withAnimation(.easeInOut(duration: 0.2)) { model.approveSizeScan() } },
+                        variant: .primary, type: .solid, size: .small
+                    )
+                }
+            } else if model.isComputingSizes {
+                sizeScanRow {
+                    LemonadeUi.Spinner()
+                    LemonadeUi.Button(
+                        label: "Stop", onClick: { withAnimation(.easeInOut(duration: 0.2)) { model.cancelSizeScan() } },
+                        variant: .neutral, type: .subtle, size: .small
+                    )
+                }
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: model.needsSizeApproval)
+        .animation(.easeInOut(duration: 0.2), value: model.isComputingSizes)
+        .transition(.opacity.combined(with: .move(edge: .top)))
+    }
+
+    private func sizeScanRow<Actions: View>(@ViewBuilder actions: () -> Actions) -> some View {
+        HStack(spacing: 10) {
+            GroveIcon(glyph: .folder, size: 16, tint: LemonadeTheme.colors.content.contentSecondary)
+            VStack(alignment: .leading, spacing: 2) {
+                LemonadeUi.Text(
+                    model.isComputingSizes ? "Calculating disk usage…" : "Calculate disk usage?",
+                    textStyle: LemonadeTypography.shared.bodySmallMedium,
+                    color: LemonadeTheme.colors.content.contentPrimary
+                )
+                LemonadeUi.Text(
+                    "Reads every file in \(model.sizableCheckouts) checkouts. Cached sizes stay on screen either way.",
+                    textStyle: LemonadeTypography.shared.bodyXSmallRegular,
+                    color: LemonadeTheme.colors.content.contentSecondary
+                )
+            }
+            Spacer()
+            actions()
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(LemonadeTheme.colors.background.bgNeutralSubtle)
+        )
+        .padding(.horizontal, 8)
+        .padding(.top, 8)
+        .accessibilityIdentifier("projectsSizeScanBar")
     }
 
     /// Opens the app-wide Herdr config (the Claude command Herdr runs).

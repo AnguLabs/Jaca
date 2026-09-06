@@ -25,6 +25,13 @@ final class ProjectsModel {
     var projects: [Project] = []
     var isRefreshing = false
     private(set) var hasCompletedScan = false
+
+    /// Disk-usage scanning reads every file under every checkout, so it runs only after
+    /// the user asks for it. Held in memory on purpose — never persisted — so each app
+    /// launch asks again.
+    private(set) var sizeScanApproved = false
+    private(set) var sizeScanDeclined = false
+    private(set) var isComputingSizes = false
     var expanded: Set<String> = []
     var toast: ProjectsToast?
 
@@ -68,9 +75,13 @@ final class ProjectsModel {
     private let cleaner = CacheCleaner()
     private var watchers: [FolderWatcher] = []
     private var toastTask: Task<Void, Never>?
+    private var sizeTask: Task<Void, Never>?
     private var scanToken = 0
 
     private static let autoRefreshTTL: TimeInterval = 30
+    /// Checkouts sized at a time. With `DirectorySizer.width` readers each, the whole
+    /// area stays well under the core count instead of starting every checkout at once.
+    private static let sizeBatch = 4
     private static let userFoldersKey = "jaca.projectFolders"
     private static let legacyWorktreeKey = "jaca.worktreesFolder"
     private static let viewModeKey = "jaca.projectsViewMode"
@@ -102,6 +113,16 @@ final class ProjectsModel {
     var totalProjects: Int { projects.count }
     var totalWorktrees: Int { projects.reduce(0) { $0 + $1.worktreeCount } }
     var hasNoData: Bool { projects.isEmpty }
+
+    /// Checkouts a size scan would walk — what the approval prompt quotes.
+    var sizableCheckouts: Int {
+        projects.filter(\.isGitRepo).reduce(0) { $0 + $1.checkouts.count }
+    }
+
+    /// Shows the approval prompt: sizes were neither asked for nor turned down yet.
+    var needsSizeApproval: Bool {
+        !sizeScanApproved && !sizeScanDeclined && sizableCheckouts > 0
+    }
 
     /// The projects laid out per the current view mode (tree nests sub-projects).
     var nodes: [ProjectNode] {
@@ -145,33 +166,63 @@ final class ProjectsModel {
             self.hasCompletedScan = true
             self.lastRefresh = Date()
             self.startWatching()
-            self.computeSizes(token: token)
+            if self.sizeScanApproved { self.computeSizes(token: token) }
             self.saveCache()
         }
     }
 
-    /// Computes disk usage for every git checkout in the background, patching rows as
-    /// `du` completes, then re-saves the cache.
+    /// Starts the disk-usage scan the user just approved. The approval lasts for this
+    /// app launch only, so a later `refresh()` may re-scan without asking again.
+    func approveSizeScan() {
+        sizeScanDeclined = false
+        guard !sizeScanApproved else { return }
+        sizeScanApproved = true
+        computeSizes(token: scanToken)
+    }
+
+    /// Keeps the cached sizes on screen and asks no further this launch.
+    func declineSizeScan() {
+        sizeScanDeclined = true
+        cancelSizeScan()
+    }
+
+    func cancelSizeScan() {
+        sizeTask?.cancel()
+        sizeTask = nil
+        isComputingSizes = false
+    }
+
+    /// Computes disk usage for every git checkout in the background, `sizeBatch` checkouts
+    /// at a time, patching rows as each batch lands, then re-saves the cache. A new scan
+    /// cancels the one in flight, so superseded walks stop instead of piling up.
     private func computeSizes(token: Int) {
         let work: [(pid: String, cid: String, url: URL)] = projects
             .filter(\.isGitRepo)
             .flatMap { p in p.checkouts.map { (p.id, $0.id, $0.url) } }
         guard !work.isEmpty else { return }
         let git = self.git
-        Task { [weak self] in
-            await withTaskGroup(of: (String, String, Int, Int).self) { group in
-                for item in work {
-                    group.addTask {
-                        let u = await git.diskUsage(of: item.url)
-                        return (item.pid, item.cid, u.sizeMB, u.cacheMB)
+        sizeTask?.cancel()
+        isComputingSizes = true
+        sizeTask = Task { [weak self] in
+            for start in stride(from: 0, to: work.count, by: Self.sizeBatch) {
+                if Task.isCancelled { break }
+                let batch = work[start..<min(start + Self.sizeBatch, work.count)]
+                await withTaskGroup(of: (String, String, Int, Int).self) { group in
+                    for item in batch {
+                        group.addTask {
+                            let u = await git.diskUsage(of: item.url)
+                            return (item.pid, item.cid, u.sizeMB, u.cacheMB)
+                        }
                     }
-                }
-                for await (pid, cid, size, cacheMB) in group {
-                    guard let self, token == self.scanToken else { continue }
-                    self.patchCheckout(pid, cid) { $0.sizeMB = size; $0.cacheMB = cacheMB; $0.sizeComputed = true }
+                    for await (pid, cid, size, cacheMB) in group {
+                        guard let self, token == self.scanToken else { continue }
+                        self.patchCheckout(pid, cid) { $0.sizeMB = size; $0.cacheMB = cacheMB; $0.sizeComputed = true }
+                    }
                 }
             }
             guard let self, token == self.scanToken else { return }
+            self.isComputingSizes = false
+            self.sizeTask = nil
             self.saveCache()
         }
     }
